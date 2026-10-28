@@ -728,6 +728,8 @@ int main(int argc, char **argv)
 			ncfg->Language = NIN_LAN_AUTO;
 			ncfg->MemCardBlocks = 0x2;//251 blocks
 		}
+		// SlippWii is for Slippi Online: networking is always on.
+		ncfg->Config |= NIN_CFG_NETWORK;
 
 		// Try to load a Slippi configuration file
 		if (LoadSlippiDat() == false)
@@ -834,7 +836,7 @@ int main(int argc, char **argv)
 		// Write config to the boot device, which is loaded on next launch.
 		FIL cfg;
 		FRESULT res;
-		if (f_open_char(&cfg, "/slippi_nincfg.bin", FA_WRITE|FA_OPEN_ALWAYS) == FR_OK)
+		if (f_open_char(&cfg, "/slippwii_nincfg.bin", FA_WRITE|FA_OPEN_ALWAYS) == FR_OK)
 		{
 			gprintf("Boot device settings file open successful.\r\n");
 			// Reserve space in the file.
@@ -842,7 +844,7 @@ int main(int argc, char **argv)
 				f_expand(&cfg, sizeof(NIN_CFG), 1);
 			}
 
-			// Write slippi_nincfg.bin
+			// Write slippwii_nincfg.bin
 			UINT wrote;
 			res = f_write(&cfg, ncfg, sizeof(NIN_CFG), &wrote);
 			gprintf("Boot device write result: %d\r\n", res);
@@ -851,7 +853,7 @@ int main(int argc, char **argv)
 
 		// Write config to the game device, used by the Nintendont kernel.
 		char ConfigPath[35];
-		snprintf(ConfigPath, sizeof(ConfigPath), "%s:/slippi_nincfg.bin", GetRootDevice());
+		snprintf(ConfigPath, sizeof(ConfigPath), "%s:/slippwii_nincfg.bin", GetRootDevice());
 		if (f_open_char(&cfg, ConfigPath, FA_WRITE|FA_OPEN_ALWAYS) == FR_OK)
 		{
 			gprintf("Game device settings file open successful.\r\n");
@@ -861,7 +863,7 @@ int main(int argc, char **argv)
 				f_expand(&cfg, sizeof(NIN_CFG), 1);
 			}
 
-			// Write slippi_nincfg.bin
+			// Write slippwii_nincfg.bin
 			UINT wrote;
 			res = f_write(&cfg, ncfg, sizeof(NIN_CFG), &wrote);
 			gprintf("Game device write result: %d\r\n", res);

@@ -49,6 +49,16 @@ ZIPFILE	:= ../loader/data/kernel.zip
 # Bluetooth stack
 OBJECTS	+= lwbt/bte.o lwbt/btmemb.o lwbt/btmemr.o lwbt/btpbuf.o lwbt/hci.o lwbt/l2cap.o lwbt/physbusif.o BT.o
 
+# Slippi Online: matchmaking and netplay (slippi_online/README.md), with
+# ENet 1.3.13 on an IOS platform layer
+SO_SOURCES := $(wildcard slippi_online/*.c) $(wildcard slippi_online/enet/*.c)
+OBJECTS += $(SO_SOURCES:.c=.o)
+SO_CFLAGS := -std=gnu99 -Os -DENET_IOS -Islippi_online/enet/include
+
+slippi_online/%.o : slippi_online/%.c
+	@echo  "CC	$@"
+	@$(CC) $(CFLAGS) $(SO_CFLAGS) $(CPPFLAGS) -c -MMD -MP -MF $(@:.o=.d) -o $@ $<
+
 # UBJSON Implementation
 OBJECTS += ubj/ubjr.o ubj/ubjrw.o ubj/ubjw.o
 
@@ -118,4 +128,5 @@ $(TARGET): $(GECKO_H) $(COMMON_CFG) kernel.ld $(OBJECTS)
 
 clean:
 	-$(RM) -f $(ZIPFILE) *.elf *.o *.bin *.d *.map lwbt/*.d lwbt/*.o option/*.d option/*.o gecko/*.h \
-		../common/config/*.o ../common/config/*.d ubj/*.o ubj/*.d
+		../common/config/*.o ../common/config/*.d ubj/*.o ubj/*.d \
+		slippi_online/*.o slippi_online/*.d slippi_online/enet/*.o slippi_online/enet/*.d

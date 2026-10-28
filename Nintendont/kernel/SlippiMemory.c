@@ -3,7 +3,8 @@
  * has been consumed, or until it has been overwritten with new replay data.
  * Functions for managing the buffer should live in this file.
  *
- *	Current `SlipMem` memory region: 0x12B80000 - 0x12E80000
+ *	Current `SlipMem` memory region: 0x12B80000 - 0x12E00000
+ *	(0x12E00000 - 0x12E80000 is Slippi Online's heap, slippi_online/so_alloc.h)
  */
 
 #include "SlippiMemory.h"
@@ -12,7 +13,7 @@
 #include "string.h"
 
 // Dimensions for the circular buffer
-#define SLIPMEM_SIZE	0x00300000
+#define SLIPMEM_SIZE	0x00280000
 #define SLIPMEM_BASE	0x12b80000
 #define SLIPMEM_TAIL	(SLIPMEM_HEAD + SLIPMEM_SIZE)
 #define SlipMemClear()	memset32(SlipMem, 0, SLIPMEM_SIZE)

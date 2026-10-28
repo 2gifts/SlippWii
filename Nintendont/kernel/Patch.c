@@ -120,6 +120,9 @@ u32 IsN64Emu = 0;
 
 #include "gecko/g_core.h"	// Core Slippi codeset
 #include "gecko/g_core_porta.h"
+#include "gecko/g_online_boot.h"	// Slippi bootloader (online codeset over EXI)
+#include "slippi_online/so_client.h"
+#include "slippi_online/so_platform.h"
 #include "gecko/g_crash_output.h"
 
 // Boundaries of the tournament mode region in NTSC-U v1.02
@@ -3272,6 +3275,12 @@ void DoPatches( char *Buffer, u32 Length, u32 DiscOffset )
 
 	bool use_codehandler = (cheatsWanted || debuggerWanted || MeleeVersion);
 
+	// Slippi Online: Melee runs Slippi's online codeset (see below), with its codes in the
+	// tournament mode region like the console codes. (Placing them in low memory after
+	// the codehandler, as Slippi Dolphin does, hung Melee's boot before OSInit was done.)
+	bool onlineGame = MeleeVersion && !ConfigGetConfig(NIN_CFG_SLIPPI_PORT_A) && so_client_online_game();
+	u32 onlineCodesSize = 8 + g_online_boot_size + g_crash_output_size + 8;
+
 	u32 gct_cursor;
 	u32 max_gct_size;
 	u32 gct_base_addr;
@@ -3340,6 +3349,9 @@ void DoPatches( char *Buffer, u32 Length, u32 DiscOffset )
 			memset((void*)gct_cursor, 0, max_gct_size);
 			write32(gct_base_addr, (gct_cursor | 0x80000000));
 		}
+		if (onlineGame)
+			so_log("patch: Slippi Online codes at %08x (%u of %u bytes)", (unsigned)(gct_cursor | 0x80000000),
+				(unsigned)onlineCodesSize, (unsigned)max_gct_size);
 	}
 
 	/* When booting Melee, deal with Slippi patches and Gecko codes toggled by users.
@@ -3359,7 +3371,16 @@ void DoPatches( char *Buffer, u32 Length, u32 DiscOffset )
 		// PortA codes. This is used when using a USB Gecko
 		u32 shouldUsePortA = ConfigGetConfig(NIN_CFG_SLIPPI_PORT_A);
 
-		if (!shouldUsePortA) {
+		// Slippi Online: Melee runs Slippi's online codeset, as Slippi Dolphin does. Only its
+		// bootloader goes here; at start-up it asks the EXI device (slippi_online/so_exi.c)
+		// for the codeset. The codeset brings its own recording and gameplay codes, so the
+		// core codes and the toggleable options below stay out.
+		if (onlineGame) {
+			dbgprintf("Patch:Apply Slippi Online bootloader at 0x%08x\r\n", gct_cursor);
+			memcpy((void*)gct_cursor, g_online_boot, g_online_boot_size);
+			sync_after_write((void*)gct_cursor, g_online_boot_size);
+			gct_cursor += g_online_boot_size;
+		} else if (!shouldUsePortA) {
 			dbgprintf("Patch:Apply Slippi core (port b) at 0x%08x\r\n", gct_cursor);
 
 			// Default behavior, Slippi is in Port B
@@ -3390,7 +3411,7 @@ void DoPatches( char *Buffer, u32 Length, u32 DiscOffset )
 		
 		// Iterate through all melee codes and add the codes that have been configured
 		int i, j;
-		for (i = 0; i < codeConfig->lineItemCount; i++) {
+		for (i = 0; !onlineGame && i < codeConfig->lineItemCount; i++) {
 			const MeleeCodeLineItem *lineItem = codeConfig->items[i];
 			u32 currentValue = ConfigGetMeleeCodeValue(lineItem->identifier);
 

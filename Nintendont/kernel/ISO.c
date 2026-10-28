@@ -16,6 +16,8 @@ You should have received a copy of the GNU General Public License
 along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 */
+#include "slippi_online/so_client.h"
+#include "slippi_online/so_platform.h"
 #include "Config.h"
 #include "ISO.h"
 #include "FST.h"
@@ -371,6 +373,16 @@ bool ISOInit()
 	return true;
 }
 
+/* Slippi Online: disc bytes straight into Buffer, past the cache (the kernel
+ * keeps a few files in RAM; slippi_online/so_files.c). False with no disc. */
+bool ISOReadInto(void *Buffer, u32 Length, u32 Offset)
+{
+	if (ISOFileOpen == 0)
+		return false;
+	ISOReadDirect(Buffer, Length, (u64)Offset + ISOShift64);
+	return true;
+}
+
 void ISOClose()
 {
 	if(ISOFileOpen)
@@ -421,6 +433,11 @@ void ISOSetupCache()
 		 * that we've stolen from the Triforce DIMM implementation.
 		 * Leave 0x10000 bytes of padding between them. */
 		DCacheLimit -= 0x310000;
+
+		/* Slippi Online keeps Slippi's menu files in RAM at the top of
+		 * this region (slippi_online/so_files.c). */
+		if (so_client_online_game())
+			DCacheLimit -= SO_FILE_CACHE_SIZE;
 	}
 	dbgprintf("DCCache: %X, DCacheLimit: %X\r\n", DCCache, DCacheLimit);
 	memset32(DC, 0, sizeof(DataCache)* CACHE_MAX);

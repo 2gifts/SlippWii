@@ -24,6 +24,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 #include "global.h"
 #include "DI.h"
+#include "slippi_online/so_platform.h"
 #include "RealDI.h"
 #include "wdvd.h"
 #include "string.h"
@@ -834,6 +835,7 @@ u32 DIReadThread(void *arg)
 					mqueue_ack( di_msg, -6 );
 					break;
 				}
+				so_fs_lock();	// Slippi Online: FatFS is shared with the EXI device
 				if(RealDiscCMD == 0)
 				{
 					ISOClose();
@@ -848,6 +850,7 @@ u32 DIReadThread(void *arg)
 						}
 					}
 				}
+				so_fs_unlock();
 				mqueue_ack( di_msg, 24 );
 				break;
 
@@ -875,6 +878,7 @@ u32 DIReadThread(void *arg)
 				di_offset = (u32)di_msg->ioctl.buffer_in;
 				u32 Offset = 0;
 				u32 Length = di_length;
+				so_fs_lock();	// Slippi Online: FatFS is shared with the EXI device
 				for (Offset = 0; Offset < di_length; Offset += Length)
 				{
 					// NOTE: ISOShift64 is applied in the RealDI and ISO readers.
@@ -894,6 +898,7 @@ u32 DIReadThread(void *arg)
 					}
 					memcpy( di_dest + Offset, di_src, Length > di_length ? di_length : Length );
 				}
+				so_fs_unlock();
 				if(di_msg->ioctl.command == 0)
 				{
 					DoPatches(di_dest, di_length, di_offset);

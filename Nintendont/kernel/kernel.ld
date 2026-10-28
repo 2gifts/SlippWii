@@ -39,6 +39,32 @@ __slippi_debug_stack_addr = __slippi_network_broadcast_stack_addr + __slippi_deb
 __ven_change_stack_size = 0x400;
 __ven_change_stack_addr = __slippi_debug_stack_addr + __ven_change_stack_size;
 
+/* Slippi Online (slippi_online/): network, receive, send completion and
+ * self-test and diagnostics threads */
+__slippi_online_stack_size = 0x2000;
+__slippi_online_stack_addr = __ven_change_stack_addr + __slippi_online_stack_size;
+
+__slippi_online_rx_stack_size = 0x1000;
+__slippi_online_rx_stack_addr = __slippi_online_stack_addr + __slippi_online_rx_stack_size;
+
+__slippi_online_done_stack_size = 0x800;
+__slippi_online_done_stack_addr = __slippi_online_rx_stack_addr + __slippi_online_done_stack_size;
+
+__slippi_online_test_stack_size = 0x1000;
+__slippi_online_test_stack_addr = __slippi_online_done_stack_addr + __slippi_online_test_stack_size;
+
+__slippi_online_diag_stack_size = 0x800;
+__slippi_online_diag_stack_addr = __slippi_online_test_stack_addr + __slippi_online_diag_stack_size;
+
+__slippi_online_stack_size = 0x2000;
+__slippi_online_stack_addr = __ven_change_stack_addr + __slippi_online_stack_size;
+
+__slippi_online_rx_stack_size = 0x1000;
+__slippi_online_rx_stack_addr = __slippi_online_stack_addr + __slippi_online_rx_stack_size;
+
+__slippi_online_done_stack_size = 0x800;
+__slippi_online_done_stack_addr = __slippi_online_rx_stack_addr + __slippi_online_done_stack_size;
+
 MEMORY {
 
 	code		: ORIGIN = 0x12F00000,	LENGTH = 0x60000

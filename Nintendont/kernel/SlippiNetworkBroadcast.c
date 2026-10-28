@@ -9,6 +9,7 @@
 #include "Config.h"
 
 #include "SlippiNetwork.h"
+#include "slippi_online/so_client.h"
 
 #define THREAD_CYCLE_TIME_MS	5000
 
@@ -95,8 +96,17 @@ s32 do_broadcast(void)
 {
 	s32 res;
 
-	if (TimerDiffSeconds(broadcast_ts) < BROADCAST_PERIOD)
+	// Slippi Online diagnostics (status_beacon=1): its state as the
+	// nickname, every second
+	int diagnostics = so_client_diagnostics();
+	if (diagnostics ? TimerDiffMs(broadcast_ts) < 900 : TimerDiffSeconds(broadcast_ts) < BROADCAST_PERIOD)
 		return 0;
+	const char *beacon = diagnostics ? so_client_beacon() : NULL;
+	if (beacon)
+	{
+		memset(&ready_msg.nickname, 0, sizeof(ready_msg.nickname));
+		memcpy(&ready_msg.nickname, beacon, strlen(beacon));
+	}
 
 	res = sendto(top_fd, discover_sock, &ready_msg, sizeof(ready_msg), 0);
 	broadcast_ts = read32(HW_TIMER);
@@ -117,7 +127,7 @@ static u32 SlippiNetworkBroadcastHandlerThread(void *arg)
 		status = getConnectionStatus();
 		if (status != CONN_STATUS_CONNECTED)
 			do_broadcast();
-		mdelay(THREAD_CYCLE_TIME_MS);
+		mdelay(so_client_diagnostics() ? 250 : THREAD_CYCLE_TIME_MS);
 	}
 	return 0;
 }

@@ -31,6 +31,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "debug.h"
 #include "SRAM.h"
 #include "SlippiMemory.h"
+#include "slippi_online/so_exi.h"
 
 #include "ff_utf8.h"
 
@@ -46,6 +47,11 @@ extern u32 slippi_use_port_a;
 // EXI device selection. (per channel)
 // idx 3 provided to prevent overflows.
 static u8 EXIDeviceSelect[4] = {0, 0, 0, 0};
+
+// Slippi Online diagnostics: requests for a device nobody handles (they are
+// never acknowledged), and the last one's command word and selected device.
+u32 EXIDebugUnhandled, EXIDebugUnhandledCommand, EXIDebugUnhandledDevice;
+u32 EXIDebugCount[3];	// select, imm, dma
 
 // Current EXI command. (per channel)
 // idx 3 provided to prevent overflows.
@@ -64,6 +70,7 @@ static u32 CurrentTiming = EXI_IRQ_DEFAULT;
 static bool exi_inited = false;
 
 bool EXI_IRQ = false;
+static int slippi_online_irq = 0;
 
 // EXI devices.
 // Low 2 bits: Device number. (0-2)
@@ -709,6 +716,7 @@ void EXIUpdateRegistersNEW( void )
 		{
 			case 0x10:	// EXISelect
 			{
+				EXIDebugCount[0]++;
 				chn = command & 0xFF;
 				dev = (command>>8) & 0xFF;
 				//frq = (command>>16) & 0xFF;
@@ -753,6 +761,7 @@ void EXIUpdateRegistersNEW( void )
 			} break;
 			case 0x11:	// EXI_Imm( s32 nChn, void *pData, u32 nLen, u32 nMode, EXICallback tc_cb );
 			{
+				EXIDebugCount[1]++;
 				chn	= (command >> 20) & 0xF;
 				data	= read32(EXI_CMD_1);
 				len	= command& 0xFFFF;
@@ -786,16 +795,25 @@ void EXIUpdateRegistersNEW( void )
 #ifdef DEBUG_SRAM
 						dbgprintf("EXI: EXIImm: Unhandled device: Ch%u, Dev%u\r\n", chn, EXIDeviceSelect[chn&3]);
 #endif
+						EXIDebugUnhandled++;
+						EXIDebugUnhandledCommand = command;
+						EXIDebugUnhandledDevice = EXIDeviceSelect[chn&3];
 						break;
 				}
 
 			} break;
 			case 0x12:	// EXIDMA
 			{
+				EXIDebugCount[2]++;
 				chn	= (command >> 20) & 0xF;
 				ptr	= (u8*)P2C(read32(EXI_CMD_1));
 				len	= command& 0xFFFF;
 				mode	= (command >> 16) & 0xF;
+				// The patched EXIDMA also passes the whole length: DMAs of
+				// 64 KiB and more (Slippi's file and codeset loads) do not
+				// fit the command word.
+				if ((read32(EXI_CMD_2) & 0xFFFF) == len)
+					len = read32(EXI_CMD_2);
 
 				//dbgprintf("EXIDMA( %u, %p, %u, %u )\r\n", chn, ptr, len, mode );
 				switch (EXI_DEVICE_NUMBER(chn, EXIDeviceSelect[chn&3]))
@@ -842,7 +860,25 @@ void EXIUpdateRegistersNEW( void )
 							// Write data received by DMA to SlippiMemory
 							// Sync is necessary because data was written from PPC
 							sync_before_read((void *)ptr, len);
-							SlippiMemoryWrite(ptr, len);
+							if (so_exi_is_online_command(ptr[0])) {
+								// Slippi Online: a command for the online device,
+								// not replay data. Some carry more than the DMA
+								// length (slippi_online/so_exi.h).
+								u32 need = so_exi_request_size(ptr[0]);
+								if (need > len)
+									sync_before_read((void *)ptr, need);
+								so_exi_write(ptr, len);
+								slippi_online_irq = 1;
+							} else {
+								so_exi_other_write();
+								SlippiMemoryWrite(ptr, len);
+								// Slippi Online: the codeset's replay data comes the
+								// same way as its commands; it needs no interrupt either,
+								// and one would hold the next command (the 0xB0 every
+								// frame) until it is delivered.
+								if (so_exi_online_mode())
+									slippi_online_irq = 1;
+							}
 
 							// Code to do some timing comparisons
 							// sync_before_read((void *)ptr, len);
@@ -851,6 +887,27 @@ void EXIUpdateRegistersNEW( void )
 							// u32 ticks = GetTicks();
 							// u32 ms = TicksToMs(ticks);
 							// dbgprintf("Received action. Index: %d | Time: %dms", actionIndex, ms);
+						} else if (!slippi_use_port_a && mode == 0) {
+							// Slippi Online: the answer to the command just
+							// written (the game reads it with interrupts off)
+							if (so_exi_read(ptr, len))
+								sync_after_write((void *)ptr, len);
+							slippi_online_irq = 1;
+						}
+
+						if (slippi_online_irq) {
+							// Slippi Online: acknowledge, with no interrupt. The game
+							// waits for the acknowledgement only (EXISync is patched
+							// to return at once), and the interrupt below would reach
+							// channel 0's handler: the memory card library, which then
+							// takes it for the end of its own transfer and hangs (in
+							// Melee's boot-time save check, where the online codeset
+							// already loads files).
+							slippi_online_irq = 0;
+							write32( EXI_CMD_0, 0 ); //exit EXIDMA / EXIImm
+							sync_after_write( (void*)EXI_BASE, 0x20 );
+							so_exi_after_ack();	// the game runs on meanwhile
+							break;
 						}
 
 						// The following code will simply ACK the message from the PowerPC side
@@ -885,6 +942,9 @@ void EXIUpdateRegistersNEW( void )
 #ifdef DEBUG_SRAM
 						dbgprintf("EXI: EXIDMA: Unhandled device: Ch%u, Dev%u\r\n", chn, EXIDeviceSelect[chn&3]);
 #endif
+						EXIDebugUnhandled++;
+						EXIDebugUnhandledCommand = command;
+						EXIDebugUnhandledDevice = EXIDeviceSelect[chn&3];
 						break;
 				}
 

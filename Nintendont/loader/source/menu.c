@@ -162,10 +162,11 @@ static const char *desc_memcard_multi[] = {
 	NULL
 };
 static const char *desc_networking[] = {
-	"Enable Slippi networking.",
-	"Network settings must be configured",
-	"in the Wii settings menu",
-	"in order to use this feature.",
+	"Always on in SlippWii (Slippi",
+	"Online needs it). Network settings",
+	"must be configured in the Wii",
+	"settings menu, on the wired LAN",
+	"adapter.",
 	NULL
 };
 static const char *desc_slippi_replays[] = {
@@ -851,7 +852,7 @@ static void Menu_GameSelection_Redraw(MenuCtx *ctx)
 			if (!isGALE || (isGALE && !isRev2))
 			{
 				PrintFormat(MENU_SIZE, ORANGE, MENU_POS_X, SettingY(11),"[!] WARNING, PLEASE READ ");
-				PrintFormat(MENU_SIZE, BLACK, MENU_POS_X, SettingY(12), "Project Slippi Nintendont");
+				PrintFormat(MENU_SIZE, BLACK, MENU_POS_X, SettingY(12), "SlippWii only");
 				PrintFormat(MENU_SIZE, BLACK, MENU_POS_X, SettingY(13), "supports the NTSC v1.02");
 				PrintFormat(MENU_SIZE, BLACK, MENU_POS_X, SettingY(14), "version of Melee (GALE01).");
 				PrintFormat(MENU_SIZE, BLACK, MENU_POS_X, SettingY(15), "This is not NTSC v1.02.");
@@ -1242,7 +1243,7 @@ static void Menu_Settings_InputHandler(MenuCtx *ctx)
 			// Slippi page settings
 			switch (ctx->settings.posX) {
 			case NIN_SLIPPI_NETWORKING:
-				ncfg->Config ^= (NIN_CFG_NETWORK);
+				ncfg->Config |= (NIN_CFG_NETWORK);	// always on in SlippWii
 				break;
 			case NIN_SLIPPI_REPLAYS:
 				ncfg->Config ^= (NIN_CFG_SLIPPI_REPLAYS);
@@ -1856,7 +1857,7 @@ void ShowMessageScreenAndExit(const char *msg, int ret)
 void PrintBuildInfo(void)
 {
 	PrintFormat(DEFAULT_SIZE, BLACK, MENU_POS_X, MENU_POS_Y + 20*0,
-		"[%s][IOS%u v%u]", 
+		"[SlippWii %s][%s][IOS%u v%u]", SLIPPWII_VERSION,
 		NIN_GIT_VERSION, *(vu16*)0x80003140, *(vu16*)0x80003142);
 	PrintFormat(DEFAULT_SIZE, BLACK, MENU_POS_X, MENU_POS_Y + 20*1,
 		"Built   : " __DATE__ " " __TIME__);

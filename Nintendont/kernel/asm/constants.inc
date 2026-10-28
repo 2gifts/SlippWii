@@ -30,6 +30,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 .set	EXI_CMD_0,		0xD3026800
 .set	EXI_CMD_1,		0xD3026804
+.set	EXI_CMD_2,		0xD3026808
 
 /** Interrupts **/
 

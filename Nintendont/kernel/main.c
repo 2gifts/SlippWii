@@ -41,6 +41,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "SlippiFileWriter.h"
 #include "SlippiNetwork.h"
 #include "SlippiNetworkBroadcast.h"
+#include "slippi_online/so_client.h"
+#include "slippi_online/so_diag.h"
 #include "net.h"
 
 #include "../common/include/KernelBoot.h"
@@ -410,6 +412,12 @@ int _main( int argc, char *argv[] )
 	PatchInit();
 	SlippiMemoryInit();
 
+	// Slippi Online starts here, after DIinit(): that clears the Triforce DIMM
+	// region (0x12B80000-0x12E80000), which SlipMem and slippi_online's heap
+	// reuse. Starting during NETWORK_INIT lost the heap (M2 hardware runs).
+	if (UseNetwork == 1)
+		so_client_init();
+
 	if (SlippiFileWrite == 1)
 		SlippiFileWriterInit(slippi_replays_led);
 
@@ -475,6 +483,7 @@ int _main( int argc, char *argv[] )
 	// Main kernel loop
 	while (1)
 	{
+		so_kernel_loops++;	// Slippi Online diagnostics: main loop alive
 		_ahbMemFlush(0);
 
 		//Does interrupts again if needed
@@ -533,7 +542,7 @@ int _main( int argc, char *argv[] )
 			GetCurrentTime();
 		}
 
-		udelay(20); //wait for other threads
+		udelay(so_main_loop_sleep_us); //wait for other threads (Slippi Online: longer while online)
 
 		if( WaitForRealDisc == 1 )
 		{

@@ -37,6 +37,7 @@ enum
 
 #define		EXI_CMD_0	(EXI_BASE+0x00)
 #define		EXI_CMD_1	(EXI_BASE+0x04)
+#define		EXI_CMD_2	(EXI_BASE+0x08)	// EXIDMA: the full length
 
 #define EXI_READ			0
 #define EXI_WRITE			1

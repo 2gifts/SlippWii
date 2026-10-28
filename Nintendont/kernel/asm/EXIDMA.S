@@ -35,12 +35,14 @@ MaskSet:
 
 	slwi	r3,	r3,	20
 	slwi	r6,	r6,	16
+	clrlwi	r9,	r5,	16		# the command word has 16 bits of length
 
 	or		r0,	r0,	r3
-	or		r0,	r0,	r5
+	or		r0,	r0,	r9
 	or		r0,	r0,	r6
 
 	stw		r4,	EXI_CMD_1@l(r7)
+	stw		r5,	EXI_CMD_2@l(r7)		# the full length (Slippi's file loads)
 
 ## IRQ function call
 	lis		r3,	0x8000
