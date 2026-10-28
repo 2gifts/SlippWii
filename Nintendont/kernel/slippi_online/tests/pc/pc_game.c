@@ -439,6 +439,16 @@ int main(int argc, char **argv)
 	side_commands();
 	match_state();
 	CHECK(msrb[0] == 0, "0xB3 before searching: state %u", msrb[0]);
+	{
+		/* SlippWii refuses Ranked (the menu hides it; this is the backstop) */
+		u8 ranked[20] = { 0xB4, 0 /* Ranked */ };
+		command(ranked, sizeof(ranked), NULL, 0);
+		match_state();
+		CHECK(msrb[0] == 5, "0xB4 Ranked: state %s, want error", state_name(msrb[0]));
+		simple(0xBA, NULL, 0);
+		match_state();
+		CHECK(msrb[0] == 0, "0xBA after the Ranked refusal: state %s", state_name(msrb[0]));
+	}
 
 	if (lock_in_and_search(so_client_config()->selftest_code) < 0 || wait_ready(timeout_ms) < 0) {
 		simple(0xBA, NULL, 0);

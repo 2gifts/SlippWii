@@ -9,7 +9,7 @@ GameCube controller, on a CRT if you like), against players on Slippi Dolphin.
 > it: report problems [here](https://github.com/2gifts/SlippWii/issues) instead.
 >
 > It is **free and open source** (GPLv2), built on [Slippi Nintendont](https://github.com/project-slippi/Nintendont),
-> and in **beta**: expect rough edges.
+> and young: please report anything that goes wrong.
 
 ## What works
 
@@ -18,7 +18,7 @@ GameCube controller, on a CRT if you like), against players on Slippi Dolphin.
 | **Direct** (connect codes) | Works. Tested for many hours against Slippi Dolphin on PC, including automated runs of 75 games whose replays matched frame for frame on both sides. |
 | **Unranked** | Should work (same code path as Direct) but has had little testing. |
 | **Teams** | Untested. |
-| **Ranked** | **Not supported.** Ranked's set rules and result reporting are not implemented, so please don't play Ranked with SlippWii. |
+| **Ranked** | **Not available.** Ranked is Slippi's protected competitive mode, so SlippWii leaves it out: it isn't in the Online Play menu. |
 | Input delay | Set on the Wii: the **Delay Frames** − / + buttons on the online character select screen. |
 | Quick chat, connect code history | Work as on Slippi Dolphin. |
 

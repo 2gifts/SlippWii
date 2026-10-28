@@ -1,7 +1,7 @@
 """Makes the SlippWii release zip from the committed tree and the built app.
 
     sh tools/build.sh                     # dist/sd/apps/SlippWii/boot.dol
-    python tools/make_release.py 0.1.0    # dist/SlippWii-v0.1.0.zip
+    python tools/make_release.py 1.0.0    # dist/SlippWii-v1.0.0.zip
 
 The zip holds "Install SlippWii.bat" (Windows), installer/install.py (any
 system with Python 3), the app and the licence. It refuses a dirty tree
@@ -9,6 +9,7 @@ system with Python 3), the app and the licence. It refuses a dirty tree
 --allow-dirty.
 """
 import argparse
+import re
 import datetime
 import hashlib
 import subprocess
@@ -76,7 +77,7 @@ def main():
         sys.exit(f'Nintendont/common/include/Metadata.h does not say SLIPPWII_VERSION "{v}"')
 
     meta = (ROOT / 'release/apps/SlippWii/meta.xml').read_text(encoding='utf-8')
-    meta = meta.replace('<version>0.1.0</version>', f'<version>{v}</version>')
+    meta = re.sub(r'<version>[^<]*</version>', f'<version>{v}</version>', meta)
     meta = meta.replace('<release_date></release_date>',
                         f'<release_date>{datetime.date.today():%Y%m%d}000000</release_date>')
 

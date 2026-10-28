@@ -116,6 +116,8 @@ static int pulse(Bot *b, u32 period, u32 phase)
 
 static void main_menu(Bot *b, Pad *o)
 {
+	if (b->seed == 0xED && rd8(0x804A04F0) == 8)
+		return;	/* test mode (tools/ppc/hide_ranked.s): stay on the Online Play menu */
 	if (rd8(0x804A04F0) == 8) {	/* Slippi's Online Play submenu */
 		if (b->scene_polls % 30 == 0)
 			*(volatile u16 *)0x804A04F2 = 2;	/* Direct */

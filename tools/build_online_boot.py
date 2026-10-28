@@ -10,6 +10,7 @@ Nintendont installs in Melee for Slippi Online (kernel/Patch.c).
      "- N +" under Slippi's User and Connect Code, buttons for the hand
      cursor (tools/css_delay/, EXI command 0xDC; Slippi Dolphin has it in its
      settings window, a console has none).
+  2c. No Ranked: the Online Play menu does not show it (tools/ppc/hide_ranked.s).
   3. With --heartbeat (diagnostics): every 32 frames, where the game is and
      a few of its globals (tools/ppc/heartbeat.s, EXI command 0xDE); and the
      interrupt flight recorder (tools/ppc/flight.s), a ring in RAM the kernel
@@ -37,6 +38,7 @@ OUT = ROOT / 'Nintendont/kernel/gecko/g_online_boot.bin'
 GCT_HEADER = bytes.fromhex('00D0C0DE00D0C0DE')
 GCT_FOOTER = bytes.fromhex('F000000000000000')
 CRASH_HOOK = 0x80345870  # __OSUnhandledException entry (NTSC 1.02)
+HIDE_RANKED_HOOK = 0x80229938  # MainMenu_CheckIfOptionIsUnlocked entry (mflr r0)
 CSS_DELAY_HOOK = 0x802669DC  # mnCharSel_Scene_OnEnter, after the CSS is built (lwz r0, 0x24(r1))
 HEARTBEAT_HOOK = 0x8034E964  # __VIRetraceHandler entry
 TOY_PROBE_HOOK = 0x803060BC  # Toy_803060BC entry (trophy table lookup)
@@ -88,6 +90,7 @@ def main():
         reporter += c2(hook, assemble(ROOT / 'tools/ppc/text_report.s', KIND=kind))
     css_delay, _ = pic_code.build(ROOT / 'tools/css_delay/glue.s', [ROOT / 'tools/css_delay/css_delay.c'])
     reporter += c2(CSS_DELAY_HOOK, bytes(css_delay))
+    reporter += c2(HIDE_RANKED_HOOK, assemble(ROOT / 'tools/ppc/hide_ranked.s'))
     extra = b''
     if args.heartbeat:
         extra += c2(HEARTBEAT_HOOK, assemble(ROOT / 'tools/ppc/heartbeat.s'))

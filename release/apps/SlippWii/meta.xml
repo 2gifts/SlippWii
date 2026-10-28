@@ -2,7 +2,7 @@
 <app version="1">
 	<name>SlippWii</name>
 	<coder>2gifts (Slippi Nintendont: FIX94, crediar, Fizzi, et al.)</coder>
-	<version>0.1.0</version>
+	<version>1.0.0</version>
 	<release_date></release_date>
 	<short_description>Unofficial Slippi Online for Wii</short_description>
 	<long_description>Play Slippi Online (Direct and Unranked) from a real Wii against PC players. Needs a wired USB LAN adapter.

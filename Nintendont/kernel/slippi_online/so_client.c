@@ -440,7 +440,15 @@ void so_client_find_match(const SoSearch *search)
 {
 	so_mutex_lock(&c.lock);
 	c.game_asked = 1;
-	if (c.state != SO_CLIENT_OFF) {
+	if (c.state != SO_CLIENT_OFF && search->mode == SO_MODE_RANKED) {
+		/* SlippWii does not play Ranked (Slippi's protected mode; its set
+		 * rules and reporting are not implemented). The menu hides it
+		 * (tools/ppc/hide_ranked.s); this is the backstop. */
+		so_log("client: Ranked is not available on SlippWii");
+		c.cancel_requested = 1;
+		c.search_requested = 0;
+		set_error("Ranked is not available on SlippWii");
+	} else if (c.state != SO_CLIENT_OFF) {
 		c.search = *search;
 		c.search_requested = 1;
 		c.cancel_requested = 0;
