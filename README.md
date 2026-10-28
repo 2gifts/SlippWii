@@ -42,7 +42,7 @@ connection (same region, wired) both sides feel normal.
 
 ### Windows (one click)
 
-1. Download **`SlippWii-vX.Y.Z.zip`** from [Releases](https://github.com/2gifts/SlippWii/releases/latest)
+1. Download **`SlippWii-vX.Y.Z.zip`** from [Releases](https://github.com/2gifts/SlippWii/releases)
    and extract it (right-click > *Extract All*).
 2. Put your Wii's SD card in the computer.
 3. Double-click **`Install SlippWii.bat`** and answer its questions.
