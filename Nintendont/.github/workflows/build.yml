@@ -1,0 +1,74 @@
+name: CI Slippi Nintendont Builds
+
+on:
+  workflow_dispatch:
+    inputs:
+      ignore:
+        description: "ignore"
+        required: false
+        default: "ignore"
+  push:
+    branches:
+      - "**"
+  pull_request:
+    paths-ignore:
+      - "**.md"
+    branches:
+      - "**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  ubuntu64:
+    name: "Loader Build"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: "Fetch Git Tags"
+        shell: bash
+        if: success()
+        run: |
+          git fetch --prune --unshallow
+          echo "GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_ENV
+          echo "GIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "GIT_TAG=$(git describe --tags --abbrev=0)" >> $GITHUB_ENV
+          echo "CURR_DATE=$(date +%Y-%m-%d)" >> $GITHUB_ENV
+          echo "CURR_TIMESTAMP=$(date +%Y%m%d000000)" >> $GITHUB_ENV
+          echo "NIN_VERSION=$(cat common/include/NintendontVersion.h | grep NIN_VERSION | cut -d " " -f 3 | cut -d "\"" -f 2)" >> $GITHUB_ENV
+      - name: "Build"
+        if: success()
+        working-directory: ${{ github.workspace }}
+        run: |
+          sudo docker run --volume=${PWD}:/work --workdir=/work nikhilnarayana/devkitpro-slippi:latest make -j7
+      - name: "Package"
+        if: success()
+        working-directory: ${{ github.workspace }}
+        run: |
+          mkdir artifact
+          cp ./loader/loader.* ./artifact/
+          mkdir -p "release-artifact/apps/Slippi Nintendont"
+          cp ./loader/loader.dol "./release-artifact/apps/Slippi Nintendont/boot.dol"
+          cp ./nintendont/{icon.png,meta.xml} "./release-artifact/apps/Slippi Nintendont/"
+          pushd "./release-artifact/apps/Slippi Nintendont/"
+          sed -i -e s/\<version\>/\<version\>${{ env.NIN_VERSION }}/ meta.xml
+          sed -i -e s/\<release_date\>/\<release_date\>${{ env.CURR_TIMESTAMP }}/ meta.xml
+          sed -i -e s/\<git_hash\>/\<git_hash\>${{ env.GIT_HASH }}/ meta.xml
+          popd
+          cp -r ./ci/* ./release-artifact/apps/
+      - name: "Publish Loader"
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: loader-${{ env.CURR_DATE }}-${{ env.GIT_HASH }}-${{ env.GIT_TAG }}
+          path: "./artifact/"
+      - name: "Publish Release Ready Loader"
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ env.CURR_DATE }}-${{ env.GIT_HASH }}-${{ env.GIT_TAG }}
+          path: "./release-artifact/"

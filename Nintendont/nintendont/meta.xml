@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="ISO-8859-1" standalone="yes"?>
+<app version="1">
+	<name>Slippi Nintendont</name>
+	<coder>FIX94, crediar, Fizzi, meta, Nicolet, nikki</coder>
+	<version></version>
+	<release_date></release_date>
+	<git_hash></git_hash>
+	<short_description>Gamecube Loader</short_description>
+	<long_description>A fork of Nintendont, designed specifically for Super Smash Bros. Melee.
+https://github.com/project-slippi/Nintendont
+https://slippi.gg</long_description>
+	<no_ios_reload/>
+	<ahb_access/>
+</app>
