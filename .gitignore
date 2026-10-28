@@ -1,0 +1,12 @@
+.toolchain/
+dist/
+build.log
+g_core_test.bin
+slippi-ssbm-asm/
+tools/research/m1/wii-net-test-*.log
+__pycache__/
+build-plain.log
+backups/
+build/
+installer/downloads/
+installer/install-log.txt

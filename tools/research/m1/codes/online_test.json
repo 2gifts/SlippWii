@@ -1,0 +1,16 @@
+{
+  "codes": [
+    {
+      "name": "Slippi Online Wii: EXI latency test",
+      "authors": ["slippi-wii"],
+      "description": ["Per-frame EXI write+read like online command 0xB0, timed with the timebase"],
+      "build": [
+        {
+          "type": "injectFolder",
+          "sourceFolder": "../codes/OnlineTest",
+          "annotation": "EXI latency test"
+        }
+      ]
+    }
+  ]
+}

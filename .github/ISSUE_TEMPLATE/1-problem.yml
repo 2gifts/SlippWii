@@ -1,0 +1,56 @@
+name: Problem report
+description: Something doesn't work in SlippWii or its installer
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing SlippWii! It is an unofficial project: please report SlippWii problems here, not to the Slippi team.
+        **Never post your `user.json` or its contents**: it is your Slippi login.
+  - type: input
+    id: version
+    attributes:
+      label: SlippWii version
+      description: Shown at the top of the SlippWii screen, e.g. 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where did it happen?
+      options:
+        - Installer (on the computer)
+        - Starting SlippWii / loading Melee
+        - Online menus (searching, connecting)
+        - During a game (lag, desync, freeze)
+        - After a game
+        - Something else
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Online mode
+      options:
+        - Direct
+        - Unranked
+        - Teams
+        - Not online / not applicable
+  - type: input
+    id: setup
+    attributes:
+      label: Your setup
+      description: Wii model, LAN adapter, and your opponent's setup (Slippi Dolphin on PC, another Wii, ...) and rough distance/ping
+      placeholder: Wii RVL-001, USB LAN adapter; opponent on Slippi Dolphin 3.6.4, same city
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead. Can you make it happen again?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and replays
+      description: For installer problems, attach `installer/install-log.txt`. For desyncs, the opponent's Slippi replay (.slp) of that game helps a lot.
