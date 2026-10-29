@@ -52,6 +52,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 #include "ff_utf8.h"
 #include "diskio.h"
+#include "slippwii.h"
 // from diskio.c
 extern DISC_INTERFACE *driver[_VOLUMES];
 
@@ -937,6 +938,11 @@ int main(int argc, char **argv)
 	// Save the ISO shift value for multi-game discs.
 	*(vu32*)0xD300300C = ISOShift;
 
+	// SlippWii: the Slippi account and Slippi's online menu files (made from
+	// the disc on the first start), before the kernel starts.
+	if (memcmp(&ncfg->GameID, "GALE", 4) == 0)
+		SlippWii_Prepare(CurDICMD, ISOShift);
+
 //Set Language
 	if(ncfg->Language == NIN_LAN_AUTO || ncfg->Language >= NIN_LAN_LAST)
 	{
@@ -1130,6 +1136,9 @@ int main(int argc, char **argv)
 				PrintFormat(DEFAULT_SIZE, BLACK, MENU_POS_X, MENU_POS_Y + 20*12, "Slippi network init... Done!");
 			if(STATUS_LOADING == -6)
 				PrintFormat(DEFAULT_SIZE, MAROON, MENU_POS_X, MENU_POS_Y + 20*12, "Slippi network init... Error! %d Shutting down", STATUS_ERROR);
+
+			if(SlippWii_AccountLine[0])
+				PrintFormat(DEFAULT_SIZE, GREEN, MENU_POS_X, MENU_POS_Y + 20*19, "%s", SlippWii_AccountLine);
 
 			if(STATUS_LOADING == CONFIG_INIT)
 				PrintFormat(DEFAULT_SIZE, BLACK, MENU_POS_X, MENU_POS_Y + 20*13, "Loading config...");

@@ -8,5 +8,3 @@ __pycache__/
 build-plain.log
 backups/
 build/
-installer/downloads/
-installer/install-log.txt

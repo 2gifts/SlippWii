@@ -32,46 +32,48 @@ connection (same region, wired) both sides feel normal.
 - A **Wii** with the [Homebrew Channel](https://wii.hacks.guide/). (Wii U's vWii is untested.)
 - A **USB LAN adapter**: a wired connection to your router. **Wi-Fi is not supported**: the Wii's
   Wi-Fi is far too slow for online play. Set it up once in *Wii Settings > Internet*.
-- The Wii's **SD card** and a computer to set it up.
-- Your **Melee disc image**: NTSC 1.02 (`GALE01`, revision 2), the same `.iso` Slippi uses. (`.ciso`
-  works too.)
+- The Wii's **SD card** and a computer to copy files to it.
+- Your **Melee disc image**: NTSC 1.02 (`GALE01`, revision 2), the same `.iso` Slippi uses (`.ciso`,
+  an extracted game or a real disc work too).
 - A **Slippi account**: install [Slippi Launcher](https://slippi.gg) on your computer and log in once.
 - A GameCube controller (and adapter ports, on a Wii that has them).
 
 ## Install
 
-### Windows (one click)
+1. Download **`SlippWii-vX.Y.Z.zip`** from [Releases](https://github.com/2gifts/SlippWii/releases).
+2. Put your Wii's SD card in your computer and **extract the zip onto the SD card** (it adds the
+   `apps` and `slippwii` folders; nothing else on the card changes). Your Melee `.iso` goes where
+   Nintendont finds games, e.g. `SD:/games/` (or a USB drive's `games/`), if it isn't there already.
+3. On the SD card, double-click **`Copy my Slippi account to SD.bat`**. It copies your Slippi login
+   from Slippi Launcher (see below).
+4. Put the card in the Wii, start **SlippWii** from the Homebrew Channel and pick Melee.
 
-1. Download **`SlippWii-vX.Y.Z.zip`** from [Releases](https://github.com/2gifts/SlippWii/releases)
-   and extract it (right-click > *Extract All*).
-2. Put your Wii's SD card in the computer.
-3. Double-click **`Install SlippWii.bat`** and answer its questions.
+**The first start takes a little longer:** SlippWii makes Slippi's online menus from *your* disc,
+on the Wii, and keeps them on the card. Later starts skip this. Nothing from Melee is shipped with
+SlippWii; the zip has Project Slippi's own files (its online code, menu files and patches) and
+SlippWii.
 
-The installer finds the SD card, your Melee `.iso` (from Slippi Launcher's settings, the SD card or
-your Downloads folder) and your Slippi account by itself. It asks before using each one. It then
-downloads Slippi's online code and menu files from Project Slippi's GitHub, patches the menu files
-from *your* disc, and writes everything to the card. Nothing from Melee or from Slippi is
-redistributed with SlippWii.
+To update, extract the newer zip onto the card the same way (your account and settings stay).
+To uninstall, delete `apps/SlippWii`, `slippwii/` and `slippwii_nincfg.bin`.
 
-### macOS / Linux
+### Your Slippi account
 
-Extract the zip, put the SD card in, and run (Python 3.8 or newer; less tested than Windows so far):
+Slippi Launcher keeps your login in a file named `user.json`; SlippWii needs a copy in
+`slippwii/` on the SD card.
 
-```sh
-python3 installer/install.py
-```
+- **Windows:** double-click `Copy my Slippi account to SD.bat` on the SD card. It finds the
+  account Slippi Launcher on that PC is logged in to and copies it, showing only your name and
+  connect code. No account found? Install [Slippi Launcher](https://slippi.gg), log in, click
+  **Play** once so it sets up Dolphin, then run it again.
+- **By hand (any computer):** copy `user.json` from Slippi Launcher's files into `slippwii/` on the
+  card. On Windows it is `%APPDATA%\Slippi Launcher\netplay\User\Slippi\user.json`; on macOS and
+  Linux, look for `user.json` in Slippi Launcher's application folder.
 
-### Your Slippi account on the Wii
+If the account is missing or damaged, SlippWii says so on the TV before Melee starts, and explains
+how to fix it. When it is fine, the start-up screen shows *Slippi account: your name (your code)*.
 
-Slippi Launcher keeps your login in a file named `user.json`. The installer copies it to the SD card
-(`slippwii/user.json`) so the Wii can log in as you, and shows only your name and connect code
-while doing so. **Treat that file like a password:** anyone with it can play as you. Don't share it,
-and don't post your SD card's files online.
-
-- No account found? Install Slippi Launcher, log in, click **Play** once so it sets up Dolphin, then
-  run the installer again.
-- Want a different account on the Wii? Log in to it in Slippi Launcher (or pick its `user.json`)
-  and run the installer again. The old one is kept as `user.json.old-…`.
+**Treat `user.json` like a password:** anyone with it can play as you. Don't share it, and don't
+post your SD card's files online.
 
 ## Play
 
@@ -85,23 +87,26 @@ SlippWii has its own app folder, settings file and data folder, so **Slippi Nint
 installed and works as before**. Use it for offline play, replays to USB and console mirroring as
 usual.
 
-What the installer puts on the SD card:
+On the SD card:
 
 | Path | What |
 |---|---|
 | `apps/SlippWii/` | The app (Homebrew Channel) |
 | `slippwii/user.json` | Your Slippi account (keep it private) |
-| `slippwii/netplay.gct`, `slippwii/files/` | Slippi's online code and menu files (made from your disc) |
+| `slippwii/netplay.gct`, `slippwii/files/`, `slippwii/patches/` | Slippi's online code, menu files and patches |
 | `slippwii/config.ini` | Settings (optional) |
 | `slippwii_nincfg.bin` | SlippWii's loader settings (Slippi Nintendont uses `slippi_nincfg.bin`) |
 
-To update, run the newer installer. To uninstall, delete `apps/SlippWii`, `slippwii/` and
-`slippwii_nincfg.bin`.
+If your games are on a USB drive, SlippWii copies what it needs to `slippwii/` on that drive by itself.
 
 ## Troubleshooting
 
-- **"Online Play" is locked or says you're not logged in:** `slippwii/user.json` is missing. Run
-  the installer again with your account.
+SlippWii checks everything before Melee starts and explains any problem on the TV. The common ones:
+
+- **"No Slippi account on the SD card":** run `Copy my Slippi account to SD.bat` (see above).
+- **"Could not make Slippi's online menus":** your Melee disc image isn't an unmodified NTSC 1.02
+  copy (GALE01 revision 2), or SlippWii's files are incomplete: extract the zip onto the card again.
+  Slippi needs the same vanilla 1.02 image.
 - **Can't connect / stuck searching:** check the LAN adapter's connection test in Wii Settings,
   and that the opponent typed your connect code exactly. Direct needs both players searching for each
   other.
@@ -113,7 +118,7 @@ To update, run the newer installer. To uninstall, delete `apps/SlippWii`, `slipp
 ## Reporting problems
 
 Open an [issue](https://github.com/2gifts/SlippWii/issues/new/choose) and say what you did, what
-happened, your SlippWii version (shown at the top of the SlippWii screen), the mode, and your
+happened (a photo of any SlippWii message on the TV helps), your SlippWii version (shown at the top of the SlippWii screen), the mode, and your
 opponent's setup. A Slippi replay (`.slp`) from the opponent's side helps with desyncs.
 
 ## How it works

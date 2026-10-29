@@ -16,10 +16,11 @@ runs the same game code as its opponents. Nothing from the disc or from
 Slippi is shipped with SlippWii: the patches are applied to your own disc
 (an NTSC 1.02 .iso, .gcm or .ciso, or a folder of its extracted files).
 
-The installer (install.py) uses this; developers can run it directly:
+tools/make_release.py uses this (the release ships Slippi's patches; the Wii
+applies them). For development it can also make the files on a PC:
 
-    python installer/slippi_files.py --iso "Melee.iso" --out E:/
-    python installer/slippi_files.py --files extracted/files --out staging/
+    python tools/slippi_files.py --iso "Melee.iso" --out E:/
+    python tools/slippi_files.py --files extracted/files --out staging/
 
 Nothing is written outside --out/slippwii/; user.json and config.ini there
 are left alone.
@@ -39,9 +40,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from vcdiff import decode  # noqa: E402
 
-# Downloads are kept here (a developer checkout's build/ folder, or next to
-# the installer).
-CACHE = (HERE.parent / 'build/slippi-release') if (HERE.parent / 'Nintendont').exists() else HERE / 'downloads'
+# Downloads are kept in build/slippi-release.
+CACHE = HERE.parent / 'build/slippi-release'
 
 # The Slippi Dolphin releases PC players run, and their files' hashes. The
 # codeset is the stable one (Slippi Launcher's default, 3.6.4, the version the

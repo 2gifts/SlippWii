@@ -23,7 +23,10 @@ the Wii's ARM coprocessor (Starlet) beside the game. SlippWii adds the online ha
 - `so_netplay.c`: the ENet peer connection and the input exchange, Slippi's netplay protocol.
 - `so_socket.c`, `enet/ios.c`: UDP through the Wii's IOS network stack.
 - `so_files.c`: Slippi's online code (`netplay.gct`, served to Slippi's bootloader at start-up) and
-  menu files, from `SD:/slippwii/`.
+  menu files, from `SD:/slippwii/`. Melee's own menu files with Slippi's changes can't be shipped,
+  so the loader makes them before Melee starts, on the first start (`loader/source/slippwii.c`):
+  Slippi's patches (`slippwii/patches/*.diff`) applied to the disc being started, each result
+  checked against the release's manifest (the patches carry no checksums of their own).
 - `so_client.c`, `so_config.c`: the client's threads and `config.ini`.
 
 ### Lockstep instead of rollback

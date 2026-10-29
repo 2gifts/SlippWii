@@ -4,7 +4,7 @@
 
 /* SlippWii: unofficial Slippi Online for the Wii, a fork of Slippi
  * Nintendont. Not affiliated with Project Slippi or Nintendo. */
-#define SLIPPWII_VERSION	"1.0.0"
+#define SLIPPWII_VERSION	"1.1.0"
 
 #define META_NAME	"SlippWii"
 #define META_AUTHOR	"2gifts; Slippi Nintendont: FIX94, crediar, Fizzi, metaconstruct, Nicolet, nikki"

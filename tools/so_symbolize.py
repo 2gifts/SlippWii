@@ -16,7 +16,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
-sys.path.insert(0, str(ROOT / 'installer'))
+sys.path.insert(0, str(HERE))
 import slippi_files as builder  # noqa: E402
 
 SYMBOLS = ROOT.parent / 'slippi-3ds/config/GALE01/symbols.txt'

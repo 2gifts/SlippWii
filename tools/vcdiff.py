@@ -6,7 +6,7 @@ MnExtAll) as VCDIFF deltas against the player's own disc files
 no secondary compressor (what those files use); the open-vcdiff Adler-32
 window checksum extension is read and verified.
 
-    python installer/vcdiff.py SOURCE DELTA OUT
+    python tools/vcdiff.py SOURCE DELTA OUT
 """
 import sys
 import zlib

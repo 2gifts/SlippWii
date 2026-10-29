@@ -153,7 +153,7 @@ def setup(args):
     sd = Path(args.sd.rstrip('\\/') + '/')
     if args.play:
         # Slippi's codeset and menu files, from the player's own disc.
-        build = [sys.executable, str(ROOT / 'installer/slippi_files.py'), '--out', str(sd)]
+        build = [sys.executable, str(HERE / 'slippi_files.py'), '--out', str(sd)]
         build += ['--iso', args.iso] if args.iso else ['--files', args.files] if args.files else []
         if len(build) == 4:
             sys.exit('setup --play needs --iso (or --files)')
@@ -484,7 +484,7 @@ def run_pc(args):
     (out / 'wii/test-user.json').write_text(json.dumps(WII_USER), encoding='utf-8')
     staged = ROOT / 'build/sd-staging/slippwii'
     if args.game and staged.exists():
-        # The builder's codeset and menu files (installer/slippi_files.py)
+        # The builder's codeset and menu files (tools/slippi_files.py)
         shutil.copy(staged / 'netplay.gct', out / 'wii')
         shutil.copytree(staged / 'files', out / 'wii/files')
     (out / 'peer/user.json').write_text(json.dumps(PEER_USER), encoding='utf-8')

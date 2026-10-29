@@ -20,9 +20,10 @@ includes have been generated.
 | `Nintendont/kernel/gecko/g_online_boot.bin` | Codes installed in Melee: Slippi's bootloader, the crash reporter and the delay buttons. Rebuild with `python tools/build_online_boot.py` (committed; `--stall`, `--heartbeat` and `--autoplay` make diagnostic and test builds) |
 | `tools/css_delay/` | The delay buttons on the character select screen (C, built position independent by `tools/pic_code.py`) |
 | `tools/ppc/` | The crash reporter and diagnostics (PowerPC assembly) |
-| `installer/` | The SD card installer; `slippi_files.py` makes Slippi's files from a disc |
-| `release/apps/SlippWii/` | The Homebrew Channel icon and `meta.xml` |
-| `tools/make_release.py` | The release zip |
+| `Nintendont/loader/source/slippwii.c`, `vcdiff.c` | Before Melee starts: the account check, and Slippi's menu patches applied to the disc (first start) |
+| `release/` | What goes on the SD card besides the app: the Homebrew Channel icon and `meta.xml`, the account-copy script |
+| `tools/slippi_files.py` | Slippi's pinned files; `netplay.gct`, and a PC-side patcher for development |
+| `tools/make_release.py` | The release zip (the SD card's files, with the manifest of what the Wii must make) |
 | `tools/online_selftest.py`, `tools/sweep/`, `tools/wii_mirror.py`, `tools/slp_compare.py` | Test tools |
 
 ## Tests
@@ -52,5 +53,9 @@ setup --real` writes). Release builds log nothing.
 1. Bump `SLIPPWII_VERSION` in `Nintendont/common/include/Metadata.h` and `<version>` in
    `release/apps/SlippWii/meta.xml`, and add a `CHANGELOG.md` entry.
 2. `python tools/build_online_boot.py`, `sh tools/build.sh`, then commit.
-3. `python tools/make_release.py X.Y.Z` makes `dist/SlippWii-vX.Y.Z.zip`. Attach it to a GitHub
-   release tagged `vX.Y.Z`.
+3. `python tools/make_release.py X.Y.Z --iso Melee.iso` makes `dist/SlippWii-vX.Y.Z.zip` (the disc
+   gives the patched files' CRC-32s for the manifest; nothing else of it is kept). Attach the zip to a
+   GitHub release tagged `vX.Y.Z`.
+
+`python tools/test_vcdiff_c.py --iso Melee.iso` checks the loader's patch decoder against the
+Python one (needs a host `gcc`).
