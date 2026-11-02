@@ -77,6 +77,8 @@ typedef struct {
 	 * IOS have the CPU in between. */
 	u16 online_loop_us;
 	u8 chat;	/* quick chat in Direct (Slippi's default: on) */
+	u8 rumble;	/* controller rumble in online play (default on; rumble.txt, set on the
+		 * online CSS, wins over config.ini) */
 	u8 test_drop_pct;	/* tests: drop this share of outgoing pad packets */
 } SoConfig;
 

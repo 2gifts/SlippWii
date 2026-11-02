@@ -57,6 +57,7 @@ enum {
 	CMD_PROBE = 0xDD,	/* diagnostics (tools/ppc/probe_*.s) */
 	CMD_TEXT_REPORT = 0xDA,	/* Melee's panics and OSReport (tools/ppc/text_report.s) */
 	CMD_SET_DELAY = 0xDC,	/* Wii only: [step] -> [delay], the online CSS's delay buttons (tools/css_delay/) */
+	CMD_SET_RUMBLE = 0xDB,	/* Wii only: [0 off, 1 on, 0xFF read] -> [rumble], the online CSS's rumble switch */
 };
 
 /* ONLINE_INPUTS results (the ASM's RESP_*). */
@@ -105,6 +106,7 @@ static u16 payload_size(u8 cmd)
 	case CMD_PROBE: return 0x3F;
 	case CMD_HEARTBEAT: return 0x5F;
 	case CMD_SET_DELAY: return 1;
+	case CMD_SET_RUMBLE: return 1;
 	case CMD_TEXT_REPORT: return 0x7F;
 	default: return 0;
 	}
@@ -120,7 +122,8 @@ int so_exi_is_online_command(u8 cmd)
 	return (cmd >= CMD_ONLINE_INPUTS && cmd <= CMD_REPORT_MATCH_STATUS_UPDATE) ||
 		(cmd >= CMD_LOG_MESSAGE && cmd <= CMD_CHANGE_MUSIC_VOLUME) ||
 		(cmd >= CMD_PREMADE_TEXT_LENGTH && cmd <= CMD_GET_RANK_VISIBILITY) || cmd == CMD_CRASH_REPORT || cmd == CMD_HEARTBEAT ||
-		cmd == CMD_PROBE || cmd == CMD_TEXT_REPORT || cmd == CMD_SET_DELAY;
+		cmd == CMD_PROBE || cmd == CMD_TEXT_REPORT || cmd == CMD_SET_DELAY ||
+		cmd == CMD_SET_RUMBLE;
 }
 
 u32 so_exi_request_size(u8 cmd)
@@ -1282,6 +1285,9 @@ void so_exi_write(const u8 *request, u32 dma_len)
 	}
 	case CMD_GET_DELAY:
 		answer(2)[0] = 1;	/* a real answer: no extra delay offline */
+		break;
+	case CMD_SET_RUMBLE:	/* 0xFF: just the setting */
+		answer(1)[0] = (u8)so_client_set_rumble(request[1]);
 		break;
 	case CMD_SET_DELAY:	/* step 0: just the delay */
 		answer(1)[0] = (u8)so_client_step_delay((s8)request[1]);

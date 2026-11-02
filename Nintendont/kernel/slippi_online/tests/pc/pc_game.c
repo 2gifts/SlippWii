@@ -124,6 +124,17 @@ static int online_status(void)
 	step[1] = 0xFF;	/* -1 */
 	command(step, 2, &got, 1);
 	CHECK(so_client_config()->delay == delay && got == delay, "0xDC -1: the delay did not come back (%u)", got);
+	/* The CSS's rumble switch (0xDB): read, off, on */
+	step[0] = 0xDB;
+	step[1] = 0xFF;
+	command(step, 2, &got, 1);
+	CHECK(got == 1, "0xDB read: rumble %u, want on by default", got);
+	step[1] = 0;
+	command(step, 2, &got, 1);
+	CHECK(got == 0 && so_client_config()->rumble == 0, "0xDB 0: rumble still %u", got);
+	step[1] = 1;
+	command(step, 2, &got, 1);
+	CHECK(got == 1 && so_client_config()->rumble == 1, "0xDB 1: rumble %u", got);
 	return osb[0] == 1 ? 0 : -1;
 }
 

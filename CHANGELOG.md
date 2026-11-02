@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0
+
+- Rumble switch: turn your controller's rumble on or off for online play with the new **Rumble**
+  switch under *Delay Frames* on the online character select screen. It's remembered between
+  sessions (saved on the SD card). Melee's own Options > Rumble couldn't do it online, because
+  Slippi sends your character's rumble to your controller's port. ([#1](https://github.com/2gifts/SlippWii/issues/1))
+
 ## 1.1.0
 
 No more installer: SlippWii is now files to put on the SD card, like Slippi Nintendont.

@@ -1,9 +1,11 @@
-/* The online CSS's delay setting (see glue.s): "Delay Frames" and "－ N ＋"
- * under Slippi's User and Connect Code lines, in its text style. Pointing
- * the hand at － or ＋ lights it; A changes the delay (1-9) through the
- * kernel (EXI command 0xDC [step] -> [delay], saved on the SD card for the
- * next game). Locked (gray) while searching or connected, and while a
- * connect code is being typed.
+/* The online CSS's settings (see glue.s): "Delay Frames" and "－ N ＋", then
+ * "Rumble" and "On"/"Off", under Slippi's User and Connect Code lines, in its
+ * text style. Pointing the hand at a button lights it; A changes the delay
+ * (1-9; EXI command 0xDC [step] -> [delay]) or switches rumble (0xDB [on] ->
+ * [on]); the kernel saves both on the SD card. The delay is locked (gray)
+ * while searching or connected; neither changes while a connect code is
+ * being typed. Rumble off silences the controller in online play (`motor`
+ * in glue.s, installed here at PADControlMotor).
  *
  * Built position independent (tools/pic_code.py checks): no globals, no
  * constant data; floats, colours and strings come from struct Ui. Addresses
@@ -16,6 +18,7 @@
  *   0x804D6CF0 the port in control of the CSS
  *   0x804A0BC0 CSS cursors (pointer per port; x at +0x0C, y at +0x10)
  *   0x804C20BC HSD_PadCopyStatus[4], 0x44 each; trigger at +0x08
+ *   0x8034DEBC PADControlMotor
  */
 typedef unsigned char u8;
 typedef signed char s8;
@@ -49,10 +52,24 @@ typedef struct {
 	char minus[4];		/* 0x68 */
 	char plus[4];		/* 0x6C */
 	char fmt[4];		/* 0x70 */
+	float rumble_gap;	/* 0x74 */
+	float switch_x;		/* 0x78 */
+	u8 rumble;		/* 0x7C 1 on, 0 off: read by glue.s's motor */
+	u8 rumble_sub;		/* 0x7D */
+	u8 rumble_look;		/* 0x7E */
+	u8 pad;
+	char rumble_label[8];	/* 0x80 */
+	char on[4];		/* 0x88 */
+	char off[4];		/* 0x8C */
 } Ui;
 
 #define A_BUTTON 0x100
 #define CMD_SET_DELAY 0xDC
+#define CMD_SET_RUMBLE 0xDB
+#define PAD_CONTROL_MOTOR 0x8034DEBCu	/* its first instruction: mflr r0 */
+#define MFLR_R0 0x7C0802A6u
+
+void flush_code(u32 address, u32 bytes);	/* glue.s */
 
 /* SisLib text (Slippi's names) and the rest */
 #define Text_CreateStruct ((void *(*)(int, int))0x803A6754)
@@ -109,21 +126,67 @@ static int step_delay(Ui *u, int step)
 #endif
 }
 
+/* 0xDB [on]: the rumble switch after it (0xFF: as it is); on if unknown */
+static int set_rumble(Ui *u, int on)
+{
+#ifdef CSS_DELAY_FAKE
+	return on == 0xFF ? u->rumble : on;
+#else
+	u8 raw[64];
+	u8 *buf = (u8 *)(((u32)raw + 31) & ~31u);
+	buf[0] = CMD_SET_RUMBLE;
+	buf[1] = (u8)on;
+	FN_EXITransferBuffer(buf, 2, 1);
+	buf[0] = 1;
+	FN_EXITransferBuffer(buf, 1, 0);
+	(void)u;
+	return buf[0] == 0 ? 0 : 1;
+#endif
+}
+
 static void show_delay(Ui *u, int d)
 {
 	u->delay = d;
 	Text_UpdateSubtextContents(u->text, u->sub[1], u->fmt, d);
 }
 
-void css_delay_load(Ui *u, void *think)
+static void show_rumble(Ui *u, int on)
+{
+	u->rumble = (u8)on;
+	Text_UpdateSubtextContents(u->text, u->rumble_sub, on ? u->on : u->off);
+}
+
+/* PADControlMotor's first instruction -> `motor` (once; it stays). */
+static void install_motor(u32 motor)
+{
+	u32 at = PAD_CONTROL_MOTOR, offset = motor - at;
+	u32 branch = 0x48000000u | (offset & 0x03FFFFFCu);
+	u32 now = rd32(at);
+	if (now == branch)
+		return;
+	if (now != MFLR_R0 || offset + 0x02000000u >= 0x04000000u)
+		return;	/* not Melee 1.02's, or out of a branch's reach: leave it */
+	*(volatile u32 *)at = branch;
+	flush_code(at, 4);
+}
+
+/* The rows' y: the delay label, then (+ rumble_gap) the rumble label. */
+static float rows_y(Ui *u)
+{
+	return rd8(0x804D6640) == 2 ? u->y_direct : u->y_other;
+}
+
+void css_delay_load(Ui *u, void *think, void *motor)
 {
 	void *t, *gobj;
 	float y, x;
 	int i;
 	u->text = 0;
 	u->look = 0;
+	u->rumble_look = 0;
 	if (!online_css())
 		return;
+	install_motor((u32)motor);
 	t = Text_CreateStruct(0, 0);
 	if (!t)
 		return;
@@ -135,7 +198,7 @@ void css_delay_load(Ui *u, void *think)
 	*(float *)((u8 *)t + 0x28) = u->scale;
 	u->text = t;
 
-	y = rd8(0x804D6640) == 2 ? u->y_direct : u->y_other;
+	y = rows_y(u);
 	i = Text_InitializeSubtext(t, u->x, y, u->label);
 	Text_UpdateSubtextSize(t, i, u->label_size, u->label_size);
 	Text_ChangeTextColor(t, i, &u->gray);
@@ -152,40 +215,59 @@ void css_delay_load(Ui *u, void *think)
 	}
 	show_delay(u, step_delay(u, 0));
 
+	y = rows_y(u) + u->rumble_gap;
+	i = Text_InitializeSubtext(t, u->x, y, u->rumble_label);
+	Text_UpdateSubtextSize(t, i, u->label_size, u->label_size);
+	Text_ChangeTextColor(t, i, &u->gray);
+	y += u->line;
+	u->rumble_sub = (u8)Text_InitializeSubtext(t, u->x, y, u->on);
+	Text_UpdateSubtextSize(t, u->rumble_sub, u->value_size, u->value_size);
+	Text_ChangeTextColor(t, u->rumble_sub, &u->white);
+	show_rumble(u, set_rumble(u, 0xFF));
+
 	gobj = GObj_Create(4, 5, 0x80);
 	if (gobj)
 		GObj_AddProc(gobj, think, 4);
 }
 
-/* Which button (-1, +1) the hand points at, or 0. The cursor's position
- * is left of the fingertip the hand is drawn pointing with (the token's
- * spot); small buttons need the fingertip. */
-static int hovered(Ui *u, u32 cursor)
+/* Whether the fingertip is within a button centred at text (bx, by). The
+ * cursor's position is left of the fingertip the hand is drawn pointing
+ * with (the token's spot); small buttons need the fingertip. */
+static int on_button(Ui *u, u32 cursor, float bx, float by)
 {
 	float cx = rdf(cursor + 0x0C) + u->tip_x, cy = rdf(cursor + 0x10) + u->tip_y;
-	float y = (rd8(0x804D6640) == 2 ? u->y_direct : u->y_other) + u->line + u->centre_y;
-	float dy = (cy - y * u->to_world_y);
+	float dx = cx - bx * u->to_world_x, dy = cy - by * u->to_world_y;
 	float hw = u->half_w * u->to_world_x, hh = u->half_h * u->to_world_x;
-	int i;
-	if (dy < -hh || dy > hh)
-		return 0;
-	for (i = 0; i < 2; i++) {
-		float bx = u->x + u->centre_x, dx;
-		if (i) {
-			bx += u->gap;	/* not gap + gap: that is 2.0f * gap, a constant */
-			bx += u->gap;
-		}
-		dx = cx - bx * u->to_world_x;
-		if (dx >= -hw && dx <= hw)
-			return i ? 1 : -1;
-	}
+	return dx >= -hw && dx <= hw && dy >= -hh && dy <= hh;
+}
+
+/* Which delay button (-1, +1) the hand points at, or 0. */
+static int hovered(Ui *u, u32 cursor)
+{
+	float y = rows_y(u) + u->line + u->centre_y;
+	float plus = u->x + u->centre_x;
+	plus += u->gap;	/* not gap + gap: that is 2.0f * gap, a constant */
+	plus += u->gap;
+	if (on_button(u, cursor, u->x + u->centre_x, y))
+		return -1;
+	if (on_button(u, cursor, plus, y))
+		return 1;
 	return 0;
+}
+
+/* The hand points at the rumble switch. */
+static int on_switch(Ui *u, u32 cursor)
+{
+	float y = rows_y(u) + u->rumble_gap;
+	y += u->line;
+	y += u->centre_y;
+	return on_button(u, cursor, u->x + u->switch_x, y);
 }
 
 void css_delay_think(void *gobj, Ui *u)
 {
 	u32 port, cursor;
-	int hover = 0, locked, look;
+	int hover = 0, rumble_hover = 0, locked, look, a;
 	(void)gobj;
 	if (!u->text)
 		return;
@@ -193,16 +275,34 @@ void css_delay_think(void *gobj, Ui *u)
 	if (port > 3)
 		return;
 	cursor = rd32(0x804A0BC0 + port * 4);
-	if (valid_ptr(cursor))
+	if (valid_ptr(cursor)) {
 		hover = hovered(u, cursor);
+		rumble_hover = on_switch(u, cursor);
+	}
 	locked = !idle();
+	a = (rd32(0x804C20BC + port * 0x44 + 0x08) & A_BUTTON) != 0;
+
 	look = 1 + (locked ? 3 : hover + 1);
 	if (look != u->look) {
 		u->look = (u8)look;
 		Text_ChangeTextColor(u->text, u->sub[0], locked ? &u->gray : hover < 0 ? &u->yellow : &u->white);
 		Text_ChangeTextColor(u->text, u->sub[2], locked ? &u->gray : hover > 0 ? &u->yellow : &u->white);
 	}
-	if (locked || !hover || !(rd32(0x804C20BC + port * 0x44 + 0x08) & A_BUTTON))
+	if (rumble_hover + 1 != u->rumble_look) {
+		u->rumble_look = (u8)(rumble_hover + 1);
+		Text_ChangeTextColor(u->text, u->rumble_sub, rumble_hover ? &u->yellow : &u->white);
+	}
+
+	/* rumble: any time but while typing a connect code */
+	if (rumble_hover && a && rd8(0x804D6643) == 0) {
+		int on = set_rumble(u, !u->rumble);
+		if (on != u->rumble) {
+			show_rumble(u, on);
+			SFX_Menu_CommonSound(2);
+		}
+		return;
+	}
+	if (locked || !hover || !a)
 		return;
 	{
 		int d = step_delay(u, hover);

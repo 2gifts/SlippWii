@@ -48,6 +48,10 @@ const SoConfig *so_client_config(void);
  * and saves it on the SD card (/slippwii/delay.txt, which overrides
  * config.ini's delay at start-up). Returns the delay now. */
 int so_client_step_delay(int step);
+/* Turns controller rumble in online play on (1) or off (0), or just reads
+ * it (any other value), saving a change on the SD card
+ * (/slippwii/rumble.txt, which overrides config.ini). Returns the setting. */
+int so_client_set_rumble(int on);
 const SoUser *so_client_user(void);
 
 /* Starts matchmaking; any previous search or match ends first. */

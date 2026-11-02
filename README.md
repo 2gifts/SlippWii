@@ -20,6 +20,7 @@ GameCube controller, on a CRT if you like), against players on Slippi Dolphin.
 | **Teams** | Untested. |
 | **Ranked** | **Not available.** Ranked is Slippi's protected competitive mode, so SlippWii leaves it out: it isn't in the Online Play menu. |
 | Input delay | Set on the Wii: the **Delay Frames** − / + buttons on the online character select screen. |
+| Rumble | On or off for online play: the **Rumble** switch on the online character select screen (remembered). |
 | Quick chat, connect code history | Work as on Slippi Dolphin. |
 
 How it feels: your opponent on PC plays with rollback, exactly as against another PC player.
@@ -81,7 +82,12 @@ post your SD card's files online.
 2. Open the Homebrew Channel and start **SlippWii**.
 3. Pick Melee. In Melee, go to **Online Play** and pick **Direct** or **Unranked**, as on Slippi Dolphin.
 4. On the character select screen, point the hand at **−** or **+** under *Delay Frames* and press
-   **A** to change your input delay (1-9; 2 is a good start). It's saved for next time.
+   **A** to change your input delay (1-9; 2 is a good start). Point at **On**/**Off** under *Rumble*
+   and press **A** to turn your controller's rumble on or off for online play. Both are saved for
+   next time.
+
+   (Melee's own *Options > Rumble* can't do this online: online, your character can be in another
+   port than your controller, and Slippi sends its rumble to your controller.)
 
 SlippWii has its own app folder, settings file and data folder, so **Slippi Nintendont stays
 installed and works as before**. Use it for offline play, replays to USB and console mirroring as

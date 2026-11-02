@@ -25,6 +25,7 @@ void so_config_defaults(SoConfig *config)
 	config->log_port = 51450;
 	config->selftest_frames = 600;
 	config->chat = 1;
+	config->rumble = 1;
 }
 
 static int parse_ranged(const char *value, long min, long max, long *out)
@@ -88,6 +89,7 @@ static int apply(SoConfig *c, const char *key, const char *value)
 	RANGED("online_main_priority", online_main_priority, 0, 0x7F)
 	RANGED("online_loop_us", online_loop_us, 20, 5000)
 	RANGED("chat", chat, 0, 1)
+	RANGED("rumble", rumble, 0, 1)
 	RANGED("test_drop_pct", test_drop_pct, 0, 90)
 #undef RANGED
 	return -2;

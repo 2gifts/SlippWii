@@ -21,6 +21,8 @@
 
 static void load_delay(void);
 static void save_delay(void);
+static void load_rumble(void);
+static void save_rumble(void);
 
 extern char __slippi_online_stack_addr, __slippi_online_stack_size;
 
@@ -322,6 +324,7 @@ static u32 NetworkThread(void *unused)
 		forward_logs();
 		so_exi_save_history();	/* after a search added a code (an SD write; not in a game) */
 		save_delay();
+		save_rumble();
 	}
 	return 0;
 }
@@ -351,6 +354,7 @@ int so_client_init(void)
 	SO_PHASE("init config");
 	res = so_config_load(&c.config, &c.user);
 	load_delay();
+	load_rumble();
 	so_step_pause_us = (u32)c.config.diag_step_pause_ms * 1000;
 	so_diag_start(&c.config);
 	if (so_config_is_real_mm(&c.config))
@@ -429,6 +433,41 @@ static void save_delay(void)
 	text[2] = 0;
 	if (so_write_file(SO_DELAY_PATH, text, 2) < 0)
 		so_log("client: could not save the delay");
+}
+
+#define SO_RUMBLE_PATH "/slippwii/rumble.txt"
+static volatile int rumble_dirty;
+
+int so_client_set_rumble(int on)
+{
+	if ((on == 0 || on == 1) && on != c.config.rumble) {
+		c.config.rumble = (u8)on;
+		rumble_dirty = 1;
+		so_log("client: rumble %s (set on the Wii)", on ? "on" : "off");
+	}
+	return c.config.rumble;
+}
+
+/* rumble.txt, written from the online CSS's rumble switch, wins over config.ini. */
+static void load_rumble(void)
+{
+	char text[8];
+	int n = so_read_file(SO_RUMBLE_PATH, text, sizeof(text) - 1);
+	if (n > 0 && (text[0] == '0' || text[0] == '1'))
+		c.config.rumble = (u8)(text[0] - '0');
+}
+
+static void save_rumble(void)
+{
+	char text[3];
+	if (!rumble_dirty)
+		return;
+	rumble_dirty = 0;
+	text[0] = (char)('0' + c.config.rumble);
+	text[1] = '\n';
+	text[2] = 0;
+	if (so_write_file(SO_RUMBLE_PATH, text, 2) < 0)
+		so_log("client: could not save the rumble setting");
 }
 
 const SoUser *so_client_user(void)

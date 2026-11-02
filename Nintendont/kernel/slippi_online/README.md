@@ -54,7 +54,7 @@ No packet is sent until the game asks for a match, or until `boot_quiet_s` (60 s
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `delay` | 2 | Online input delay, 1-9 frames |
+| `delay` | 2 | Online input delay, 1-9 frames (the CSS buttons save `delay.txt`, which wins) |
 | `mm_host`, `mm_port` | `mm.slippi.gg`, 43113 | Matchmaking server (tests use a PC on the LAN) |
 | `app_version` | `3.6.4` | Netplay version sent to the server |
 | `local_port` | random 41000-50999 | Fixed UDP port, for a router port-forward |
@@ -67,6 +67,7 @@ No packet is sent until the game asks for a match, or until `boot_quiet_s` (60 s
 | `ack_delay_us` | 0 | Hold a pad ack up to this long to share a datagram with our next pad |
 | `selftest`, `selftest_code`, `selftest_frames`, `selftest_allow_real_mm` | 0, -, 600, 0 | Self-test (below) |
 | `chat` | 1 | 0: quick chat off (received messages answer "chat disabled") |
+| `rumble` | 1 | 0: controller rumble off in online play (the CSS switch saves `rumble.txt`, which wins) |
 | `test_drop_pct` | 0 | Tests: drop this share of our pad packets |
 
 ## Testing
