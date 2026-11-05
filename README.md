@@ -11,6 +11,9 @@ GameCube controller, on a CRT if you like), against players on Slippi Dolphin.
 > It is **free and open source** (GPLv2), built on [Slippi Nintendont](https://github.com/project-slippi/Nintendont),
 > and young: please report anything that goes wrong.
 
+**Join the [SlippWii Discord](https://discord.gg/ytSjxmknHx)** to get help, find opponents to test
+with and help improve the project.
+
 ## What works
 
 | | |
@@ -120,6 +123,8 @@ SlippWii checks everything before Melee starts and explains any problem on the T
   on again and start SlippWii from the Homebrew Channel.
 - **Stutters during games:** use the wired adapter (not Wi-Fi), raise *Delay Frames* by one or two,
   and play opponents in your region.
+
+Still stuck? Ask in #help on the [SlippWii Discord](https://discord.gg/ytSjxmknHx).
 
 ## Reporting problems
 
