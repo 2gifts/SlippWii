@@ -8,6 +8,7 @@
 
 #include "Config.h"
 #include "usbstorage.h"
+#include "slippi_online/so_platform.h"
 
 // use common physical sector size so as to write efficiently
 // and not excessively wear out the underlying flash storage
@@ -16,6 +17,11 @@
 #define THREAD_CYCLE_TIME_MS 100
 #define THREAD_ERROR_TIME_MS 2000
 #define LED_FLASH_TIME_MS 1000
+#define SYNC_TIME_MS 10000	// so a replay survives if the console is turned off in a game
+
+// Below the kernel's main thread (0x50), which answers the game: a replay can wait.
+// Drive writes block in an IOS call, so they take no time from the other threads.
+#define THREAD_PRIORITY 0x48
 
 #define FOOTER_BUFFER_LENGTH 200
 
@@ -44,6 +50,7 @@ bool driveTimerSet;
 bool replaysLED;
 
 extern FATFS *devices[2];
+extern char usb_drive_note[];	// usbstorage.c
 
 void SlippiFileWriterInit(bool led)
 {
@@ -53,7 +60,7 @@ void SlippiFileWriterInit(bool led)
 		SlippiHandlerThread,
 		((u32 *)&__slippi_stack_addr),
 		((u32)(&__slippi_stack_size)),
-		0x78);
+		THREAD_PRIORITY);
 	thread_continue(Slippi_Thread);
 }
 
@@ -113,6 +120,29 @@ char *generateFileName()
 		tmp->tm_mday, tmp->tm_hour, tmp->tm_min, tmp->tm_sec);
 
 	return pathStr;
+}
+
+// A replay file on the drive the game isn't on, as on Slippi Nintendont, making its
+// folder if it has none: a drive there from the start, or the SD card, never gets it
+// otherwise, and then nothing is ever saved.
+//
+// FatFS is reentrant for different drives, so the file's reads and writes need no
+// lock and never hold up the game's disc reads. Opening one does: a path goes through
+// a static buffer (ff_utf8.c) that other threads' opens on the game's drive use too.
+static FRESULT openReplay(FIL *file, const char *path)
+{
+	FRESULT res;
+
+	so_fs_lock();
+	res = f_open_secondary_drive(file, path, FA_CREATE_ALWAYS | FA_WRITE | FA_READ);
+	if (res == FR_NO_PATH)
+	{
+		res = f_mkdir_secondary_drive("/Slippi");
+		if (res == FR_OK || res == FR_EXIST)
+			res = f_open_secondary_drive(file, path, FA_CREATE_ALWAYS | FA_WRITE | FA_READ);
+	}
+	so_fs_unlock();
+	return res;
 }
 
 FRESULT writeHeader(FIL *file)
@@ -219,7 +249,7 @@ static u32 SlippiHandlerThread(void *arg)
 	static u64 memReadPos = 0;
 
 	u32 writtenByteCount = 0;
-	s32 lastFrame;
+	s32 lastFrame = 0;
 	driveTimer = read32(HW_TIMER);
 	driveTimerSet = false;
 
@@ -228,6 +258,11 @@ static u32 SlippiHandlerThread(void *arg)
 	bool currentFileValid = false;
 	const bool use_usb = ConfigGetUseUSB() != 1;
 	bool mounted = use_usb ? USBStorage_IsInserted_SlippiThread() : true;
+	u32 syncTimer = read32(HW_TIMER);
+
+
+	so_log("replay: game on %s, replays on %s, %s", use_usb ? "SD" : "USB", use_usb ? "USB" : "SD",
+		mounted ? "ready" : "waiting for a USB drive");
 
 	while (1)
 	{
@@ -241,7 +276,9 @@ static u32 SlippiHandlerThread(void *arg)
 				if (mounted)
 				{
 					// unmount (cannot fail so no need to check return value)
+					so_fs_lock();
 					f_mount_char(NULL, "usb:", 1);
+					so_fs_unlock();
 				}
 
 				failedToMount = false;
@@ -252,21 +289,12 @@ static u32 SlippiHandlerThread(void *arg)
 			}
 			else if (!mounted && !failedToMount)
 			{
+				so_fs_lock();
 				FRESULT mountResult = f_mount_char(devices[1], "usb:", 1);
+				so_fs_unlock();
 				if (mountResult != FR_OK)
 				{
-					dbgprintf("Slippi: failed to mount usb, errno: %d\r\n", mountResult);
-
-					// only attempt to mount once, user can retry by re-inserting the device.
-					failedToMount = true;
-					continue;
-				}
-
-				// Create folder if it doesn't exist yet
-				FRESULT mkdirResult = f_mkdir_secondary_drive("/Slippi");
-				if (mkdirResult != FR_OK && mkdirResult != FR_EXIST)
-				{
-					dbgprintf("Slippi: failed to mkdir: /Slippi, errno: %d\r\n", mkdirResult);
+					so_log("replay: failed to mount usb, errno: %d", mountResult);
 
 					// only attempt to mount once, user can retry by re-inserting the device.
 					failedToMount = true;
@@ -296,13 +324,14 @@ static u32 SlippiHandlerThread(void *arg)
 					FRESULT closeResult = f_close(&currentFile);
 					if (closeResult != FR_OK)
 					{
-						dbgprintf("Slippi: failed to close incompletable file, errno: %d\r\n", closeResult);
+						so_log("replay: failed to close incompletable file, errno: %d", closeResult);
 					}
 					else
 					{
 						currentFileOpen = false;
 					}
 				}
+				so_log("replay: read error %d, stopped this game's file", err);
 				break;
 			}
 
@@ -320,7 +349,7 @@ static u32 SlippiHandlerThread(void *arg)
 					FRESULT completeResult = completeFile(&currentFile, lastFrame, writtenByteCount);
 					if (completeResult != FR_OK)
 					{
-						dbgprintf("Slippi: failed to complete dangling file, errno: %d\r\n", completeResult);
+						so_log("replay: failed to complete dangling file, errno: %d", completeResult);
 						break;
 					}
 					currentFileValid = false;
@@ -330,34 +359,34 @@ static u32 SlippiHandlerThread(void *arg)
 					FRESULT closeResult = f_close(&currentFile);
 					if (closeResult != FR_OK)
 					{
-						dbgprintf("Slippi: failed to close dangling file, errno: %d\r\n", closeResult);
+						so_log("replay: failed to close dangling file, errno: %d", closeResult);
 						break;
 					}
 					currentFileOpen = false;
 				}
 
-				dbgprintf("Creating File...\r\n");
 				gameStartTime = GetCurrentTime();
 				char *fileName = generateFileName();
-				// Maybe can remove FA_READ since network thread doesn't share &currentFile
-				FRESULT fileOpenResult = f_open_secondary_drive(&currentFile, fileName, FA_CREATE_ALWAYS | FA_WRITE | FA_READ);
+				FRESULT fileOpenResult = openReplay(&currentFile, fileName);
 				if (fileOpenResult != FR_OK)
 				{
-					dbgprintf("Slippi: failed to open file: %s, errno: %d\r\n", fileName, fileOpenResult);
+					so_log("replay: failed to open %s, errno: %d", fileName, fileOpenResult);
 					break;
 				}
 
 				currentFileOpen = true;
 				writtenByteCount = 0;
-				
+				syncTimer = read32(HW_TIMER);
+
 				FRESULT writeHeaderResult = writeHeader(&currentFile);
 				if (writeHeaderResult != FR_OK)
 				{
-					dbgprintf("Slippi: failed to write header, errno: %d\r\n", writeHeaderResult);
+					so_log("replay: failed to write header, errno: %d", writeHeaderResult);
 					break;
 				}
 
 				currentFileValid = true;
+				so_log("replay: saving %s (%s)", fileName, use_usb ? usb_drive_note : "on the SD card");
 			}
 
 			if (!currentFileValid)
@@ -375,7 +404,7 @@ static u32 SlippiHandlerThread(void *arg)
 			FRESULT seekResult = f_lseek(&currentFile, writtenByteCount + 15);
 			if (seekResult != FR_OK)
 			{
-				dbgprintf("Slippi: failed to seek before writing data, errno: %d\r\n", seekResult);
+				so_log("replay: failed to seek before writing data, errno: %d", seekResult);
 				break;
 			}
 
@@ -383,7 +412,17 @@ static u32 SlippiHandlerThread(void *arg)
 			FRESULT writeResult = f_write(&currentFile, readBuf, reader.lastReadResult.bytesRead, &wrote);
 			if (writeResult != FR_OK)
 			{
-				dbgprintf("Slippi: failed to write data, errno: %d\r\n", writeResult);
+				so_log("replay: failed to write data, errno: %d", writeResult);
+				break;
+			}
+			else if (wrote != reader.lastReadResult.bytesRead)
+			{
+				// The drive is full: give up on this game's file, or this would try again forever.
+				so_log("replay: drive full after %u bytes", (unsigned)writtenByteCount);
+				f_close(&currentFile);
+				currentFileOpen = false;
+				currentFileValid = false;
+				memReadPos = SlippiRestoreReadPos();
 				break;
 			}
 			else
@@ -391,11 +430,10 @@ static u32 SlippiHandlerThread(void *arg)
 				// Only increment mem read position when the write fully succeeds
 				memReadPos += wrote;
 				writtenByteCount += wrote;
+				lastFrame = reader.metadata.lastFrame;
 
 				if (reader.lastReadResult.isGameEnd)
 				{
-					dbgprintf("Completing File...\r\n");
-					lastFrame = reader.metadata.lastFrame;
 					FRESULT completeResult = completeFile(&currentFile, lastFrame, writtenByteCount);
 					if (completeResult != FR_OK)
 					{
@@ -407,7 +445,7 @@ static u32 SlippiHandlerThread(void *arg)
 					FRESULT closeResult = f_close(&currentFile);
 					if (closeResult != FR_OK)
 					{
-						dbgprintf("Slippi: failed to close completed file, errno: %d\r\n", closeResult);
+						so_log("replay: failed to close completed file, errno: %d", closeResult);
 					}
 					else
 					{
@@ -415,11 +453,18 @@ static u32 SlippiHandlerThread(void *arg)
 						if (replaysLED)
 							flashLED();
 					}
+					so_log("replay: saved %u bytes, last frame %d", (unsigned)writtenByteCount, (int)lastFrame);
 
 					break;
 				}
 				else if (replaysLED)
 					flashLED();
+
+				if (TimerDiffMs(syncTimer) >= SYNC_TIME_MS)
+				{
+					syncTimer = read32(HW_TIMER);
+					f_sync(&currentFile);
+				}
 			}
 		}
 	}

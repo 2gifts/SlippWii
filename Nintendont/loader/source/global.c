@@ -336,6 +336,8 @@ bool LoadNinCFG(void)
 				ConfigLoaded = false;
 			break;
 		case 0xD:
+		case 0xE:
+		case 0xF:
 			if (BytesRead != sizeof(NIN_CFG)) // 324
 				ConfigLoaded = false;
 			break;
@@ -353,6 +355,56 @@ bool LoadNinCFG(void)
 		ConfigLoaded = false;
 	
 	return ConfigLoaded;
+}
+
+/**
+ * Save the configuration file: to the boot device, which is loaded on the next
+ * start, and to the game's device, used by the Nintendont kernel.
+ */
+void SaveNinCFG(void)
+{
+	// TODO: If the boot device is the same as the game device,
+	// don't write it twice.
+	gprintf("Attempting to save settings...\r\n");
+
+	// Write config to the boot device, which is loaded on next launch.
+	FIL cfg;
+	FRESULT res;
+	if (f_open_char(&cfg, "/slippwii_nincfg.bin", FA_WRITE|FA_OPEN_ALWAYS) == FR_OK)
+	{
+		gprintf("Boot device settings file open successful.\r\n");
+		// Reserve space in the file.
+		if (f_size(&cfg) < sizeof(NIN_CFG)) {
+			f_expand(&cfg, sizeof(NIN_CFG), 1);
+		}
+
+		// Write slippwii_nincfg.bin
+		UINT wrote;
+		res = f_write(&cfg, ncfg, sizeof(NIN_CFG), &wrote);
+		gprintf("Boot device write result: %d\r\n", res);
+		f_close(&cfg);
+	}
+
+	// Write config to the game device, used by the Nintendont kernel.
+	char ConfigPath[35];
+	snprintf(ConfigPath, sizeof(ConfigPath), "%s:/slippwii_nincfg.bin", GetRootDevice());
+	if (f_open_char(&cfg, ConfigPath, FA_WRITE|FA_OPEN_ALWAYS) == FR_OK)
+	{
+		gprintf("Game device settings file open successful.\r\n");
+
+		// Reserve space in the file.
+		if (f_size(&cfg) < sizeof(NIN_CFG)) {
+			f_expand(&cfg, sizeof(NIN_CFG), 1);
+		}
+
+		// Write slippwii_nincfg.bin
+		UINT wrote;
+		res = f_write(&cfg, ncfg, sizeof(NIN_CFG), &wrote);
+		gprintf("Game device write result: %d\r\n", res);
+		f_close(&cfg);
+	}
+
+	FlushDevices();
 }
 
 /* LoadSlippiDat()
@@ -481,6 +533,15 @@ void UpdateNinCFG()
 				break;
 		}
 		ncfg->Version = 0xE;
+	}
+	if (ncfg->Version == 0xE)
+	{
+		// The polling drift fix became the default. Off in an older file was the old
+		// default: no version before this one kept a choice of settings from start
+		// to start (LoadNinCFG refused version 0xE).
+		if (ncfg->MeleeCodeOptions[MELEE_CODES_LAG_REDUCTION_OPTION_ID] <= 1)
+			ncfg->MeleeCodeOptions[MELEE_CODES_LAG_REDUCTION_OPTION_ID] = 2;
+		ncfg->Version = 0xF;
 	}
 }
 

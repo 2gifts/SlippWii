@@ -122,13 +122,19 @@ int so_event_wait(SoEvent *e, u32 timeout_us)
 			so_timer_failures++;
 	}
 	mqueue_recv(e->queue, &msg, 0);
-	e->pending = 0;	/* a later signal queues a new message */
 	signalled = msg == EVENT_SIGNAL;
 	if (timer >= 0)
 		TimerDestroy(timer);
 	/* Drop extra signals and a timeout that raced with the signal. */
 	while (mqueue_recv(e->queue, &msg, 1) >= 0)
 		signalled |= msg == EVENT_SIGNAL;
+	/* Last: a later signal queues a new message. Cleared any sooner, a signal in between
+	 * has its message dropped just above and leaves `pending` set with the queue empty, and
+	 * no signal gets through again. For the sender thread, which waits with no timer, that
+	 * was for good: the Wii sent nothing more, a game ended in a disconnect 7 s later (about
+	 * 1 game in 18 at 25-30 ms). A signal that finds it still set here needs no message: its
+	 * work was queued before it, and the caller looks for work after this returns. */
+	e->pending = 0;
 	return signalled;
 }
 

@@ -26,6 +26,7 @@ void so_config_defaults(SoConfig *config)
 	config->selftest_frames = 600;
 	config->chat = 1;
 	config->rumble = 1;
+	config->ping_display = 1;
 }
 
 static int parse_ranged(const char *value, long min, long max, long *out)
@@ -90,6 +91,7 @@ static int apply(SoConfig *c, const char *key, const char *value)
 	RANGED("online_loop_us", online_loop_us, 20, 5000)
 	RANGED("chat", chat, 0, 1)
 	RANGED("rumble", rumble, 0, 1)
+	RANGED("ping_display", ping_display, 0, 1)
 	RANGED("test_drop_pct", test_drop_pct, 0, 90)
 #undef RANGED
 	return -2;
@@ -189,6 +191,15 @@ int so_config_load(SoConfig *config, SoUser *user)
 
 	memset(user, 0, sizeof(*user));
 	n = so_read_file(config->user_path, text, sizeof(text) - 1);
+	if (n < 0 && test_overrides[0] && !so_config_is_real_mm(config)) {
+		/* A test build against a test server: the dummy account
+		 * (online_selftest.py's WII_USER), nothing needed on the SD card */
+		strlcpy(text, "{\"uid\": \"local-test-uid-wii\", \"playKey\": \"dummy-play-key-wii\", "
+			"\"connectCode\": \"WIIT#001\", \"displayName\": \"Test Wii\", \"latestVersion\": \"3.6.4\"}",
+			sizeof(text));
+		n = (int)strlen(text);
+		so_log("account: %s not found; the test account", config->user_path);
+	}
 	if (n < 0) {
 		so_log("account: %s not found", config->user_path);
 		return -1;

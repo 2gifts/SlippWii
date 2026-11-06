@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.3.0
+
+- Ping display: your ping to your opponent in the top left corner during a game, in the same cyan as
+  Slippi Dolphin, updated once a second and sized to read on a small CRT. Turn it on or off with the
+  new **Show Ping** switch beside *Rumble* on the online character select screen (remembered).
+- Change your delay while connected: the **Delay Frames** buttons no longer lock while searching or
+  connected to an opponent, so there's no need to disconnect. A change applies from the next game.
+- Fixed the Wii sometimes stopping sending its inputs in the middle of a game, which ended the game in a
+  disconnect 7 seconds later (about 1 game in 18 at 25-30 ms ping).
+- Fixed a crash at the end of a game that ran out the timer with a player over the ledge grab limit
+  (45). Slippi's "Exceeded Ledge Grab Limit" message reads a bad address that Dolphin tolerates and a
+  console doesn't. The game now ends with that message, as on Dolphin.
+- Fixed Nintendont's settings not being kept: the loader threw away its own settings file on every
+  start. They're now saved when you leave the settings screen, exit or start a game.
+- Replays: **Slippi Replays** works in online games, as on Slippi Nintendont: each game is saved as a
+  `.slp` in a `Slippi` folder on your other drive (game on SD: a USB drive; game on USB: the SD card).
+  The folder is now made when it's missing; before, nothing could be saved without it. And a USB drive
+  that was in the Wii from the start no longer stops replays from saving.
+- The polling drift fix (Lag Reduction: PDF) is on by default in the settings, for games without online
+  play. Slippi's online code always has it.
+- Connect code autocomplete works as on Dolphin: scrolling past the last code no longer clears it.
+
 ## 1.2.0
 
 - Rumble switch: turn your controller's rumble on or off for online play with the new **Rumble**

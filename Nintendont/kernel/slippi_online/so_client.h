@@ -52,6 +52,10 @@ int so_client_step_delay(int step);
  * it (any other value), saving a change on the SD card
  * (/slippwii/rumble.txt, which overrides config.ini). Returns the setting. */
 int so_client_set_rumble(int on);
+/* Turns the in-game ping display on (1) or off (0), or just reads it (any other
+ * value), and saves a change on the SD card (/slippwii/ping.txt, which overrides
+ * config.ini). Returns the setting. */
+int so_client_set_ping_display(int on);
 const SoUser *so_client_user(void);
 
 /* Starts matchmaking; any previous search or match ends first. */

@@ -27,7 +27,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 NIN = ROOT / 'Nintendont'
 OUT = ROOT / 'build/sweep'
-TOOLS = ROOT.parent / 'slippi-3ds/native-3ds/build/slippi-tools'
+TOOLS = Path(os.environ.get('SLIPPWII_TEST_TOOLS', ROOT.parent / 'slippi-3ds/native-3ds/build/slippi-tools'))
 ISO = Path.home() / 'Downloads/SSB/SSBMv102.iso'
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / 'tools'))
@@ -76,7 +76,10 @@ def run(*cmd, **kw):
 def build(run_dir, plan, args, ip):
     """Autoplay codes for both sides, then the Wii's test build."""
     for side, col, seed in (('wii', 0, args.seed * 2 + 1), ('dolphin', 1, args.seed * 2 + 2)):
-        spec = {'rounds': [[r[col], r[2]] for r in plan], 'lras_s': args.lras_s, 'seed': seed}
+        spec = {'rounds': [[r[col], r[2]] for r in plan], 'lras_s': args.lras_s, 'seed': seed,
+                'timer_s': args.timer_s, 'timer_rounds': args.timer_rounds, 'idle_rounds': args.idle_rounds,
+                'over_limit': (args.over_limit_p1, args.over_limit_p2),
+                'no_text_fix_rounds': args.no_text_fix_rounds}
         (run_dir / f'plan-{side}.json').write_text(json.dumps(spec))
         run(sys.executable, HERE / 'build_autoplay.py', '--plan', run_dir / f'plan-{side}.json',
             '--out', run_dir / f'autoplay-{side}')
@@ -100,6 +103,16 @@ def build(run_dir, plan, args, ip):
         if original_dol is not None:
             dol.write_bytes(original_dol)  # the normal build stays the default one
     print(f'test build: {run_dir / "loader-sweep.dol"} (repo files restored)')
+
+
+def replays_cfg(run_dir):
+    """The Wii's loader settings with Slippi Replays on: it saves each game on the other drive."""
+    import wii_boot
+    cfg = bytearray(wii_boot.BASE_CFG.read_bytes())
+    cfg[8:12] = (int.from_bytes(cfg[8:12], 'big') | 1 << 14).to_bytes(4, 'big')
+    path = run_dir / 'nincfg-replays.bin'
+    path.write_bytes(cfg)
+    return path
 
 
 def start(name, cmd, run_dir, **kw):
@@ -215,7 +228,14 @@ def main():
     ap.add_argument('--rounds', type=int, default=25)
     ap.add_argument('--seed', type=int, default=0, help='random inputs: another seed, other games')
     ap.add_argument('--shift', type=int, default=12, help='Dolphin plays ORDER[i + shift]: other matchups')
-    ap.add_argument('--lras-s', type=int, default=40, help='seconds of play before each game is quit')
+    ap.add_argument('--lras-s', type=int, default=40, help='seconds of play before each game is quit (0: never)')
+    ap.add_argument('--timer-s', type=int, default=0, help='games reach the timer in this many seconds')
+    ap.add_argument('--timer-rounds', type=int, default=0, help='bit mask: the rounds --timer-s is for (1: the first)')
+    ap.add_argument('--idle-rounds', type=int, default=0, help='bit mask: rounds with no inputs (nobody is KO\'d)')
+    ap.add_argument('--over-limit-p1', type=int, default=0, help='bit mask: rounds where port 1 exceeds the ledge grab limit')
+    ap.add_argument('--over-limit-p2', type=int, default=0, help='bit mask: the same for port 2')
+    ap.add_argument('--no-text-fix-rounds', type=int, default=0, help='bit mask: rounds without tools/text_args/ (a console crashes)')
+    ap.add_argument('--replays', action='store_true', help='the Wii saves its replays too, on the drive the game is not on')
     ap.add_argument('--wii-ip', default=os.environ.get('SLIPPWII_WII_IP'),
                     required=not os.environ.get('SLIPPWII_WII_IP'),
                     help="the Wii's address (default: $SLIPPWII_WII_IP)")
@@ -243,6 +263,8 @@ def main():
     procs.append(start('mirror', [sys.executable, '-u', ROOT / 'tools/wii_mirror.py', '--wii-ip', args.wii_ip,
                                   '--out', run_dir / 'wii-replays', '--dolphin', replays], run_dir))
     boot = [] if args.no_boot else ['--boot', '--dol', run_dir / 'loader-sweep.dol']
+    if args.replays and not args.no_boot:
+        boot += ['--cfg', replays_cfg(run_dir)]
     procs.append(start('watch', [sys.executable, '-u', ROOT / 'tools/online_selftest.py', 'watch', *boot,
                                  '--wii-ip', args.wii_ip, '--timeout', args.timeout_min * 60], run_dir))
     procs.append(start('dolphin', [dolphin / 'Slippi Dolphin.exe', '-e', ISO], run_dir))

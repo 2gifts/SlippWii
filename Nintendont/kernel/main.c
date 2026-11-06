@@ -42,6 +42,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "SlippiNetwork.h"
 #include "SlippiNetworkBroadcast.h"
 #include "slippi_online/so_client.h"
+#include "slippi_online/so_platform.h"
 #include "slippi_online/so_diag.h"
 #include "net.h"
 
@@ -419,7 +420,10 @@ int _main( int argc, char *argv[] )
 		so_client_init();
 
 	if (SlippiFileWrite == 1)
+	{
+		so_platform_init();	// the FatFS lock and the log, also when online play is off
 		SlippiFileWriterInit(slippi_replays_led);
+	}
 
 /* KERNEL_RUNNING BOOT STAGE
  * Signal the loader to start booting a game in PPC-world.

@@ -45,6 +45,15 @@ There is one UDP socket per session. Matchmaking and netplay use it in turn, on 
 
 No packet is sent until the game asks for a match, or until `boot_quiet_s` (60 s) after start-up. Network traffic during Melee's boot crashed it (M1).
 
+## Replays
+
+With the loader's **Slippi Replays** on, `SlippiFileWriter.c` saves the replay stream to `/Slippi/` on
+the drive the game isn't on, as on Slippi Nintendont: game on SD, a USB drive (hot-pluggable); game on
+USB, the SD card (none: the kernel stops at start-up and the loader says so). It runs below the main
+thread's priority, and its writes block in an IOS call, so the game isn't waiting for them. FatFS is
+reentrant across drives, so only opening a file takes `so_fs_lock`, for the path buffer `ff_utf8.c`
+shares. A file is synced every 10 s, so a game cut short still leaves a readable replay.
+
 ## Files on the SD card (or USB drive)
 
 | Path | What |
@@ -68,6 +77,7 @@ No packet is sent until the game asks for a match, or until `boot_quiet_s` (60 s
 | `selftest`, `selftest_code`, `selftest_frames`, `selftest_allow_real_mm` | 0, -, 600, 0 | Self-test (below) |
 | `chat` | 1 | 0: quick chat off (received messages answer "chat disabled") |
 | `rumble` | 1 | 0: controller rumble off in online play (the CSS switch saves `rumble.txt`, which wins) |
+| `ping_display` | 1 | 0: no ping in a game's top left corner (the CSS switch saves `ping.txt`, which wins) |
 | `test_drop_pct` | 0 | Tests: drop this share of our pad packets |
 
 ## Testing

@@ -11,6 +11,11 @@ Nintendont installs in Melee for Slippi Online (kernel/Patch.c).
      cursor (tools/css_delay/, EXI command 0xDC; Slippi Dolphin has it in its
      settings window, a console has none).
   2c. No Ranked: the Online Play menu does not show it (tools/ppc/hide_ranked.s).
+  2d. The ping in an online game's top left corner, as Slippi Dolphin shows it
+     (tools/ping_display/, EXI command 0xEF; the online CSS has its switch).
+  2e. A text format's "%s" never reads a wild address, as Slippi's ledge grab limit
+     message does at the end of a game on the timer: Dolphin gets away with it, a
+     console crashes (tools/text_args/).
   3. With --heartbeat (diagnostics): every 32 frames, where the game is and
      a few of its globals (tools/ppc/heartbeat.s, EXI command 0xDE); and the
      interrupt flight recorder (tools/ppc/flight.s), a ring in RAM the kernel
@@ -39,6 +44,8 @@ GCT_HEADER = bytes.fromhex('00D0C0DE00D0C0DE')
 GCT_FOOTER = bytes.fromhex('F000000000000000')
 CRASH_HOOK = 0x80345870  # __OSUnhandledException entry (NTSC 1.02)
 HIDE_RANKED_HOOK = 0x80229938  # MainMenu_CheckIfOptionIsUnlocked entry (mflr r0)
+PING_DISPLAY_HOOK = 0x802F6698  # right after Slippi's in-game set-up (addi r1, r1, 0x18), which makes its HUD
+TEXT_ARGS_HOOK = 0x803A6B98  # Text_InitializeSubtext entry (mflr r0)
 CSS_DELAY_HOOK = 0x802669DC  # mnCharSel_Scene_OnEnter, after the CSS is built (lwz r0, 0x24(r1))
 HEARTBEAT_HOOK = 0x8034E964  # __VIRetraceHandler entry
 TOY_PROBE_HOOK = 0x803060BC  # Toy_803060BC entry (trophy table lookup)
@@ -91,6 +98,10 @@ def main():
     css_delay, _ = pic_code.build(ROOT / 'tools/css_delay/glue.s', [ROOT / 'tools/css_delay/css_delay.c'])
     reporter += c2(CSS_DELAY_HOOK, bytes(css_delay))
     reporter += c2(HIDE_RANKED_HOOK, assemble(ROOT / 'tools/ppc/hide_ranked.s'))
+    ping_display, _ = pic_code.build(ROOT / 'tools/ping_display/glue.s', [ROOT / 'tools/ping_display/ping_display.c'])
+    reporter += c2(PING_DISPLAY_HOOK, bytes(ping_display))
+    text_args, _ = pic_code.build(ROOT / 'tools/text_args/glue.s', [ROOT / 'tools/text_args/text_args.c'])
+    reporter += c2(TEXT_ARGS_HOOK, bytes(text_args))
     extra = b''
     if args.heartbeat:
         extra += c2(HEARTBEAT_HOOK, assemble(ROOT / 'tools/ppc/heartbeat.s'))

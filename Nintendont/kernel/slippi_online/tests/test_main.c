@@ -259,6 +259,8 @@ static void test_config(void)
 		"selftest_code=TEST#123\n"
 		"lan_ip=10.0.0.9\n"
 		"log_host=10.0.0.29:51451\n"
+		"ping_display=0\n"
+		"ping_display=7\n"		/* out of range: ignored */
 		"bogus=1\n"
 		"no equals sign\n"
 		"selftest=1";			/* no final newline */
@@ -267,7 +269,9 @@ static void test_config(void)
 	CHECK_STR(c.mm_host, "mm.slippi.gg");
 	CHECK(so_config_is_real_mm(&c));
 	CHECK_INT(c.delay, 2);
+	CHECK_INT(c.ping_display, 1);
 	so_config_parse(&c, ini, sizeof(ini) - 1);
+	CHECK_INT(c.ping_display, 0);
 	CHECK_STR(c.mm_host, "10.0.0.29");
 	CHECK(!so_config_is_real_mm(&c));
 	CHECK_INT(c.mm_port, 43114);

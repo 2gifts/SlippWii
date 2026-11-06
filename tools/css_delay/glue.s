@@ -1,7 +1,7 @@
 # Slippi Online (Wii): the online CSS's settings. Slippi Dolphin has them in
 # its settings windows; a console has none, so this adds lines under Slippi's
-# User and Connect Code: "Delay Frames", "－ N ＋", and "Rumble", "On"/"Off",
-# whose buttons the hand cursor presses with A (css_delay.c).
+# User and Connect Code: "Delay Frames", "－ N ＋", then "Rumble" and "Show Ping",
+# each "On"/"Off", whose buttons the hand cursor presses with A (css_delay.c).
 #
 # One Gecko C2 code at 0x802669DC, in mnCharSel_Scene_OnEnter just after the
 # CSS is built (mnCharSel_802640A0, where Slippi's LoadCSSText has made its
@@ -80,6 +80,13 @@ ui:
 	.balign	4
 	.string	"Off"			# 0x8C
 	.balign	4
+	.byte	1			# 0x90 the ping display: 1 on, 0 off
+	.byte	0			# 0x91 its value's subtext
+	.byte	0			# 0x92 its colour set: 1 + hovered
+	.byte	0
+	.string	"Show Ping"		# 0x94
+	.balign	4
+	.float	80			# 0xA0 its column, right of Rumble's
 
 # GObj process: think(gobj)
 think:

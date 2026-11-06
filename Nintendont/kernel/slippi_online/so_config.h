@@ -79,6 +79,8 @@ typedef struct {
 	u8 chat;	/* quick chat in Direct (Slippi's default: on) */
 	u8 rumble;	/* controller rumble in online play (default on; rumble.txt, set on the
 		 * online CSS, wins over config.ini) */
+	u8 ping_display;	/* the ping in a game's top left corner (default on; ping.txt, set on
+		 * the online CSS, wins over config.ini) */
 	u8 test_drop_pct;	/* tests: drop this share of outgoing pad packets */
 } SoConfig;
 

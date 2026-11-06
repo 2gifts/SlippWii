@@ -105,9 +105,18 @@ static const char *state_name(u8 s)
 	return s < 6 ? names[s] : "?";
 }
 
+/* 0xEF: [setting, opponents, each one's ping in ms (u16, 0xFFFF: none yet)] */
+static void ping_display(u8 request, u8 *out)
+{
+	u8 req[2];
+	req[0] = 0xEF;
+	req[1] = request;
+	command(req, 2, out, 8);
+}
+
 static int online_status(void)
 {
-	u8 osb[42], want[31], step[2], got;
+	u8 osb[42], want[31], step[2], got, ping[8];
 	int delay = so_client_config()->delay;
 	simple(0xB9, osb, sizeof(osb));
 	so_game_string(so_client_user()->display_name, 15, want);
@@ -135,6 +144,14 @@ static int online_status(void)
 	step[1] = 1;
 	command(step, 2, &got, 1);
 	CHECK(got == 1 && so_client_config()->rumble == 1, "0xDB 1: rumble %u", got);
+	/* The CSS's ping display switch (0xEF): read, off, on; no opponent yet */
+	ping_display(0xFF, ping);
+	CHECK(ping[0] == 1, "0xEF read: ping display %u, want on by default", ping[0]);
+	CHECK(ping[1] == 0, "0xEF read: %u opponents before a search", ping[1]);
+	ping_display(0, ping);
+	CHECK(ping[0] == 0 && so_client_config()->ping_display == 0, "0xEF 0: ping display still %u", ping[0]);
+	ping_display(1, ping);
+	CHECK(ping[0] == 1 && so_client_config()->ping_display == 1, "0xEF 1: ping display %u", ping[0]);
 	return osb[0] == 1 ? 0 : -1;
 }
 
@@ -488,6 +505,37 @@ int main(int argc, char **argv)
 	match_state();
 	CHECK(msrb[0] == 4, "after the game: state %s", state_name(msrb[0]));
 	CHECK(so_get_u16(msrb + BLOCK + 0x0E) != 0, "the last stage was not kept");
+	{
+		/* What the game's display reads: one opponent, the last pad's round
+		 * trip (the fake peer is on this PC). */
+		u8 ping[8];
+		u16 ms;
+		ping_display(0xFF, ping);
+		ms = so_get_u16(ping + 2);
+		printf("game: ping display: on %u, %u opponent(s), %u ms\n", ping[0], ping[1], ms);
+		CHECK(ping[0] == 1 && ping[1] == 1, "0xEF in a match: on %u, %u opponents", ping[0], ping[1]);
+		CHECK(ms != 0xFFFF && ms < 500, "0xEF in a match: ping %u ms", ms);
+		CHECK(so_get_u16(ping + 4) == 0xFFFF && so_get_u16(ping + 6) == 0xFFFF, "0xEF: pings past the opponents");
+	}
+	{
+		/* Delay changes while connected: the CSS's buttons step it, and the next
+		 * game's match state carries it (Slippi reads it at each game's start). */
+		const u8 before = msrb[9];
+		const s8 way = before < 9 ? 1 : -1;
+		u8 step[2], got;
+		step[0] = 0xDC;
+		step[1] = (u8)way;
+		command(step, 2, &got, 1);
+		CHECK(got == before + way, "0xDC connected: delay %u from %u", got, before);
+		match_state();
+		CHECK(msrb[0] == 4, "0xDC connected: the connection went (%s)", state_name(msrb[0]));
+		CHECK(msrb[9] == got, "0xB3 connected: delay %u, the buttons set %u", msrb[9], got);
+		step[1] = (u8)-way;
+		command(step, 2, &got, 1);
+		match_state();
+		CHECK(msrb[0] == 4 && msrb[9] == before, "0xDC connected: the delay did not come back (%u)", msrb[9]);
+		printf("game: delay changed while connected: %u -> %u -> %u\n", before, before + way, msrb[9]);
+	}
 	simple(0xBA, NULL, 0);
 	match_state();
 	CHECK(msrb[0] == 0, "0xB3 right after 0xBA: state %s", state_name(msrb[0]));

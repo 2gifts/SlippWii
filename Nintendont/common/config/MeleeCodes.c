@@ -242,7 +242,7 @@ const MeleeCodeLineItem lagReductionLineItem = {
 	MELEE_CODES_LAG_REDUCTION_OPTION_ID, // identifier
 	"Lag Reduction",
 	lagReductionDescription,
-	1,
+	2, // defaultValue: PDF
 	MELEE_CODES_LAG_REDUCTION_OPTION_COUNT,
 	lagReductionOptions,
 };

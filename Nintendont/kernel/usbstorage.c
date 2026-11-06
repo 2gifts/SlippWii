@@ -32,6 +32,7 @@ distribution.
 #include "debug.h"
 #include "usbstorage.h"
 #include "usb.h"
+#include "slippi_online/so_platform.h"
 
 #define ROUNDDOWN32(v)				(((u32)(v)-0x1f)&~0x1f)
 
@@ -162,6 +163,7 @@ extern u32 usb_s_size, usb_s_cnt;
 
 static bool __inited = false;
 static bool __mounted = false;
+char usb_drive_note[40] = "id unchanged";	// for the log
 static important_storage_data __mounted_device;
 
 static u8 *cbw_buffer = NULL;
@@ -547,6 +549,27 @@ bool __has_device_after_change()
 		for (i = 0; i < num_attached_devices; i++)
 		{
 			if (AttachedDevices[i].device_id == __mounted_device.usb_fd) {
+				udelay(50);
+				return true;
+			}
+		}
+
+		// SlippWii: the list can show the drive we're using under another id than the
+		// loader's (seen on a Wii with a LAN adapter). It's the same drive, still set up:
+		// take its new id and carry on. Setting it up again below hangs on such a drive:
+		// the transfer after SET_CONFIGURATION never finishes, and these calls have no
+		// timeout. (A drive that was really unplugged and put back shows up as gone first.)
+		for (i = 0; i < num_attached_devices; i++)
+		{
+			if (AttachedDevices[i].vid == __mounted_device.vid && AttachedDevices[i].pid == __mounted_device.pid) {
+				s32 suspend_resume_buf[8] ALIGNED(32);
+				memset(suspend_resume_buf, 0, sizeof(s32) * 8);
+				suspend_resume_buf[0] = AttachedDevices[i].device_id;
+				suspend_resume_buf[2] = 1;
+				IOS_Ioctl(ven_fd, USBV5_IOCTL_SUSPEND_RESUME, suspend_resume_buf, 32, NULL, 0);
+
+				_sprintf(usb_drive_note, "id %08x, was %08x", (u32)AttachedDevices[i].device_id, (u32)__mounted_device.usb_fd);
+				__mounted_device.usb_fd = AttachedDevices[i].device_id;
 				udelay(50);
 				return true;
 			}

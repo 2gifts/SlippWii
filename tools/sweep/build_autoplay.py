@@ -7,6 +7,11 @@ Online's menus and games, following a plan of rounds.
 plan.json: {"rounds": [[css_icon, sss_icon], ...], "lras_s": 90, "seed": 1}
 (css_icon: index in Melee's CSS icon table; sss_icon: the hovered-stage
 index on the stage select screen, or 255 for whatever is under the cursor).
+For games that reach the timer: "timer_s" seconds in the rounds of the bit mask
+"timer_rounds" (bit 0: the first round), no inputs in those of "idle_rounds", over the
+ledge grab limit in those of "over_limit" (one mask per port), and without
+tools/text_args/ in those of "no_text_fix_rounds".
+Both sides need the same values, or they drift apart.
 
 Writes OUT.gecko.txt (Dolphin GameSettings lines) and OUT.c2.bin (the code,
 for the Wii's boot codes). The code must be position independent (tools/pic_code.py).
@@ -33,6 +38,10 @@ def fill(blob, offset, plan, port, lras_s, seed):
     data = struct.pack('>IBBBBff', 0x4155544F, port, len(rounds), lras_s, seed, 1.0, 0.5)
     data += b''.join(struct.pack('>BB', c, s) for c, s in rounds).ljust(128, b'\0')
     blob[offset:offset + len(data)] = data
+    over = plan.get('over_limit', (0, 0))
+    blob[offset + 0xB8:offset + 0xBE] = bytes((plan.get('timer_s', 0), plan.get('timer_rounds', 0),
+                                               plan.get('idle_rounds', 0), over[0], over[1],
+                                               plan.get('no_text_fix_rounds', 0)))
 
 
 def c2(code):

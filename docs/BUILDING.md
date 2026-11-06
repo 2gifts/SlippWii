@@ -8,8 +8,8 @@ python tools/fetch_devkitpro.py      # a portable devkitPPC r47.1, devkitARM r66
 sh tools/build.sh                    # builds Nintendont: dist/sd/apps/SlippWii/boot.dol
 ```
 
-`make` can't handle spaces in paths, so `build.sh` maps the repository to drive `W:` (`subst`). It
-builds with `-j1`: the upstream Makefile can compile `MeleeCodes.c` before the Gecko headers it
+`make` can't handle spaces in paths, so if the path has one, `build.sh` maps the repository to drive
+`W:` (`subst`), and stops if `W:` already maps to another checkout. It builds with `-j1`: the upstream Makefile can compile `MeleeCodes.c` before the Gecko headers it
 includes have been generated.
 
 ## The parts
@@ -17,8 +17,11 @@ includes have been generated.
 | Path | What |
 |---|---|
 | `Nintendont/` | Slippi Nintendont with SlippWii's changes; the online client is `kernel/slippi_online/` (see its README) |
-| `Nintendont/kernel/gecko/g_online_boot.bin` | Codes installed in Melee: Slippi's bootloader, the crash reporter and the delay buttons. Rebuild with `python tools/build_online_boot.py` (committed; `--stall`, `--heartbeat` and `--autoplay` make diagnostic and test builds) |
-| `tools/css_delay/` | The delay buttons on the character select screen (C, built position independent by `tools/pic_code.py`) |
+| `Nintendont/kernel/gecko/g_online_boot.bin` | Codes installed in Melee: Slippi's bootloader, the crash reporter, the online settings and the ping display. Rebuild with `python tools/build_online_boot.py` (committed; `--stall`, `--heartbeat` and `--autoplay` make diagnostic and test builds) |
+| `tools/css_delay/` | The online settings on the character select screen: delay, rumble, ping display (C, built position independent by `tools/pic_code.py`) |
+| `tools/ping_display/` | The ping in a game's top left corner (the same kind of code) |
+| `tools/text_args/` | Keeps a text format's `%s` from reading a wild address (the same kind of code; see `HOW_IT_WORKS.md`) |
+| `tools/test_loader_settings.py` | The loader's settings file on a PC: what the menu saves comes back on the next start |
 | `tools/ppc/` | The crash reporter and diagnostics (PowerPC assembly) |
 | `Nintendont/loader/source/slippwii.c`, `vcdiff.c` | Before Melee starts: the account check, and Slippi's menu patches applied to the disc (first start) |
 | `release/` | What goes on the SD card besides the app: the Homebrew Channel icon and `meta.xml`, the account-copy script |

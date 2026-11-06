@@ -151,6 +151,7 @@ void unzip_data(const void *input, const unsigned int input_size,
  * @return True if loaded successfully; false if not.
  */
 bool LoadNinCFG(void);
+void SaveNinCFG(void);
 
 // Load slippi-wiiconf configuration file from root device.
 // Return True if successful; false if not.

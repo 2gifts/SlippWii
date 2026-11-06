@@ -22,8 +22,10 @@ with and help improve the project.
 | **Unranked** | Should work (same code path as Direct) but has had little testing. |
 | **Teams** | Untested. |
 | **Ranked** | **Not available.** Ranked is Slippi's protected competitive mode, so SlippWii leaves it out: it isn't in the Online Play menu. |
-| Input delay | Set on the Wii: the **Delay Frames** − / + buttons on the online character select screen. |
+| Input delay | Set on the Wii: the **Delay Frames** − / + buttons on the online character select screen. You can change it while connected to your opponent: it applies from the next game. |
 | Rumble | On or off for online play: the **Rumble** switch on the online character select screen (remembered). |
+| Ping display | The ping to your opponent in the top left corner during a game, as on Slippi Dolphin. On or off with the **Show Ping** switch on the online character select screen (remembered). |
+| Replays | As on Slippi Nintendont: with **Slippi Replays** on in the settings (the *Slippi* page), each game is saved as a Slippi replay (`.slp`) in a `Slippi` folder on your *other* drive: a USB drive if your game is on the SD card, the SD card if your game is on a USB drive. Both must be plugged in; the LAN adapter takes one of the Wii's USB ports, so the drive goes in the other. Off by default. |
 | Quick chat, connect code history | Work as on Slippi Dolphin. |
 
 How it feels: your opponent on PC plays with rollback, exactly as against another PC player.
@@ -85,16 +87,19 @@ post your SD card's files online.
 2. Open the Homebrew Channel and start **SlippWii**.
 3. Pick Melee. In Melee, go to **Online Play** and pick **Direct** or **Unranked**, as on Slippi Dolphin.
 4. On the character select screen, point the hand at **−** or **+** under *Delay Frames* and press
-   **A** to change your input delay (1-9; 2 is a good start). Point at **On**/**Off** under *Rumble*
-   and press **A** to turn your controller's rumble on or off for online play. Both are saved for
-   next time.
+   **A** to change your input delay (1-9; 2 is a good start). You don't have to disconnect: change it
+   while connected to your opponent and it applies from the next game. Point at **On**/**Off** under
+   *Rumble* and press **A** to turn your controller's rumble on or off for online play, or under
+   *Show Ping* to show or hide your ping during games. All of these are saved for next time.
 
    (Melee's own *Options > Rumble* can't do this online: online, your character can be in another
    port than your controller, and Slippi sends its rumble to your controller.)
 
+To change Nintendont's own settings, press **B** on the game list (**L**/**R** change pages). They
+are saved when you leave the settings or start a game.
+
 SlippWii has its own app folder, settings file and data folder, so **Slippi Nintendont stays
-installed and works as before**. Use it for offline play, replays to USB and console mirroring as
-usual.
+installed and works as before**. Use it for offline play and console mirroring as usual.
 
 On the SD card:
 

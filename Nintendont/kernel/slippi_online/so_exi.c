@@ -55,6 +55,10 @@ enum {
 	CMD_CRASH_REPORT = 0xDF,
 	CMD_HEARTBEAT = 0xDE,	/* diagnostics (tools/ppc/heartbeat.s) */
 	CMD_PROBE = 0xDD,	/* diagnostics (tools/ppc/probe_*.s) */
+	/* Wii only: [0 off, 1 on, 0xFF read] -> PING_ANSWER_SIZE bytes: [the setting,
+	 * opponents, then each one's ping in ms, u16 (PING_NONE: none yet)]. The online
+	 * CSS's switch sets it; the display in a game reads it (tools/ping_display/). */
+	CMD_PING_DISPLAY = 0xEF,
 	CMD_TEXT_REPORT = 0xDA,	/* Melee's panics and OSReport (tools/ppc/text_report.s) */
 	CMD_SET_DELAY = 0xDC,	/* Wii only: [step] -> [delay], the online CSS's delay buttons (tools/css_delay/) */
 	CMD_SET_RUMBLE = 0xDB,	/* Wii only: [0 off, 1 on, 0xFF read] -> [rumble], the online CSS's rumble switch */
@@ -105,6 +109,7 @@ static u16 payload_size(u8 cmd)
 	case CMD_CRASH_REPORT:
 	case CMD_PROBE: return 0x3F;
 	case CMD_HEARTBEAT: return 0x5F;
+	case CMD_PING_DISPLAY: return 1;
 	case CMD_SET_DELAY: return 1;
 	case CMD_SET_RUMBLE: return 1;
 	case CMD_TEXT_REPORT: return 0x7F;
@@ -120,7 +125,7 @@ int so_exi_online_mode(void)
 int so_exi_is_online_command(u8 cmd)
 {
 	return (cmd >= CMD_ONLINE_INPUTS && cmd <= CMD_REPORT_MATCH_STATUS_UPDATE) ||
-		(cmd >= CMD_LOG_MESSAGE && cmd <= CMD_CHANGE_MUSIC_VOLUME) ||
+		(cmd >= CMD_LOG_MESSAGE && cmd <= CMD_CHANGE_MUSIC_VOLUME) || cmd == CMD_PING_DISPLAY ||
 		(cmd >= CMD_PREMADE_TEXT_LENGTH && cmd <= CMD_GET_RANK_VISIBILITY) || cmd == CMD_CRASH_REPORT || cmd == CMD_HEARTBEAT ||
 		cmd == CMD_PROBE || cmd == CMD_TEXT_REPORT || cmd == CMD_SET_DELAY ||
 		cmd == CMD_SET_RUMBLE;
@@ -323,6 +328,30 @@ static void cleanup(void)
 	x.have_client = 0;
 	x.sent_chat = 0;
 	x.last_frame = 0;	/* the next frame 1 starts a game */
+}
+
+/* ---- 0xEF PING_DISPLAY ----------------------------------------------------- */
+
+#define PING_ANSWER_SIZE (2 + 2 * SO_REMOTE_MAX)
+#define PING_NONE 0xFFFF
+#define PING_MAX_MS 9999
+
+/* Slippi Dolphin's ping display: the last pad's round trip, per opponent. No
+ * client lock: a game's frame must not wait for the network thread, and these
+ * are whole words, each written in one store. */
+static void answer_ping_display(u8 request)
+{
+	u8 *r = answer(PING_ANSWER_SIZE);
+	int i, remotes = so_np_remote_count();
+	if (!r)
+		return;
+	r[0] = (u8)so_client_set_ping_display(request);
+	r[1] = (u8)remotes;
+	for (i = 0; i < SO_REMOTE_MAX; i++) {
+		u32 us = i < remotes ? so_np_ping_us(i) : 0;
+		u32 ms = us / 1000;
+		so_put_u16(r + 2 + i * 2, !us ? PING_NONE : ms > PING_MAX_MS ? PING_MAX_MS : (u16)ms);
+	}
 }
 
 /* ---- 0xB0 ONLINE_INPUTS (handleOnlineInputs, lockstep) -------------------- */
@@ -853,7 +882,10 @@ static void load_history(void)
 {
 	u8 buf[HISTORY_FILE_SIZE];
 	int n, i;
+	const SoConfig *c = so_client_config();
 	history_loaded = 1;
+	if (c && c->selftest_code[0])
+		return;	/* tests keep it to the session: not the player's codes */
 	n = so_read_file(SO_DIRECT_CODES_PATH, buf, sizeof(buf));
 	if (n < 5 || memcmp(buf, "SLDC", 4) != 0)
 		return;
@@ -872,9 +904,12 @@ void so_exi_save_history(void)
 {
 	u8 buf[HISTORY_FILE_SIZE];
 	int i, count;
+	const SoConfig *c = so_client_config();
 	if (!history_dirty)
 		return;
 	history_dirty = 0;
+	if (c && c->selftest_code[0])
+		return;
 	count = history_count;
 	memset(buf, 0, sizeof(buf));
 	memcpy(buf, "SLDC", 4);
@@ -926,33 +961,42 @@ static int code_list(void)
 	return history_count;
 }
 
-/* handleNameEntryLoad: the first code from `index` on (or back, scrolling
- * newer) that starts with the typed characters. */
+/* Does this code start with the typed characters? */
+static int code_matches(int index, const u8 *p, u8 len)
+{
+	int k, ok = history[index].len / 2 >= len;
+	for (k = 0; ok && k < len; k++)
+		ok = history[index].code[2 * k] == p[1 + 3 * k] && history[index].code[2 * k + 1] == p[2 + 3 * k];
+	return ok;
+}
+
+/* handleNameEntryLoad. `dir` from the shown code (index): none (0), a step
+ * older (1), newer (2, never past the newest) or back to the newest
+ * (3), the first code that starts with the typed characters, walking the
+ * same way. None found: the shown one stays if it still matches (else
+ * scrolling past the end would clear it), or the typed text is echoed. */
 static void on_code_suggestion(const u8 *p)
 {
 	u8 *r = answer(30);
 	u8 len = p[0x19], dir = p[0x1E];
-	u32 index = so_get_u32(p + 0x1A), start;
-	int count = code_list(), found = -1, i, k;
+	u32 shown = so_get_u32(p + 0x1A), index = shown;
+	int count = code_list(), found = -1, i;
 	if (len > 8)
 		len = 8;
 	if (dir == 1)
 		index++;
-	else if (dir == 2)
+	else if (dir == 2 && index > 0)
 		index--;
 	else if (dir == 3)
 		index = 0;
-	for (start = index; found < 0 && start < (u32)count;) {
-		int ok = history[start].len / 2 >= len;
-		for (k = 0; ok && k < len; k++)
-			ok = history[start].code[2 * k] == p[1 + 3 * k] && history[start].code[2 * k + 1] == p[2 + 3 * k];
-		if (ok)
-			found = (int)start;
-		else if (dir == 2)
-			start--;	/* unsigned: below 0 ends the walk */
+	while (found < 0 && index < (u32)count) {
+		if (code_matches((int)index, p, len))
+			found = (int)index;
 		else
-			start++;
+			index += dir == 2 ? (u32)-1 : 1;	/* unsigned: below 0 ends the walk */
 	}
+	if (found < 0 && shown < (u32)count && code_matches((int)shown, p, len))
+		found = (int)shown;
 	if (found < 0) {
 		/* not found: the typed text, echoed */
 		memcpy(r + 1, p + 1, 3 * len);
@@ -1120,9 +1164,14 @@ void so_exi_write(const u8 *request, u32 dma_len)
 		so_log("exi: first 0x%02X (%u bytes)", cmd, (unsigned)dma_len);
 	}
 	/* A command without an answer leaves none behind (Dolphin's read queue
-	 * keeps the old one, but nothing reads it). */
-	x.has_resp = 0;
-	x.file_pending = 0;
+	 * keeps the old one, but nothing reads it). Not the diagnostics' report, though:
+	 * tools/ppc/stall.s sends it from the retrace interrupt, maybe between another
+	 * command's write and read. That lost 0xB3's answer once in about 1400 games: the game
+	 * took a stale buffer for its match data and crashed in Slippi's nametag code. */
+	if (cmd != CMD_HEARTBEAT) {
+		x.has_resp = 0;
+		x.file_pending = 0;
+	}
 	switch (cmd) {
 	case CMD_ONLINE_INPUTS:
 		on_online_inputs(request);
@@ -1285,6 +1334,9 @@ void so_exi_write(const u8 *request, u32 dma_len)
 	}
 	case CMD_GET_DELAY:
 		answer(2)[0] = 1;	/* a real answer: no extra delay offline */
+		break;
+	case CMD_PING_DISPLAY:	/* 0xFF: just the setting and the pings */
+		answer_ping_display(request[1]);
 		break;
 	case CMD_SET_RUMBLE:	/* 0xFF: just the setting */
 		answer(1)[0] = (u8)so_client_set_rumble(request[1]);

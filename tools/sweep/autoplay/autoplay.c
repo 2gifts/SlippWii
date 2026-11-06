@@ -52,9 +52,15 @@ typedef struct {
 	s8 sx, sy, cx, cy;	/* 0xA6 */
 	u8 tl, tr;		/* 0xAA */
 	u16 scan_t;		/* 0xAC */
-	u16 pad1;		/* 0xAE */
+	u16 entry_polls;	/* 0xAE polls since the name entry opened */
 	u32 last;		/* 0xB0 the last action (diagnostics) */
 	u32 cursor;		/* 0xB4 the stage select cursor's JObj (0 until found) */
+	/* filled in by build_autoplay.py; bit n: the game of round n + 1 */
+	u8 timer_s;		/* 0xB8 the timer jumps to this many seconds, in the rounds of timer_rounds */
+	u8 timer_rounds;	/* 0xB9 */
+	u8 idle_rounds;		/* 0xBA no inputs in a game: nobody is KO'd, it runs to the timer */
+	u8 over_limit[2];	/* 0xBB per port: over the ledge grab limit, near the end of these rounds */
+	u8 no_text_fix_rounds;	/* 0xBD tools/text_args/ taken out of Melee, to show what it prevents */
 } Bot;
 
 #define B_LEFT 0x0001
@@ -131,8 +137,10 @@ static void main_menu(Bot *b, Pad *o)
 static void name_entry(Bot *b, Pad *o)
 {
 	/* R: fetch a suggestion from the direct-code history; Z: take it (the
-	 * selector moves to Confirm); A: confirm. */
-	u32 t = b->scene_polls % 120;
+	 * selector moves to Confirm); A: confirm. Timed from the entry's
+	 * opening, not the scene's: an A before the suggestion would type an "A"
+	 * on the keyboard, and no code then matches. */
+	u32 t = b->entry_polls++ % 120;
 	if (t >= 30 && t < 32)
 		o->button = B_R;
 	else if (t >= 60 && t < 62)
@@ -248,9 +256,47 @@ static void sss(Bot *b, Pad *o)
 	}
 }
 
+/* A game's timer (0x8046B6C8, u32 seconds; 0x8046B6CC, u16 frames of the second):
+ * both sides change it in the same second of the game, so they stay in step. */
+static void short_timer(Bot *b, u32 bit)
+{
+	if (b->timer_s && (b->timer_rounds & bit) && rd32(0x8046B6C8) == 479) {
+		u32 frames = *(volatile u16 *)0x8046B6CC;
+		if (frames >= 15 && frames <= 45)
+			*(volatile u32 *)0x8046B6C8 = b->timer_s;
+	}
+}
+
+/* The ledge grab count a player's stats keep (PlayerBlock_GetCliffhangerStat):
+ * Slippi's limit is 45, and a game on the timer is lost over it. */
+static void ledge_grabs(Bot *b, u32 bit)
+{
+	int port;
+	if (rd32(0x8046B6C8) > 4)
+		return;
+	for (port = 0; port < 2; port++)
+		if (b->over_limit[port] & bit)
+			*(volatile u32 *)(0x80453710u + (u32)port * 0xE90u) = 50;
+}
+
+static void no_text_fix(Bot *b, u32 bit)
+{
+	volatile u32 *entry = (volatile u32 *)0x803A6B98u;	/* Text_InitializeSubtext */
+	if ((b->no_text_fix_rounds & bit) && *entry != 0x7C0802A6u) {
+		*entry = 0x7C0802A6u;	/* mflr r0, the C2 code's replaced instruction */
+		flush_code(0x803A6B98u, 4);
+	}
+}
+
 static void in_game(Bot *b, Pad *o)
 {
 	u32 r;
+	u32 bit = b->round >= 1 && b->round <= 8 ? 1u << (b->round - 1) : 0;
+	short_timer(b, bit);
+	ledge_grabs(b, bit);
+	no_text_fix(b, bit);
+	if (b->idle_rounds & bit)
+		return;
 	if (b->lras_s && b->scene_polls > (u32)b->lras_s * 60) {
 		/* Quit the game as a player does: pause (Start), then hold L+R+A
 		 * and press Start again (Melee wants a fresh press, so it repeats). */
@@ -349,6 +395,8 @@ void autoplay_poll(Pad *status, Bot *b)
 	o.l = o.r = o.aa = o.ab = 0;
 	o.err = 0;
 	o.pad = 0;
+	if (rd8(0x804D6643) != 1)
+		b->entry_polls = 0;
 	if (major == 1) {
 		if (rd8(0x804D6643) == 1)
 			name_entry(b, &o);

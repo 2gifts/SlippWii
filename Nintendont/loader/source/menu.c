@@ -1626,6 +1626,13 @@ static int Menu_GameSelection(void)
 		// Handle a request to move into the settings menu
 		if (FPAD_Cancel(0))
 		{
+			// Leaving the settings: keep them now, whatever comes next.
+			if (ctx.menuMode != 0 && ctx.saveSettings)
+			{
+				SaveNinCFG();
+				ctx.saveSettings = false;
+			}
+
 			ctx.menuMode = !ctx.menuMode;
 			memset(&ctx.held, 0, sizeof(ctx.held));
 
@@ -1732,6 +1739,8 @@ static int Menu_GameSelection(void)
 		const char* StartChar = gi[SelectedGame].Path + 3;
 		if (StartChar[0] == ':')
 			StartChar++;
+		if (strncmp(ncfg->GamePath, StartChar, sizeof(ncfg->GamePath)) != 0)
+			ctx.saveSettings = true;	// remember this game
 		strncpy(ncfg->GamePath, StartChar, sizeof(ncfg->GamePath));
 		ncfg->GamePath[sizeof(ncfg->GamePath)-1] = 0;
 		memcpy(&(ncfg->GameID), gi[SelectedGame].ID, 4);
@@ -1746,11 +1755,9 @@ static int Menu_GameSelection(void)
 		free(gi[i].Path);
 	}
 
-	// Send user back to the device selection menu
-	if (ctx.selected == false) return 0;
-
-	// Game is selected.
-	return (ctx.saveSettings ? 3 : 1);
+	// 1: a game is selected; otherwise send the user back to the device
+	// selection menu. 2: there are settings to save, in either case.
+	return (ctx.selected ? 1 : 0) | (ctx.saveSettings ? 2 : 0);
 }
 
 /**
@@ -1799,17 +1806,23 @@ bool Menu_DeviceSelection(void)
 		// Return to the loader
 		else if (FPAD_Start(0))
 		{
+			if (res)
+				SaveNinCFG();
 			ShowMessageScreenAndExit("Returning to loader...", 0);
 		}
 		// Move cursor down (don't wraparound)
 		else if (FPAD_Down(0))
 		{
+			if (ncfg->UseUSB != 1)
+				res = true;
 			ncfg->UseUSB = 1;
 			redraw = true;
 		}
 		// Move cursor up (don't wraparound)
 		else if (FPAD_Up(0))
 		{
+			if (ncfg->UseUSB != 0)
+				res = true;
 			ncfg->UseUSB = 0;
 			redraw = true;
 		}

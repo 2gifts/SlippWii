@@ -829,50 +829,7 @@ int main(int argc, char **argv)
 	}
 
 	if(SaveSettings)
-	{
-		// TODO: If the boot device is the same as the game device,
-		// don't write it twice.
-		gprintf("Attempting to save settings...\r\n");
-
-		// Write config to the boot device, which is loaded on next launch.
-		FIL cfg;
-		FRESULT res;
-		if (f_open_char(&cfg, "/slippwii_nincfg.bin", FA_WRITE|FA_OPEN_ALWAYS) == FR_OK)
-		{
-			gprintf("Boot device settings file open successful.\r\n");
-			// Reserve space in the file.
-			if (f_size(&cfg) < sizeof(NIN_CFG)) {
-				f_expand(&cfg, sizeof(NIN_CFG), 1);
-			}
-
-			// Write slippwii_nincfg.bin
-			UINT wrote;
-			res = f_write(&cfg, ncfg, sizeof(NIN_CFG), &wrote);
-			gprintf("Boot device write result: %d\r\n", res);
-			f_close(&cfg);
-		}
-
-		// Write config to the game device, used by the Nintendont kernel.
-		char ConfigPath[35];
-		snprintf(ConfigPath, sizeof(ConfigPath), "%s:/slippwii_nincfg.bin", GetRootDevice());
-		if (f_open_char(&cfg, ConfigPath, FA_WRITE|FA_OPEN_ALWAYS) == FR_OK)
-		{
-			gprintf("Game device settings file open successful.\r\n");
-
-			// Reserve space in the file.
-			if (f_size(&cfg) < sizeof(NIN_CFG)) {
-				f_expand(&cfg, sizeof(NIN_CFG), 1);
-			}
-
-			// Write slippwii_nincfg.bin
-			UINT wrote;
-			res = f_write(&cfg, ncfg, sizeof(NIN_CFG), &wrote);
-			gprintf("Game device write result: %d\r\n", res);
-			f_close(&cfg);
-		}
-
-		FlushDevices();
-	}
+		SaveNinCFG();
 
 	// Get multi-game and region code information.
 	u32 ISOShift = 0;	// NOTE: This is a 34-bit shifted offset.

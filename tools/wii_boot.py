@@ -8,6 +8,7 @@ its menu and starts the game in that configuration.
 
     python tools/wii_boot.py                 # loader.dol from the last build
     python tools/wii_boot.py --wii-ip 192.168.1.50 --dol path/to/boot.dol
+    python tools/wii_boot.py --menu          # the loader's menu, as from the SD card
 
 The configuration starts from a copy of the SD card's /slippwii_nincfg.bin
 (tools/wii_boot.py --save-cfg E: stores one in build/).
@@ -18,6 +19,7 @@ import shutil
 import socket
 import struct
 import sys
+import time
 import zlib
 from pathlib import Path
 
@@ -29,15 +31,15 @@ WIILOAD_PORT = 4299
 ARGV0 = b'sd:/apps/Slippi Nintendont C online test/boot.dol'
 
 NIN_MAGIC = 0x01070CF6
-NIN_VERSION = 0x0E
+NIN_VERSIONS = (0x0E, 0x0F)  # the loader brings an older one up to date
 NIN_CFG_AUTO_BOOT = 1 << 10
 
 
 def autoboot_cfg(base):
     """The NIN_CFG with the auto-boot bit set (the game path stays as is)."""
     magic, version, config = struct.unpack('>3I', base[:12])
-    if magic != NIN_MAGIC or version != NIN_VERSION:
-        raise ValueError(f'not a Nintendont config v{NIN_VERSION:#x} (magic {magic:#x}, version {version:#x})')
+    if magic != NIN_MAGIC or version not in NIN_VERSIONS:
+        raise ValueError(f'not a Nintendont config we know (magic {magic:#x}, version {version:#x})')
     return base[:8] + struct.pack('>I', config | NIN_CFG_AUTO_BOOT) + base[12:]
 
 
@@ -48,14 +50,29 @@ def wiiload_packet(dol, args):
     return header + packed + args
 
 
-def boot(wii_ip, dol_path, cfg_path, timeout=10):
+def boot(wii_ip, dol_path, cfg_path, timeout=10, menu=False):
     dol = Path(dol_path).read_bytes()
-    cfg = autoboot_cfg(Path(cfg_path).read_bytes())
-    args = ARGV0 + b'\0' + cfg + b'\0'
+    if menu:
+        args = b'sd:/apps/SlippWii/boot.dol\0'  # no settings passed: the loader reads its own and shows its menu
+    else:
+        args = ARGV0 + b'\0' + autoboot_cfg(Path(cfg_path).read_bytes()) + b'\0'
     data = wiiload_packet(dol, args)
     with socket.create_connection((wii_ip, WIILOAD_PORT), timeout=timeout) as s:
         s.sendall(data)
     return len(dol)
+
+
+def handed_over(wii_ip, timeout_s=15):
+    """Did the Homebrew Channel start what it was sent? Its port closes when it does."""
+    end = time.time() + timeout_s
+    while time.time() < end:
+        try:
+            with socket.create_connection((wii_ip, WIILOAD_PORT), timeout=1.5):
+                pass
+        except OSError:
+            return True
+        time.sleep(1)
+    return False
 
 
 def main():
@@ -63,6 +80,7 @@ def main():
     ap.add_argument('--wii-ip', default=DEFAULT_WII, help="the Wii's address (default: $SLIPPWII_WII_IP)")
     ap.add_argument('--dol', default=str(DEFAULT_DOL))
     ap.add_argument('--cfg', default=str(BASE_CFG), help='NIN_CFG to start from')
+    ap.add_argument('--menu', action='store_true', help="open the loader's menu instead of starting Melee")
     ap.add_argument('--save-cfg', metavar='SD', help='copy SD:/slippwii_nincfg.bin to build/ and exit')
     args = ap.parse_args()
     if args.save_cfg:
@@ -73,12 +91,13 @@ def main():
     if not args.wii_ip:
         ap.error('--wii-ip is needed (or set SLIPPWII_WII_IP)')
     try:
-        size = boot(args.wii_ip, args.dol, args.cfg)
+        size = boot(args.wii_ip, args.dol, args.cfg, menu=args.menu)
     except OSError as e:
         print(f'could not reach the Homebrew Channel at {args.wii_ip}:{WIILOAD_PORT} ({e}).')
         print('Is the Wii on the Homebrew Channel screen, with its network icon lit?')
         return 1
-    print(f'sent {Path(args.dol).name} ({size} bytes) to {args.wii_ip}: Melee should start in a few seconds')
+    print(f'sent {Path(args.dol).name} ({size} bytes) to {args.wii_ip}: '
+          + ("the menu should open" if args.menu else 'Melee should start') + ' in a few seconds')
     return 0
 
 

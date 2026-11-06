@@ -23,6 +23,8 @@ static void load_delay(void);
 static void save_delay(void);
 static void load_rumble(void);
 static void save_rumble(void);
+static void load_ping_display(void);
+static void save_ping_display(void);
 
 extern char __slippi_online_stack_addr, __slippi_online_stack_size;
 
@@ -325,6 +327,7 @@ static u32 NetworkThread(void *unused)
 		so_exi_save_history();	/* after a search added a code (an SD write; not in a game) */
 		save_delay();
 		save_rumble();
+		save_ping_display();
 	}
 	return 0;
 }
@@ -355,6 +358,7 @@ int so_client_init(void)
 	res = so_config_load(&c.config, &c.user);
 	load_delay();
 	load_rumble();
+	load_ping_display();
 	so_step_pause_us = (u32)c.config.diag_step_pause_ms * 1000;
 	so_diag_start(&c.config);
 	if (so_config_is_real_mm(&c.config))
@@ -435,6 +439,26 @@ static void save_delay(void)
 		so_log("client: could not save the delay");
 }
 
+/* The online CSS's On/Off switches, each saved in its own one-character file,
+ * which wins over config.ini. */
+static void load_switch(const char *path, u8 *value)
+{
+	char text[8];
+	int n = so_read_file(path, text, sizeof(text) - 1);
+	if (n > 0 && (text[0] == '0' || text[0] == '1'))
+		*value = (u8)(text[0] - '0');
+}
+
+static void save_switch(const char *path, u8 value, const char *what)
+{
+	char text[3];
+	text[0] = (char)('0' + value);
+	text[1] = '\n';
+	text[2] = 0;
+	if (so_write_file(path, text, 2) < 0)
+		so_log("client: could not save the %s setting", what);
+}
+
 #define SO_RUMBLE_PATH "/slippwii/rumble.txt"
 static volatile int rumble_dirty;
 
@@ -448,26 +472,43 @@ int so_client_set_rumble(int on)
 	return c.config.rumble;
 }
 
-/* rumble.txt, written from the online CSS's rumble switch, wins over config.ini. */
 static void load_rumble(void)
 {
-	char text[8];
-	int n = so_read_file(SO_RUMBLE_PATH, text, sizeof(text) - 1);
-	if (n > 0 && (text[0] == '0' || text[0] == '1'))
-		c.config.rumble = (u8)(text[0] - '0');
+	load_switch(SO_RUMBLE_PATH, &c.config.rumble);
 }
 
 static void save_rumble(void)
 {
-	char text[3];
 	if (!rumble_dirty)
 		return;
 	rumble_dirty = 0;
-	text[0] = (char)('0' + c.config.rumble);
-	text[1] = '\n';
-	text[2] = 0;
-	if (so_write_file(SO_RUMBLE_PATH, text, 2) < 0)
-		so_log("client: could not save the rumble setting");
+	save_switch(SO_RUMBLE_PATH, c.config.rumble, "rumble");
+}
+
+#define SO_PING_PATH "/slippwii/ping.txt"
+static volatile int ping_display_dirty;
+
+int so_client_set_ping_display(int on)
+{
+	if ((on == 0 || on == 1) && on != c.config.ping_display) {
+		c.config.ping_display = (u8)on;
+		ping_display_dirty = 1;
+		so_log("client: ping display %s (set on the Wii)", on ? "on" : "off");
+	}
+	return c.config.ping_display;
+}
+
+static void load_ping_display(void)
+{
+	load_switch(SO_PING_PATH, &c.config.ping_display);
+}
+
+static void save_ping_display(void)
+{
+	if (!ping_display_dirty)
+		return;
+	ping_display_dirty = 0;
+	save_switch(SO_PING_PATH, c.config.ping_display, "ping display");
 }
 
 const SoUser *so_client_user(void)

@@ -48,7 +48,16 @@ sync. Desync detection (Slippi's per-frame checksums) works as on PC.
 - **Wired only:** an IOS `sendto` over Wi-Fi takes 13-18 ms, too slow for 60 inputs a second each
   way. Over the USB LAN adapter it takes well under 1 ms.
 - **Input delay** is set on the character select screen (`tools/css_delay/`), since there's no
-  Dolphin settings window.
+  Dolphin settings window. As on Dolphin it can change while connected: Slippi's code reads it at the
+  start of each game.
+- **What only Dolphin tolerates.** Slippi's online code only ever ran in Dolphin, which forgives what a
+  console doesn't. Two cases are handled in Melee's own codes: floats at unaligned addresses
+  (`tools/ppc/crash_report.s` performs them) and strings at wild addresses (`tools/text_args/`:
+  Slippi's ledge grab limit message passes `%s` the value 1, which crashed a console at the end of a
+  game on the timer).
+- **The ping display** that Dolphin draws over the game is drawn by the game here
+  (`tools/ping_display/`), on the HUD Slippi's code makes for its own "Delay" text. The value is the
+  same measurement: the round trip of the last pad acknowledged.
 
 The research and measurements that led here are in [research/FEASIBILITY.md](research/FEASIBILITY.md).
 

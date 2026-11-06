@@ -1,11 +1,14 @@
 /* The online CSS's settings (see glue.s): "Delay Frames" and "－ N ＋", then
- * "Rumble" and "On"/"Off", under Slippi's User and Connect Code lines, in its
- * text style. Pointing the hand at a button lights it; A changes the delay
- * (1-9; EXI command 0xDC [step] -> [delay]) or switches rumble (0xDB [on] ->
- * [on]); the kernel saves both on the SD card. The delay is locked (gray)
- * while searching or connected; neither changes while a connect code is
- * being typed. Rumble off silences the controller in online play (`motor`
- * in glue.s, installed here at PADControlMotor).
+ * "Rumble" and "Show Ping", each "On"/"Off", under Slippi's User and Connect
+ * Code lines, in its text style. Pointing the hand at a button lights it; A
+ * changes the delay (1-9; EXI command 0xDC [step] -> [delay]), switches rumble
+ * (0xDB [on] -> [on]) or the ping display (0xEF [on] -> [on, ...], see
+ * tools/ping_display/); the kernel saves them all on the SD card. All of them
+ * work while searching or connected, as Slippi Dolphin's settings windows do:
+ * Slippi's code reads the delay at the start of each game, so a change is for
+ * the next game. Only while a connect code is being typed do they not change
+ * (the delay shows gray). Rumble off silences the controller in online play
+ * (`motor` in glue.s, installed here at PADControlMotor).
  *
  * Built position independent (tools/pic_code.py checks): no globals, no
  * constant data; floats, colours and strings come from struct Ui. Addresses
@@ -13,8 +16,6 @@
  *   0x80479D30 scene controller (major << 24 ... minor)
  *   0x804D6640 Slippi: the online mode (r13 - 0x5060; 2 = Direct)
  *   0x804D6643 Slippi: name entry mode (r13 - 0x505D; 1 = connect code)
- *   0x80005614 Slippi: CSS data -> its match state buffer -> connection
- *              state (0 = idle)
  *   0x804D6CF0 the port in control of the CSS
  *   0x804A0BC0 CSS cursors (pointer per port; x at +0x0C, y at +0x10)
  *   0x804C20BC HSD_PadCopyStatus[4], 0x44 each; trigger at +0x08
@@ -61,11 +62,19 @@ typedef struct {
 	char rumble_label[8];	/* 0x80 */
 	char on[4];		/* 0x88 */
 	char off[4];		/* 0x8C */
+	u8 ping;		/* 0x90 the ping display: 1 on, 0 off */
+	u8 ping_sub;		/* 0x91 */
+	u8 ping_look;		/* 0x92 its colour set: 1 + hovered */
+	u8 pad2;
+	char ping_label[12];	/* 0x94 */
+	float ping_x;		/* 0xA0 its column, from x */
 } Ui;
 
 #define A_BUTTON 0x100
 #define CMD_SET_DELAY 0xDC
 #define CMD_SET_RUMBLE 0xDB
+#define CMD_PING_DISPLAY 0xEF
+#define PING_ANSWER_SIZE 8
 #define PAD_CONTROL_MOTOR 0x8034DEBCu	/* its first instruction: mflr r0 */
 #define MFLR_R0 0x7C0802A6u
 
@@ -94,16 +103,6 @@ static int valid_ptr(u32 p)
 static int online_css(void)
 {
 	return rd8(0x80479D30) == 8 && rd8(0x80479D33) == 0;
-}
-
-/* Not searching or connected, and not typing a connect code. */
-static int idle(void)
-{
-	u32 cssdt = rd32(0x80005614), msrb;
-	if (rd8(0x804D6643) != 0 || !valid_ptr(cssdt))
-		return 0;
-	msrb = rd32(cssdt);
-	return valid_ptr(msrb) && rd8(msrb) == 0;
 }
 
 /* 0xDC [step]: the delay after the step (0: as it is) */
@@ -144,6 +143,24 @@ static int set_rumble(Ui *u, int on)
 #endif
 }
 
+/* 0xEF [on]: the ping display's setting after it (0xFF: as it is); on if unknown */
+static int set_ping(Ui *u, int on)
+{
+#ifdef CSS_DELAY_FAKE
+	return on == 0xFF ? u->ping : on;
+#else
+	u8 raw[64];
+	u8 *buf = (u8 *)(((u32)raw + 31) & ~31u);
+	buf[0] = CMD_PING_DISPLAY;
+	buf[1] = (u8)on;
+	FN_EXITransferBuffer(buf, 2, 1);
+	buf[0] = 1;
+	FN_EXITransferBuffer(buf, PING_ANSWER_SIZE, 0);
+	(void)u;
+	return buf[0] == 0 ? 0 : 1;
+#endif
+}
+
 static void show_delay(Ui *u, int d)
 {
 	u->delay = d;
@@ -154,6 +171,12 @@ static void show_rumble(Ui *u, int on)
 {
 	u->rumble = (u8)on;
 	Text_UpdateSubtextContents(u->text, u->rumble_sub, on ? u->on : u->off);
+}
+
+static void show_ping(Ui *u, int on)
+{
+	u->ping = (u8)on;
+	Text_UpdateSubtextContents(u->text, u->ping_sub, on ? u->on : u->off);
 }
 
 /* PADControlMotor's first instruction -> `motor` (once; it stays). */
@@ -170,10 +193,32 @@ static void install_motor(u32 motor)
 	flush_code(at, 4);
 }
 
-/* The rows' y: the delay label, then (+ rumble_gap) the rumble label. */
+/* The rows' y: the delay label, then (+ rumble_gap) the switches' labels, Rumble
+ * and Show Ping side by side: a third row would be out of the hand's reach (it
+ * stops at world y -22) and in a CRT's overscan. */
 static float rows_y(Ui *u)
 {
 	return rd8(0x804D6640) == 2 ? u->y_direct : u->y_other;
+}
+
+static float switches_y(Ui *u)
+{
+	return rows_y(u) + u->rumble_gap;
+}
+
+/* A switch's label and its value; the value's subtext. */
+static int make_switch(Ui *u, float x, const char *label)
+{
+	void *t = u->text;
+	float y = switches_y(u);
+	int i = Text_InitializeSubtext(t, x, y, label);
+	Text_UpdateSubtextSize(t, i, u->label_size, u->label_size);
+	Text_ChangeTextColor(t, i, &u->gray);
+	y += u->line;
+	i = Text_InitializeSubtext(t, x, y, u->on);
+	Text_UpdateSubtextSize(t, i, u->value_size, u->value_size);
+	Text_ChangeTextColor(t, i, &u->white);
+	return i;
 }
 
 void css_delay_load(Ui *u, void *think, void *motor)
@@ -184,6 +229,7 @@ void css_delay_load(Ui *u, void *think, void *motor)
 	u->text = 0;
 	u->look = 0;
 	u->rumble_look = 0;
+	u->ping_look = 0;
 	if (!online_css())
 		return;
 	install_motor((u32)motor);
@@ -215,15 +261,10 @@ void css_delay_load(Ui *u, void *think, void *motor)
 	}
 	show_delay(u, step_delay(u, 0));
 
-	y = rows_y(u) + u->rumble_gap;
-	i = Text_InitializeSubtext(t, u->x, y, u->rumble_label);
-	Text_UpdateSubtextSize(t, i, u->label_size, u->label_size);
-	Text_ChangeTextColor(t, i, &u->gray);
-	y += u->line;
-	u->rumble_sub = (u8)Text_InitializeSubtext(t, u->x, y, u->on);
-	Text_UpdateSubtextSize(t, u->rumble_sub, u->value_size, u->value_size);
-	Text_ChangeTextColor(t, u->rumble_sub, &u->white);
+	u->rumble_sub = (u8)make_switch(u, u->x, u->rumble_label);
 	show_rumble(u, set_rumble(u, 0xFF));
+	u->ping_sub = (u8)make_switch(u, u->x + u->ping_x, u->ping_label);
+	show_ping(u, set_ping(u, 0xFF));
 
 	gobj = GObj_Create(4, 5, 0x80);
 	if (gobj)
@@ -255,19 +296,19 @@ static int hovered(Ui *u, u32 cursor)
 	return 0;
 }
 
-/* The hand points at the rumble switch. */
-static int on_switch(Ui *u, u32 cursor)
+/* The hand points at the switch whose label is at x. */
+static int on_switch(Ui *u, u32 cursor, float x)
 {
-	float y = rows_y(u) + u->rumble_gap;
+	float y = switches_y(u);
 	y += u->line;
 	y += u->centre_y;
-	return on_button(u, cursor, u->x + u->switch_x, y);
+	return on_button(u, cursor, x + u->switch_x, y);
 }
 
 void css_delay_think(void *gobj, Ui *u)
 {
 	u32 port, cursor;
-	int hover = 0, rumble_hover = 0, locked, look, a;
+	int hover = 0, rumble_hover = 0, ping_hover = 0, locked, look, a;
 	(void)gobj;
 	if (!u->text)
 		return;
@@ -277,9 +318,10 @@ void css_delay_think(void *gobj, Ui *u)
 	cursor = rd32(0x804A0BC0 + port * 4);
 	if (valid_ptr(cursor)) {
 		hover = hovered(u, cursor);
-		rumble_hover = on_switch(u, cursor);
+		rumble_hover = on_switch(u, cursor, u->x);
+		ping_hover = on_switch(u, cursor, u->x + u->ping_x);
 	}
-	locked = !idle();
+	locked = rd8(0x804D6643) != 0;	/* typing a connect code */
 	a = (rd32(0x804C20BC + port * 0x44 + 0x08) & A_BUTTON) != 0;
 
 	look = 1 + (locked ? 3 : hover + 1);
@@ -292,9 +334,14 @@ void css_delay_think(void *gobj, Ui *u)
 		u->rumble_look = (u8)(rumble_hover + 1);
 		Text_ChangeTextColor(u->text, u->rumble_sub, rumble_hover ? &u->yellow : &u->white);
 	}
+	if (ping_hover + 1 != u->ping_look) {
+		u->ping_look = (u8)(ping_hover + 1);
+		Text_ChangeTextColor(u->text, u->ping_sub, ping_hover ? &u->yellow : &u->white);
+	}
 
-	/* rumble: any time but while typing a connect code */
-	if (rumble_hover && a && rd8(0x804D6643) == 0) {
+	if (locked || !a)
+		return;
+	if (rumble_hover) {
 		int on = set_rumble(u, !u->rumble);
 		if (on != u->rumble) {
 			show_rumble(u, on);
@@ -302,9 +349,15 @@ void css_delay_think(void *gobj, Ui *u)
 		}
 		return;
 	}
-	if (locked || !hover || !a)
+	if (ping_hover) {
+		int on = set_ping(u, !u->ping);
+		if (on != u->ping) {
+			show_ping(u, on);
+			SFX_Menu_CommonSound(2);
+		}
 		return;
-	{
+	}
+	if (hover) {
 		int d = step_delay(u, hover);
 		if (d && d != u->delay) {
 			show_delay(u, d);
