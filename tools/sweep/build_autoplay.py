@@ -39,9 +39,9 @@ def fill(blob, offset, plan, port, lras_s, seed):
     data += b''.join(struct.pack('>BB', c, s) for c, s in rounds).ljust(128, b'\0')
     blob[offset:offset + len(data)] = data
     over = plan.get('over_limit', (0, 0))
-    blob[offset + 0xB8:offset + 0xBE] = bytes((plan.get('timer_s', 0), plan.get('timer_rounds', 0),
+    blob[offset + 0xB8:offset + 0xBF] = bytes((plan.get('timer_s', 0), plan.get('timer_rounds', 0),
                                                plan.get('idle_rounds', 0), over[0], over[1],
-                                               plan.get('no_text_fix_rounds', 0)))
+                                               plan.get('no_text_fix_rounds', 0), plan.get('person', 0)))
 
 
 def c2(code):

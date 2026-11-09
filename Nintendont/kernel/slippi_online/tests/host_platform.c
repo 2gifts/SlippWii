@@ -6,6 +6,13 @@
 #include "so_util.h"
 #include "string.h"
 #include "host_platform.h"
+#include "so_client.h"
+
+const SoConfig *so_client_config(void)
+{
+	static SoConfig config;
+	return &config;
+}
 
 static u64 now_us;
 static u32 random_state = 0x2545F491;

@@ -24,8 +24,11 @@
 #   0x10 u32 dar  (faulting data address)   0x14 u32 dsisr
 #   0x18 u32 lr                             0x1C u32 r1 (stack pointer)
 #   0x20 8 x u32 saved link registers up the stack (0 past its end)
+#   0x40 32 x u32 the general registers (OSContext.gpr)
 
-	.set FRAME, 0x100
+	.include "exit_to_loader.inc"
+
+	.set FRAME, 0x180
 	.set OSLoadContext, 0x80345174
 
 	mflr	r0
@@ -33,7 +36,7 @@
 	stwu	r1, -FRAME(r1)
 	stmw	r3, 0x08(r1)
 
-	addi	r31, r1, 0x9F		# a 32-byte aligned buffer at 0x80..0xDF
+	addi	r31, r1, 0x9F		# a 32-byte aligned 0xC0-byte buffer from 0x80..0x9F on
 	rlwinm	r31, r31, 0, 0, 26
 
 # ---- 1. misaligned float loads and stores ------------------------------------
@@ -186,14 +189,42 @@ pad_loop:
 	b	pad_loop
 
 send:
+	li	r6, 32			# the registers
+	mtctr	r6
+	addi	r7, r4, -4
+	addi	r8, r31, 0x3C
+regs:
+	lwzu	r0, 4(r7)
+	stwu	r0, 4(r8)
+	bdnz	regs
 	mr	r3, r31
-	li	r4, 0x40
+	li	r4, 0xC0
 	li	r5, 1			# write
 	lis	r12, 0x8000
 	ori	r12, r12, 0x55F0	# FN_EXITransferBuffer
 	mtctr	r12
 	bctrl
 
+	# Test builds (the kernel's test_control armed it, so_diag.h): back to
+	# the Homebrew Channel, a second on (the kernel sends its log to the PC
+	# every 250 ms), so automated tests go on by themselves.
+	lis	r3, 0xD300
+	lwz	r3, 0x34E0(r3)		# the kernel's test word (so_diag.h)
+	xoris	r4, r3, 0x4152
+	cmplwi	r4, 0x4D44		# "ARMD"
+	beq	2f
+	xoris	r4, r3, 0x4558
+	cmplwi	r4, 0x4954		# "EXIT"
+	bne	3f
+2:	mftb	r5
+	lis	r6, 0x039E		# 60.75 million ticks (0x039EF8B0): a second
+	ori	r6, r6, 0xF8B0
+4:	mftb	r3
+	subf	r3, r5, r3
+	cmplw	r3, r6
+	blt	4b
+	EXIT_TO_LOADER
+3:
 	lmw	r3, 0x08(r1)
 	addi	r1, r1, FRAME
 	lwz	r0, 4(r1)

@@ -3,6 +3,7 @@
  */
 #include "so_diag.h"
 #include "so_alloc.h"
+#include "so_client.h"
 #include "so_exi.h"
 #include "so_platform.h"
 #include "so_socket.h"
@@ -11,7 +12,8 @@
 
 extern char __slippi_online_diag_stack_addr, __slippi_online_diag_stack_size;
 
-#define WATCH_PRIORITY 0x40	/* below the kernel's main loop: never in its way */
+#define WATCH_PRIORITY 0x20	/* below the main loop online too (online_main_priority): the scan of the heap takes
+				 * milliseconds, and the game waits for the main loop to answer its polls */
 #define WATCH_PERIOD_US 1000000
 
 volatile u32 so_kernel_loops;
@@ -22,20 +24,109 @@ static u32 start_ticks;
 static u32 beacons;
 static char text[32];
 
-/* Checks the heap's free-space pattern once a second (so_alloc.h). */
+#define HUNG_S 10
+#define BOOT_HUNG_S 45
+void so_patch_check_codes(void);	/* Patch.c */
+static int test_control;
+
+/* Checks the heap's free-space pattern once a second (so_alloc.h); in tests,
+ * every 10 s, the exit word and the PPC's retrace count (test_exit.s) as the
+ * kernel sees them. */
 static u32 WatchThread(void *unused)
 {
+	u32 n = 0, retraces = 0, still = 0, booting = 0;
+	/* (this word outlives a reboot: last run's count, standing still until the game's first
+	 * retrace, would look like a hung PowerPC if the game takes over 10 s to get there) */
+	if (test_control)
+		so_set_ppc_word(SO_TEST_RETRACES, 0);
 	(void)unused;
 	for (;;) {
 		so_sleep_us(WATCH_PERIOD_US);
-		so_alloc_check();
+		/* (not in a game: it holds the heap's lock for ms, and the network thread, needing
+		 * that with the lock the game's polls wait for, holds up a poll: a player's build
+		 * has no such thing, and a test should not measure it) */
+		if (!so_client_online_game())
+			so_alloc_check();
+		if (!test_control)
+			continue;
+		if (++n % 10 == 0) {
+			so_log("diag: test word %08x, retraces %u", (unsigned)so_ppc_word(SO_TEST_EXIT_WORD),
+				(unsigned)so_ppc_word(SO_TEST_RETRACES));
+			/* out of a game, what the menus see (a sweep once sat on the CSS with its bot's
+			 * cursor on its character, never picked): the scene, the CSS's port in control and
+			 * its door's icon (picked), each port's buttons held (HSD_PadMasterStatus) */
+			if ((so_ppc_word(0x00479D30) & 0xFF0000FF) != 0x08000002) {	/* not in a match */
+				u32 port = so_ppc_word(0x004D6CF0) >> 24 & 3;
+				so_log("diag: menus: scene %08x, CSS port %u icon %02x, buttons %08x %08x %08x %08x",
+					(unsigned)so_ppc_word(0x00479D30), (unsigned)port,
+					(unsigned)(so_ppc_word((0x003F0DFC + port * 0x24 + 0x0E) & ~3u) >> (8 * (3 - ((0x0E + port * 0x24) & 3))) & 0xFF),
+					(unsigned)so_ppc_word(0x004C1FAC), (unsigned)so_ppc_word(0x004C1FAC + 0x44),
+					(unsigned)so_ppc_word(0x004C1FAC + 0x88), (unsigned)so_ppc_word(0x004C1FAC + 0xCC));
+			}
+		}
+		/* A PowerPC that has stopped takes no exit request: nothing comes back from
+		 * this but a power cycle, unless the kernel starts the next title itself. */
+		if (so_ppc_word(SO_TEST_RETRACES) != retraces) {
+			retraces = so_ppc_word(SO_TEST_RETRACES);
+			still = 0;
+		} else if (!retraces && ++booting == BOOT_HUNG_S) {
+			/* A game that never got to its first retrace: tests go back by themselves */
+			so_log("diag: PPC HUNG: no first retrace in %u s", (unsigned)BOOT_HUNG_S);
+			so_patch_check_codes();
+			so_exi_report_last();
+			so_diag_launch_loader();
+		} else if (retraces && ++still == HUNG_S) {
+			so_log("diag: PPC HUNG: no retrace for %u s", (unsigned)HUNG_S);
+			so_exi_report_last();
+			so_diag_launch_loader();
+		}
 	}
 	return 0;
+}
+
+void so_diag_exit_watch(void)
+{
+	u32 step = 0, t;
+	for (t = 0; t < 100; t++) {
+		if (so_ppc_word(SO_EXIT_STEP) != step) {
+			step = so_ppc_word(SO_EXIT_STEP);
+			so_log("exit: the PPC's step %u", (unsigned)step);
+		}
+		so_sleep_us(100000);
+	}
+}
+
+void so_diag_launch_loader(void)
+{
+	/* the Homebrew Channel: LULZ (1.1 on), JODI, HAXX (older) */
+	static const u32 titles[] = { 0x4C554C5A, 0x4A4F4449, 0x48415858 };
+	unsigned i;
+	if (!test_control)
+		return;
+	so_log("exit: the PPC did not reload IOS; launching the Homebrew Channel");
+	for (i = 0; i < sizeof(titles) / sizeof(titles[0]); i++) {
+		int res;
+		so_client_flush_logs();
+		res = so_launch_title(0x0001000100000000ULL | titles[i]);
+		so_log("exit: launching %08x: %d", (unsigned)titles[i], res);
+	}
+	so_client_flush_logs();
+}
+
+static void request_exit(void)
+{
+	so_set_ppc_word(SO_TEST_EXIT_WORD, SO_TEST_EXIT);
+	so_log("diag: the PC asked to go back to the Homebrew Channel");
 }
 
 void so_diag_start(const SoConfig *config)
 {
 	start_ticks = so_ticks();
+	if (config->test_control && config->log_host) {
+		test_control = 1;
+		so_set_ppc_word(SO_TEST_EXIT_WORD, SO_TEST_ARMED);
+		so_socket_set_control(config->log_host, request_exit);
+	}
 	if (!config->status_beacon)
 		return;
 	so_alloc_fill_free();

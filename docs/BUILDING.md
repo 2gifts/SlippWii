@@ -23,6 +23,7 @@ includes have been generated.
 | `tools/text_args/` | Keeps a text format's `%s` from reading a wild address (the same kind of code; see `HOW_IT_WORKS.md`) |
 | `tools/test_loader_settings.py` | The loader's settings file on a PC: what the menu saves comes back on the next start |
 | `tools/ppc/` | The crash reporter and diagnostics (PowerPC assembly) |
+| `tools/rollback/` | The savestate engine for rollback on the Wii (in development; `build_online_boot.py --rollback`; [ROLLBACK.md](ROLLBACK.md)) |
 | `Nintendont/loader/source/slippwii.c`, `vcdiff.c` | Before Melee starts: the account check, and Slippi's menu patches applied to the disc (first start) |
 | `release/` | What goes on the SD card besides the app: the Homebrew Channel icon and `meta.xml`, the account-copy script |
 | `tools/slippi_files.py` | Slippi's pinned files; `netplay.gct`, and a PC-side patcher for development |
@@ -33,11 +34,16 @@ includes have been generated.
 
 ```sh
 cd Nintendont/kernel/slippi_online && sh tests/run_tests.sh      # unit tests (needs a host gcc)
+sh Nintendont/kernel/slippi_online/tests/pc/build.sh            # the client built for Windows (MinGW gcc)
 python tools/online_selftest.py pc --game                       # the client vs a fake Melee and opponent
+python tools/online_selftest.py pc --game --rollback 2          # the same, rolling back (docs/ROLLBACK.md)
+python tools/rollback/test/run.py                               # the savestate engine vs a simulated Wii
 ```
 
 `online_selftest.py pc` needs a fake matchmaking server and peer (`slippi_fake_mm.exe`,
-`slippi_fake_peer.exe`, from the Melee 3DS port's Slippi tools); point `--tools` at them.
+`slippi_fake_peer.exe`, from the Melee 3DS port's Slippi tools); point `--tools` at them. Without
+gcc, `pip install ziglang` and set `CC="python -m ziglang cc"` (for the Windows build, add
+`-target x86_64-windows-gnu`).
 
 ## On a Wii
 

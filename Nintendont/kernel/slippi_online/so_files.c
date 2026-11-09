@@ -4,6 +4,7 @@
 #define SO_FILE_ID "files"
 #include "so_files.h"
 #include "so_alloc.h"
+#include "so_client.h"
 #include "so_platform.h"
 #include "so_util.h"
 #include "string.h"
@@ -190,6 +191,10 @@ int so_files_init(void)
 		gct_len = so_gct_drop(gct_data, before, dolphin_only, sizeof(dolphin_only) / sizeof(dolphin_only[0]));
 		if (gct_len != before)
 			so_log("files: dropped Dolphin-only Normal Lag Reduction (%u bytes)", (unsigned)(before - gct_len));
+		if (so_client_config()->test_old_capture_check)
+			so_log("files: tests: Slippi's capture check as it was");
+		else if (!so_gct_fix_capture_check(gct_data, gct_len))
+			so_log("files: Slippi's capture check not found: a late rollback can freeze this game");
 	} else {
 		if (res >= 0)
 			so_log("files: %s is not a usable codeset (%d bytes)", SO_GCT_PATH, res);
@@ -255,6 +260,33 @@ static u32 code_size(const u8 *gct, u32 off)
 	if (type == 0x08)
 		return 16;
 	return 8;
+}
+
+/* StartEngineLoop's CAPTURE_CHECK, as assembled. The offsets are ODB_'s: another
+ * version of Slippi's codes simply does not match. */
+static int is_capture_check(const u8 *code)
+{
+	return so_get_u32(code) == 0x887E038C &&	/* lbz r3, ODB_SAVESTATE_IS_PREDICTING(r30) */
+		so_get_u32(code + 4) == 0x2C030000 &&	/* cmpwi r3, 0 */
+		(so_get_u32(code + 8) & 0xFFFF0000) == 0x41820000 &&	/* beq CAPTURE_END */
+		so_get_u32(code + 12) == 0x807E0AC9 &&	/* lwz r3, ODB_STABLE_FINALIZED_FRAME(r30) */
+		so_get_u32(code + 16) == 0x7C1F1800 &&	/* cmpw r31, r3: the frame, the finalized one */
+		(so_get_u32(code + 20) & 0xFFFF0000) == 0x40810000;	/* ble CAPTURE_END */
+}
+
+int so_gct_fix_capture_check(u8 *gct, u32 len)
+{
+	u32 at, found = 0;
+	for (at = 8; at + 24 <= len; at += 4)
+		if (is_capture_check(gct + at)) {
+			if (found)
+				return 0;
+			found = at;
+		}
+	if (!found)
+		return 0;
+	so_put_u32(gct + found + 20, 0x41800000 | (so_get_u32(gct + found + 20) & 0xFFFF));	/* blt CAPTURE_END */
+	return 1;
 }
 
 u32 so_gct_drop(u8 *gct, u32 len, const u32 *addresses, int count)

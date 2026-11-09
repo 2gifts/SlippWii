@@ -17,6 +17,7 @@ typedef unsigned char u8;
 typedef signed char s8;
 typedef unsigned short u16;
 typedef unsigned int u32;
+typedef int s32;
 
 typedef struct {
 	u16 button;
@@ -61,6 +62,10 @@ typedef struct {
 	u8 idle_rounds;		/* 0xBA no inputs in a game: nobody is KO'd, it runs to the timer */
 	u8 over_limit[2];	/* 0xBB per port: over the ledge grab limit, near the end of these rounds */
 	u8 no_text_fix_rounds;	/* 0xBD tools/text_args/ taken out of Melee, to show what it prevents */
+	u8 person;		/* 0xBE the stick moves as a person's does (next_frame) */
+	u8 pad_bf;		/* 0xBF */
+	s32 played;		/* 0xC0 the game's frames in_game has made inputs for */
+	s8 jx, jy;		/* 0xC4 the stick's unsteadiness this frame */
 } Bot;
 
 #define B_LEFT 0x0001
@@ -158,6 +163,8 @@ static void css(Bot *b, Pad *o)
 			o->button = B_A;
 		return;
 	}
+	if (b->plan_len && b->round >= b->plan_len)
+		return;	/* the plan is played: wait here (a sweep ends on the menus) */
 	u8 icon = b->plan_len ? b->plan[b->round % b->plan_len][0] : 0;
 	u32 port = rd8(0x804D6CF0) & 3;
 	u32 cursor = rd32(0x804A0BC0 + port * 4);
@@ -194,7 +201,9 @@ static void css(Bot *b, Pad *o)
 		 * (door sel_icon at 0x803F0DFC + 0x24 * port + 0x0E); else again. */
 		u8 picked = rd8(0x803F0DFC + port * 0x24 + 0x0E);
 		b->last = (u32)picked << 24 | (u32)icon << 16 | port << 8 | b->round;
-		if (picked != icon) {
+		/* (the door shows a hovered character too: without the picked flag, an A that
+		 * missed left the bot pressing START on the CSS for good: 3 sweeps, 2026-11-08) */
+		if (picked != icon || !rd8(0x804D6CF7)) {
 			b->step = 0;
 			b->scene_polls = 20;	/* back to placing the cursor soon */
 			return;
@@ -288,42 +297,17 @@ static void no_text_fix(Bot *b, u32 bit)
 	}
 }
 
-static void in_game(Bot *b, Pad *o)
+/* The inputs for one more frame of a game */
+static void next_frame(Bot *b)
 {
 	u32 r;
-	u32 bit = b->round >= 1 && b->round <= 8 ? 1u << (b->round - 1) : 0;
-	short_timer(b, bit);
-	ledge_grabs(b, bit);
-	no_text_fix(b, bit);
-	if (b->idle_rounds & bit)
-		return;
-	if (b->lras_s && b->scene_polls > (u32)b->lras_s * 60) {
-		/* Quit the game as a player does: pause (Start), then hold L+R+A
-		 * and press Start again (Melee wants a fresh press, so it repeats). */
-		u32 t = b->scene_polls - (u32)b->lras_s * 60;
-		if (t < 2) {
-			o->button = B_START;
-		} else if (t >= 30) {
-			o->button = B_L | B_R | B_A;
-			o->l = o->r = 255;
-			if (t >= 40 && (t - 40) % 60 < 50)
-				o->button |= B_START;
-		}
-		return;
-	}
-	if (b->scene_polls < 60)
-		return;
 	if (b->hold) {
 		b->hold--;
-		if (b->hold == 0)
-			return;	/* one neutral poll between actions: buttons press again */
-		o->button = b->buttons;
-		o->sx = b->sx;
-		o->sy = b->sy;
-		o->cx = b->cx;
-		o->cy = b->cy;
-		o->l = b->tl;
-		o->r = b->tr;
+		if (b->hold == 0) {	/* one neutral frame between actions: buttons press again */
+			b->buttons = 0;
+			b->sx = b->sy = b->cx = b->cy = 0;
+			b->tl = b->tr = 0;
+		}
 		return;
 	}
 	r = next_rand(b);
@@ -362,6 +346,81 @@ static void in_game(Bot *b, Pad *o)
 	b->last = r;
 }
 
+static s8 stick_plus(s8 stick, s8 by)
+{
+	s32 v = (s32)stick + by;
+	return (s8)(v > 120 ? 120 : v < -120 ? -120 : v);
+}
+
+/* By the frame the inputs are for, Slippi's (ODB_FRAME), not by the polls: consoles
+ * poll differently (a Wii's rollbacks put polls off and add some, so counted
+ * in polls its inputs changed 20% more often than a PC's). The same plan so
+ * plays the same inputs on either: a fair comparison, for games of the same length. */
+static void in_game(Bot *b, Pad *o)
+{
+	u32 odb = rd32(0x804DB6A0 - 0x49E4);
+	s32 f = valid_ptr(odb) ? (s32)rd32(odb + 3) : (s32)b->scene_polls;
+	/* (before the online data holds this game's frame it can hold anything: a number far past the
+	 * polls would leave `played` there, and the bot on one input for the whole game) */
+	if (f < 0 || f > (s32)b->scene_polls + 120)
+		f = (s32)b->scene_polls;
+	u32 bit = b->round <= 8 ? 1u << (b->round ? b->round - 1 : 0) : 0;	/* (a game the count missed: as the first) */
+	short_timer(b, bit);
+	ledge_grabs(b, bit);
+	no_text_fix(b, bit);
+	if (b->idle_rounds & bit) {
+		/* (with `person`: the stick wiggles inside the deadzone, a new input every frame
+		 * that moves nobody, so every prediction is wrong and every frame rolls back:
+		 * a stage's own events, a Stadium transformation, inside rollbacks) */
+		if (b->person && f >= 60)
+			o->sx = (s8)((f % 7) * 3 - 9);	/* (never the last frame's) */
+		return;
+	}
+	if (b->lras_s && f > (s32)b->lras_s * 60) {
+		/* Quit the game as a player does: pause (Start), then hold L+R+A
+		 * and press Start again (Melee wants a fresh press, so it repeats). */
+		u32 t = (u32)f - (u32)b->lras_s * 60;
+		if (t < 2) {
+			o->button = B_START;
+		} else if (t >= 30) {
+			o->button = B_L | B_R | B_A;
+			o->l = o->r = 255;
+			if (t >= 40 && (t - 40) % 60 < 50)
+				o->button |= B_START;
+		}
+		return;
+	}
+	if (f < 60)
+		return;
+	if (b->played < 60) {
+		b->played = 60;
+		b->rng = 0x9E3779B9u ^ b->seed ^ ((u32)b->round << 8);
+		b->hold = 0;
+	}
+	while (b->played < f) {
+		b->played++;
+		next_frame(b);
+		/* A person's stick is never still: real games change input on about half of all
+		 * frames, mostly the stick by a little, which is what makes a person cost several
+		 * times a plain bot's rollbacks. */
+		if (b->person) {
+			u32 r = next_rand(b);
+			b->jx = b->jy = 0;
+			if ((b->sx || b->sy) && (r & 1)) {
+				b->jx = (s8)((r >> 8) % 7) - 3;
+				b->jy = (s8)((r >> 16) % 7) - 3;
+			}
+		}
+	}
+	o->button = b->buttons;
+	o->sx = stick_plus(b->sx, b->jx);
+	o->sy = stick_plus(b->sy, b->jy);
+	o->cx = b->cx;
+	o->cy = b->cy;
+	o->l = b->tl;
+	o->r = b->tr;
+}
+
 static void results(Bot *b, Pad *o)
 {
 	if (pulse(b, 30, 15))
@@ -379,14 +438,17 @@ void autoplay_poll(Pad *status, Bot *b)
 	major = scene >> 24;
 	minor = scene & 0xFF;
 	if (scene != b->scene) {
+		/* a game started: the scene's major and minor (its other bytes
+		 * change during a game too) */
+		if (major == 8 && minor == 2 && !(b->scene >> 24 == 8 && (b->scene & 0xFF) == 2))
+			b->round++;
 		b->scene = scene;
 		b->scene_polls = 0;
+		b->played = 0;
 		b->step = 0;
 		b->hold = 0;
 		b->scan_t = 0;
 		b->cursor = 0;
-		if (major == 8 && minor == 2)
-			b->round++;
 	} else {
 		b->scene_polls++;
 	}

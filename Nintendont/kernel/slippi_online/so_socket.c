@@ -19,7 +19,12 @@ extern u32 current_ip_address;
 extern char __slippi_online_rx_stack_addr, __slippi_online_rx_stack_size;
 extern char __slippi_online_done_stack_addr, __slippi_online_done_stack_size;	/* sender */
 
-#define THREAD_PRIORITY 0x78
+/* The receive and sender threads run below IOS's network module, which then gets
+ * on with their calls at once: acks take 3.5 ms, not 5.8 (Dolphin's time sync takes
+ * half of that as the way here, and this console's inputs arrive that much late),
+ * and sends 1.3 ms, not 2.6. So nothing here holds a lock a higher thread needs:
+ * the rings have one writer and one reader each, and each counter one writer. */
+#define THREAD_PRIORITY 0x40
 #define RX_SLOTS 32
 #define TX_SLOTS 16
 
@@ -39,6 +44,7 @@ typedef struct {
 	u32 addr;	/* 0: the socket is connected (no destination) */
 	u16 port;
 	u16 len;
+	u8 busy;	/* with a sender thread */
 	u64 queued_us;
 } __attribute__((aligned(32))) TxSlot;
 
@@ -50,18 +56,41 @@ static SoEvent *wake_event;
 static SoEvent rx_open_event;
 
 static RxSlot *rx_ring;
-static u32 rx_head, rx_tail;	/* head: next write; tail: next read */
-static SoMutex rx_lock;
+static volatile u32 rx_head, rx_tail;	/* head: next write (the receive thread); tail: next read */
 
 static TxSlot *tx_ring;	/* on the online heap, as rx_ring: the kernel's data region is full */
-static u32 tx_head, tx_tail;	/* head: next write; tail: next to send */
+/* head: next write (taken under tx_lock, among writers only); next: next to send;
+ * tail: the oldest slot not yet free */
+static volatile u32 tx_head, tx_next, tx_tail;
 static SoMutex tx_lock;
 static SoEvent tx_event;
-static struct sendto_params tx_params __attribute__((aligned(32)));
-static ioctlv tx_vec[2] __attribute__((aligned(32)));
+/* A blocking IOS sendto has been seen never to return (with recvfrom and the TCP
+ * replay stream fine): the opponent got no more inputs, and the game ended in a
+ * disconnect 7 s later. With nothing to cancel it with, a spare thread takes over
+ * the queue (so_socket_check_sender). */
+#define SENDERS 2
+#define SENDER_STACK 0x800
+#define SEND_STUCK_US 250000
+typedef struct {
+	struct sendto_params params __attribute__((aligned(32)));
+	ioctlv vec[2] __attribute__((aligned(32)));
+	volatile u64 since_us;	/* in sendto since: 0, not in one */
+	TxSlot *volatile slot;	/* its datagram */
+} __attribute__((aligned(32))) TxCall;
+static TxCall *tx_calls;
+static u8 *spare_stack;
+static SoMutex tx_next_lock;	/* between the senders */
+static volatile int spare_running;
+volatile int so_socket_test_stuck;	/* tests (test_stuck_frame): the next sendto does not return */
 
 static SoSocketStats stats;
-static SoMutex stats_lock;
+/* so_socket_set_rx_hook: a look at each datagram as it arrives, on the receive thread */
+static void (*rx_hook)(const u8 *data, u32 len, u32 addr, u16 port);
+/* so_socket_send_urgent: one datagram the sender takes before the queue */
+static TxSlot *urgent_slot;
+static volatile int urgent_full;	/* 1 waiting, 2 being sent */
+static u32 control_host;
+static void (*control_exit)(void);
 static int initialised;
 
 /* ---- IOS socket calls ---------------------------------------------------- */
@@ -124,18 +153,16 @@ static u32 ReceiveThread(void *unused)
 		if (generation != sock_generation)
 			continue;	/* the socket was closed or replaced while we waited */
 		if (n < 0) {
-			so_mutex_lock(&stats_lock);
 			stats.receive_errors++;
-			so_mutex_unlock(&stats_lock);
 			so_sleep_us(5000);
 			continue;
 		}
-		so_mutex_lock(&rx_lock);
+		if (control_host && addr == control_host && n >= 11 && memcmp(rx_buffer, "SLPWII EXIT", 11) == 0) {
+			control_exit();
+			continue;
+		}
 		if (rx_head - rx_tail >= RX_SLOTS) {
-			so_mutex_unlock(&rx_lock);
-			so_mutex_lock(&stats_lock);
 			stats.receive_dropped++;
-			so_mutex_unlock(&stats_lock);
 		} else {
 			RxSlot *slot = &rx_ring[rx_head % RX_SLOTS];
 			u32 len = (u32)n > SO_DATAGRAM_MAX ? SO_DATAGRAM_MAX : (u32)n;
@@ -145,10 +172,9 @@ static u32 ReceiveThread(void *unused)
 			slot->arrived_us = so_time_us();
 			memcpy(slot->data, rx_buffer, len);
 			rx_head++;
-			so_mutex_unlock(&rx_lock);
-			so_mutex_lock(&stats_lock);
 			stats.received++;
-			so_mutex_unlock(&stats_lock);
+			if (rx_hook)	/* (queued: it will be taken; a dropped one is never looked at) */
+				rx_hook(slot->data, len, addr, port);
 			if (wake_event)
 				so_event_signal(wake_event);
 		}
@@ -159,39 +185,50 @@ static u32 ReceiveThread(void *unused)
 /* Sends the queued datagrams one by one with a blocking IOS sendto (the
  * layout libogc's net_sendto uses). Asynchronous IOS socket requests froze
  * the console in the M2 hardware runs, so the kernel never issues them. */
-static u32 SenderThread(void *unused)
+static u32 SenderThread(void *arg)
 {
-	(void)unused;
+	TxCall *call = (TxCall *)arg;
 	for (;;) {
 		TxSlot *slot = NULL;
 		u64 started;
 		s32 res;
-		u32 took;
+		u32 took, waited;
 		SO_TRACE(SO_THREAD_DONE);
-		so_mutex_lock(&tx_lock);
-		if (tx_tail != tx_head)
-			slot = &tx_ring[tx_tail % TX_SLOTS];
-		so_mutex_unlock(&tx_lock);
+		so_mutex_lock(&tx_next_lock);
+		if (urgent_full == 1) {
+			slot = urgent_slot;
+			urgent_full = 2;
+		} else if (tx_next != tx_head) {
+			slot = &tx_ring[tx_next % TX_SLOTS];
+			slot->busy = 1;
+			tx_next++;
+		}
+		so_mutex_unlock(&tx_next_lock);
 		if (!slot) {
 			so_event_wait(&tx_event, 0);
 			continue;
 		}
-		memset(&tx_params, 0, sizeof(tx_params));
-		tx_params.socket = (u32)slot->socket;
-		tx_params.flags = 0;
-		tx_params.has_destaddr = slot->addr != 0;
+		memset(&call->params, 0, sizeof(call->params));
+		call->params.socket = (u32)slot->socket;
+		call->params.flags = 0;
+		call->params.has_destaddr = slot->addr != 0;
 		if (slot->addr)
-			fill_sockaddr(tx_params.destaddr, slot->addr, slot->port);
-		tx_vec[0].data = slot->data;
-		tx_vec[0].len = slot->len;
-		tx_vec[1].data = &tx_params;
-		tx_vec[1].len = sizeof(tx_params);
+			fill_sockaddr(call->params.destaddr, slot->addr, slot->port);
+		call->vec[0].data = slot->data;
+		call->vec[0].len = slot->len;
+		call->vec[1].data = &call->params;
+		call->vec[1].len = sizeof(call->params);
 		started = so_time_us();
+		waited = (u32)(started - slot->queued_us);
+		call->slot = slot;
+		call->since_us = started;
+		while (so_socket_test_stuck && call == &tx_calls[0])
+			so_sleep_us(100000);
 		SO_TRACE(SO_THREAD_DONE);
-		res = IOS_Ioctlv(top_fd, IOCTLV_SO_SENDTO, 2, 0, tx_vec);
+		res = IOS_Ioctlv(top_fd, IOCTLV_SO_SENDTO, 2, 0, call->vec);
 		SO_TRACE(SO_THREAD_DONE);
+		call->since_us = 0;
 		took = (u32)(so_time_us() - started);
-		so_mutex_lock(&stats_lock);
 		if (res < 0)
 			stats.send_errors++;
 		else
@@ -199,10 +236,31 @@ static u32 SenderThread(void *unused)
 		if (took > stats.send_us_max)
 			stats.send_us_max = took;
 		stats.send_us_sum += took;
-		so_mutex_unlock(&stats_lock);
-		so_mutex_lock(&tx_lock);
-		tx_tail++;
-		so_mutex_unlock(&tx_lock);
+		stats.tx_wait_sum += waited;
+		stats.sends++;
+		stats.sends_us += took;
+		stats.send_hist[took < 500 ? 0 : took < 1000 ? 1 : took < 2000 ? 2 : took < 3000 ? 3 : took < 5000 ? 4 : 5]++;
+		{
+			u32 *b = stats.by_size[slot->len >= SO_SMALL_DATAGRAM];
+			b[0]++;
+			b[1] += slot->len;
+			b[2] += waited;
+			b[3] += took;
+		}
+		if (waited > stats.tx_wait_max)
+			stats.tx_wait_max = waited;
+		so_mutex_lock(&tx_next_lock);
+		if (slot == urgent_slot) {
+			if (!spare_running)	/* (after a stuck sendto it stays taken, see so_socket_check_sender) */
+				urgent_full = 0;
+			stats.urgent_sent++;
+			so_mutex_unlock(&tx_next_lock);
+			continue;
+		}
+		slot->busy = 0;
+		while (tx_tail != tx_next && !tx_ring[tx_tail % TX_SLOTS].busy)
+			tx_tail++;
+		so_mutex_unlock(&tx_next_lock);
 	}
 	return 0;
 }
@@ -215,14 +273,17 @@ int so_socket_init(void)
 		return 0;
 	rx_ring = (RxSlot *)so_malloc(sizeof(RxSlot) * RX_SLOTS);
 	tx_ring = (TxSlot *)so_malloc(sizeof(TxSlot) * TX_SLOTS);
-	if (!rx_ring || !tx_ring)
+	tx_calls = (TxCall *)so_malloc(sizeof(TxCall) * SENDERS);
+	spare_stack = (u8 *)so_malloc(SENDER_STACK);
+	urgent_slot = (TxSlot *)so_malloc(sizeof(TxSlot));
+	if (!rx_ring || !tx_ring || !tx_calls || !spare_stack || !urgent_slot)
 		return -1;
-	if (so_mutex_init(&rx_lock) < 0 || so_mutex_init(&tx_lock) < 0 || so_mutex_init(&stats_lock) < 0 ||
-	    so_event_init(&rx_open_event) < 0)
+	memset(tx_calls, 0, sizeof(TxCall) * SENDERS);
+	if (so_mutex_init(&tx_lock) < 0 || so_mutex_init(&tx_next_lock) < 0 || so_event_init(&rx_open_event) < 0)
 		return -2;
 	if (so_event_init(&tx_event) < 0)
 		return -3;
-	if (so_thread_start(SenderThread, NULL, &__slippi_online_done_stack_addr,
+	if (so_thread_start(SenderThread, &tx_calls[0], &__slippi_online_done_stack_addr,
 			(u32)(size_t)&__slippi_online_done_stack_size, THREAD_PRIORITY) < 0 ||
 	    so_thread_start(ReceiveThread, NULL, &__slippi_online_rx_stack_addr,
 			(u32)(size_t)&__slippi_online_rx_stack_size, THREAD_PRIORITY) < 0)
@@ -261,9 +322,7 @@ int so_socket_open(u16 port)
 		close(top_fd, s);
 		return res;
 	}
-	so_mutex_lock(&rx_lock);
-	rx_head = rx_tail = 0;
-	so_mutex_unlock(&rx_lock);
+	rx_tail = rx_head;
 	sock_port = port;
 	sock_generation++;
 	sock = s;
@@ -273,9 +332,7 @@ int so_socket_open(u16 port)
 
 void so_socket_flush(void)
 {
-	so_mutex_lock(&rx_lock);
 	rx_tail = rx_head;
-	so_mutex_unlock(&rx_lock);
 }
 
 void so_socket_close(void)
@@ -320,9 +377,7 @@ static int send_on(s32 s, u32 addr, u16 port, const SoSlice *slices, int count)
 	depth = tx_head - tx_tail;
 	if (depth >= TX_SLOTS) {
 		so_mutex_unlock(&tx_lock);
-		so_mutex_lock(&stats_lock);
 		stats.send_dropped++;
-		so_mutex_unlock(&stats_lock);
 		return -2;
 	}
 	slot = &tx_ring[tx_head % TX_SLOTS];
@@ -338,10 +393,8 @@ static int send_on(s32 s, u32 addr, u16 port, const SoSlice *slices, int count)
 	slot->queued_us = so_time_us();
 	tx_head++;
 	so_mutex_unlock(&tx_lock);
-	so_mutex_lock(&stats_lock);
 	if (depth + 1 > stats.send_queue_max)
 		stats.send_queue_max = depth + 1;
-	so_mutex_unlock(&stats_lock);
 	so_event_signal(&tx_event);
 	return (int)len;
 }
@@ -393,10 +446,46 @@ int so_socket_send_aux(u32 addr, u16 port, const void *data, u32 len)
 	}
 }
 
+void so_socket_set_rx_hook(void (*hook)(const u8 *data, u32 len, u32 addr, u16 port))
+{
+	rx_hook = hook;
+}
+
+/* The urgent slot: one datagram, sent next (before the queue). From any thread;
+ * while the slot is taken: -2, and the caller sends it the normal way. */
+int so_socket_send_urgent(u32 addr, u16 port, const void *data, u32 len)
+{
+	s32 s = sock;
+	if (s < 0 || !urgent_slot || len > SO_DATAGRAM_MAX)
+		return -1;
+	so_mutex_lock(&tx_next_lock);
+	if (urgent_full) {
+		so_mutex_unlock(&tx_next_lock);
+		stats.urgent_busy++;
+		return -2;
+	}
+	memcpy(urgent_slot->data, data, len);
+	urgent_slot->socket = s;
+	urgent_slot->addr = addr;
+	urgent_slot->port = port;
+	urgent_slot->len = (u16)len;
+	urgent_slot->queued_us = so_time_us();
+	urgent_full = 1;
+	so_mutex_unlock(&tx_next_lock);
+	so_event_signal(&tx_event);
+	return (int)len;
+}
+
+void so_socket_set_control(u32 host, void (*on_exit)(void))
+{
+	control_exit = on_exit;
+	control_host = host;
+}
+
 int so_socket_receive(u32 *addr, u16 *port, void *buf, u32 size, u64 *arrived_us)
 {
 	int n = 0;
-	so_mutex_lock(&rx_lock);
+	u32 waited = 0;
 	if (rx_tail != rx_head) {
 		RxSlot *slot = &rx_ring[rx_tail % RX_SLOTS];
 		n = slot->len < size ? slot->len : (int)size;
@@ -405,19 +494,21 @@ int so_socket_receive(u32 *addr, u16 *port, void *buf, u32 size, u64 *arrived_us
 		*port = slot->port;
 		if (arrived_us)
 			*arrived_us = slot->arrived_us;
+		waited = (u32)(so_time_us() - slot->arrived_us);
 		rx_tail++;
 	}
-	so_mutex_unlock(&rx_lock);
+	if (n) {
+		stats.rx_wait_sum += waited;
+		stats.rx_waits++;
+		if (waited > stats.rx_wait_max)
+			stats.rx_wait_max = waited;
+	}
 	return n;
 }
 
 int so_socket_pending(void)
 {
-	int pending;
-	so_mutex_lock(&rx_lock);
-	pending = rx_tail != rx_head;
-	so_mutex_unlock(&rx_lock);
-	return pending;
+	return rx_tail != rx_head;
 }
 
 int so_socket_wait(u32 timeout_us)
@@ -538,11 +629,36 @@ void so_socket_stats_peek(SoSocketStats *out)
 	memcpy(out, (const void *)&stats, sizeof(*out));
 }
 
+void so_socket_check_sender(void)
+{
+	u64 since = tx_calls ? tx_calls[0].since_us : 0;
+	if (since && !spare_running && so_time_us() - since > SEND_STUCK_US) {
+		TxSlot *slot = tx_calls[0].slot;
+		spare_running = 1;
+		stats.sends_stuck++;
+		/* its slot goes back in use, or the queue would fill behind it (if the
+		 * call ever returns, ENet takes a garbled datagram for what it is) */
+		so_mutex_lock(&tx_next_lock);
+		if (slot != urgent_slot)	/* (the urgent slot stays taken: acks go the usual way) */
+			slot->busy = 0;
+		while (tx_tail != tx_next && !tx_ring[tx_tail % TX_SLOTS].busy)
+			tx_tail++;
+		so_mutex_unlock(&tx_next_lock);
+		so_log("socket: a sendto has not returned for %u ms; a spare sender takes over",
+			(unsigned)((so_time_us() - since) / 1000));
+		if (so_thread_start(SenderThread, &tx_calls[1], spare_stack + SENDER_STACK, SENDER_STACK, THREAD_PRIORITY) < 0)
+			so_log("socket: could not start the spare sender");
+		so_event_signal(&tx_event);
+	}
+}
+
 void so_socket_stats(SoSocketStats *out)
 {
-	so_mutex_lock(&stats_lock);
 	*out = stats;
 	stats.send_queue_max = 0;
 	stats.send_us_max = 0;
-	so_mutex_unlock(&stats_lock);
+	stats.rx_wait_sum = stats.rx_wait_max = stats.rx_waits = 0;
+	stats.tx_wait_sum = stats.tx_wait_max = stats.sends = stats.sends_us = 0;
+	memset(stats.by_size, 0, sizeof(stats.by_size));
+	memset(stats.send_hist, 0, sizeof(stats.send_hist));
 }

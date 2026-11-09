@@ -70,11 +70,13 @@ def set_ini(path, section, values):
     path.write_text('\n'.join(out) + '\n', encoding='utf-8')
 
 
-def make(name, code, opponent=None, autoplay=None, mm_host='127.0.0.1'):
+def make(name, code, opponent=None, autoplay=None, mm_host='127.0.0.1', lan_ip=None, port=None):
     """mm_host: where the fake matchmaking server is. Use this PC's LAN
     address when the opponent is another machine (the Wii): Dolphin reports
     the address it reaches the server from as its own, and 127.0.0.1 would
-    send the Wii to itself."""
+    send the Wii to itself. lan_ip, port: the LAN address Dolphin gives
+    matchmaking and the port it plays from (net_relay.py: its opponent then
+    reaches it through the relay)."""
     if len(mm_host) >= len(MM_NAME):
         sys.exit(f'{mm_host}: at most {len(MM_NAME) - 1} characters (it replaces mm.slippi.gg in place)')
     dest = OUT / name
@@ -99,12 +101,19 @@ def make(name, code, opponent=None, autoplay=None, mm_host='127.0.0.1'):
         'SlippiReplayDir': str(replays), 'SlippiReplayMonthFolders': 'True', 'SlippiSaveReplays': 'True',
         'SlippiEnableSpectator': 'False', 'SlippiJukeboxEnabled': 'False', 'SlippiOnlineDelay': '2',
         'EnableCheats': 'True',  # Dolphin applies user Gecko codes (the autoplay) only with this
-        'SlippiForceLanIp': 'False' if mm_host.startswith('127.') else 'True',
-        'SlippiLanIp': '' if mm_host.startswith('127.') else mm_host,
+        'SlippiForceLanIp': 'False' if mm_host.startswith('127.') and not lan_ip else 'True',
+        'SlippiLanIp': lan_ip or ('' if mm_host.startswith('127.') else mm_host),
+        'SlippiForceNetplayPort': 'True' if port else 'False', 'SlippiNetplayPort': str(port or 0),
         'SIDevice0': '6', 'SIDevice1': '0', 'SIDevice2': '0', 'SIDevice3': '0',
         'MemcardAPath': str(gc / 'MemoryCardA.USA.raw'), 'MemcardBPath': str(gc / 'MemoryCardB.USA.raw'),
     })
     set_ini(user / 'Config/Dolphin.ini', 'Display', {'Fullscreen': 'False', 'RenderToMain': 'True'})
+    # Slippi's online log, to User/Logs/dolphin.log: what its player feels of
+    # the opponent (halts at the rollback limit, time sync's skips, advances
+    # and speed changes)
+    set_ini(user / 'Config/Logger.ini', 'Options', {'Verbosity': '4', 'WriteToFile': 'True',
+                                                    'WriteToConsole': 'False', 'WriteToWindow': 'False'})
+    set_ini(user / 'Config/Logger.ini', 'Logs', {'SLIPPI_ONLINE': 'True'})
     set_ini(user / 'Config/Dolphin.ini', 'General', {'ISOPaths': '1', 'ISOPath0': str(ISO_DIR)})
     game = user / 'GameSettings/GALE01.ini'
     game.parent.mkdir(parents=True, exist_ok=True)

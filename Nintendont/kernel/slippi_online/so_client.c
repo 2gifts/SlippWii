@@ -12,6 +12,7 @@
 #include "so_diag.h"
 #include "so_exi.h"
 #include "so_files.h"
+#include "so_prefetch.h"
 #include "so_platform.h"
 #include "so_selftest.h"
 #include "so_socket.h"
@@ -51,6 +52,7 @@ static struct {
 	u32 log_sent_ms;
 	u32 init_ms;
 	int main_priority;	/* as last set (SO_MAIN_THREAD_PRIORITY at start) */
+	u64 sender_checked_us;
 	u8 game_asked;	/* the game has asked for a match: boot is over */
 } c;
 
@@ -63,9 +65,11 @@ const char *so_client_state_name(SoClientState state)
 	return (unsigned)state < sizeof(state_names) / sizeof(state_names[0]) ? state_names[state] : "?";
 }
 
-/* While searching or playing, the kernel's main loop runs below IOS's
- * network module (online_main_priority); otherwise at its usual 0x50. */
+/* While searching or playing, the kernel's main loop runs above the threads
+ * that could hold up the game's polls (online_main_priority) and sleeps longer
+ * between passes (online_loop_us); otherwise at its usual 0x50 and 20 us. */
 volatile u32 so_main_loop_sleep_us = 20;
+volatile u32 so_main_loop_quick;
 
 /* Pads from the EXI device (main thread) to the network thread: one
  * producer, one consumer, no lock. */
@@ -78,6 +82,7 @@ typedef struct {
 static QueuedPad *pad_queue;	/* on the online heap (the kernel's bss is full) */
 static volatile u32 pad_head, pad_tail;
 static u32 pad_latency_max;
+static u32 pad_send_sum, pad_send_n, pad_send_max;	/* so_np_send_pad's time, us */
 
 void so_client_queue_pad(const SoLocalPad *pad)
 {
@@ -92,6 +97,15 @@ void so_client_queue_pad(const SoLocalPad *pad)
 	so_event_signal(&c.wake);
 }
 
+/* How long handing a pad to the network took (ENet and the socket's send),
+ * on average and at most, since the last call. */
+void so_client_take_pad_send_us(u32 *avg, u32 *max)
+{
+	*avg = pad_send_n ? pad_send_sum / pad_send_n : 0;
+	*max = pad_send_max;
+	pad_send_sum = pad_send_n = pad_send_max = 0;
+}
+
 u32 so_client_take_pad_latency_us(void)
 {
 	u32 v = pad_latency_max;
@@ -100,13 +114,40 @@ u32 so_client_take_pad_latency_us(void)
 }
 
 /* Sends the queued pads (the lock is held). */
+/* How long the network thread held the lock the game's polls wait for, and doing what: sending
+ * the pads, ENet's service */
+static u32 hold_max_us[2], hold_long[2];
+
+static void note_hold(int what, u64 us)
+{
+	if (us > hold_max_us[what])
+		hold_max_us[what] = (u32)us;
+	if (us > 1500)
+		hold_long[what]++;
+}
+
+void so_client_log_holds(void)
+{
+	so_log("game lock: sending pads held it up to %u us, %u over 1.5 ms; ENet's service up to %u us, %u over 1.5 ms",
+		(unsigned)hold_max_us[0], (unsigned)hold_long[0], (unsigned)hold_max_us[1], (unsigned)hold_long[1]);
+	hold_max_us[0] = hold_max_us[1] = hold_long[0] = hold_long[1] = 0;
+}
+
 static void send_queued_pads(void)
 {
 	while (pad_queue && pad_tail != pad_head) {
 		u32 t = pad_tail;
 		u32 waited = (u32)(so_time_us() - pad_queue[t % PAD_QUEUE].queued_us);
-		if (so_np_status() == SO_NP_CONNECTED)
+		if (so_np_status() == SO_NP_CONNECTED) {
+			u64 t0 = so_time_us();
+			u32 took;
 			so_np_send_pad(pad_queue[t % PAD_QUEUE].has_pad ? &pad_queue[t % PAD_QUEUE].pad : NULL);
+			took = (u32)(so_time_us() - t0);
+			pad_send_sum += took;
+			pad_send_n++;
+			if (took > pad_send_max)
+				pad_send_max = took;
+		}
 		if (waited > pad_latency_max)
 			pad_latency_max = waited;
 		pad_tail = t + 1;
@@ -253,21 +294,26 @@ static void step(void)
 }
 
 /* Sends pending log lines to the PC (log_host) in batched datagrams, at most
- * every LOG_PERIOD_MS: IOS sends are slow. */
-static void forward_logs(void)
+ * every LOG_PERIOD_MS (IOS sends are slow) and not in the boot's quiet time;
+ * now_anyway (the kernel's exit: the last lines, a crash's report) both. */
+static void forward_logs(int now_anyway)
 {
-	static char datagram[1200];
+	enum { DATAGRAM = 1200 };
+	static char *datagram;	/* on the online heap: the kernel's data is full */
 	char line[192];
 	int len, n;
 	u32 now = so_time_ms();
-	if (!c.config.log_host || now - c.log_sent_ms < LOG_PERIOD_MS || !so_client_traffic_allowed())
+	if (!c.config.log_host ||
+	    (!now_anyway && (now - c.log_sent_ms < LOG_PERIOD_MS || !so_client_traffic_allowed())))
+		return;
+	if (!datagram && !(datagram = so_malloc(DATAGRAM)))
 		return;
 	c.log_sent_ms = now;
-	len = so_snprintf(datagram, sizeof(datagram), "SLPWII LOGS\n");
+	len = so_snprintf(datagram, DATAGRAM, "SLPWII LOGS\n");
 	while ((n = so_log_take(line, sizeof(line))) > 0) {
-		if (len + n + 1 >= (int)sizeof(datagram)) {
+		if (len + n + 1 >= DATAGRAM) {
 			so_socket_send_aux(c.config.log_host, c.config.log_port, datagram, len);
-			len = so_snprintf(datagram, sizeof(datagram), "SLPWII LOGS\n");
+			len = so_snprintf(datagram, DATAGRAM, "SLPWII LOGS\n");
 		}
 		memcpy(datagram + len, line, n);
 		len += n;
@@ -292,10 +338,31 @@ static void update_status(void)
 		so_set_status("SO %s", so_client_state_name(c.state));
 }
 
+/* The kernel is closing down: no more SD card writes (so_client_stop), then
+ * no more network (so_client_close). */
+static volatile int stopping, stopped_io, closing, closed, flush_asked;
+
 static u32 NetworkThread(void *unused)
 {
+	u64 now;
 	(void)unused;
 	for (;;) {
+		if (stopping)
+			stopped_io = 1;
+		if (flush_asked) {
+			forward_logs(1);
+			flush_asked = 0;
+		}
+		if (closing) {
+			so_mutex_lock(&c.lock);
+			stop_all();	/* the opponent is told */
+			so_mutex_unlock(&c.lock);
+			forward_logs(1);
+			so_socket_close();
+			closed = 1;
+			for (;;)
+				so_event_wait(&c.wake, 0);
+		}
 		u32 wait = IDLE_US;
 		if (c.state == SO_CLIENT_SEARCHING || c.state == SO_CLIENT_CONNECTING ||
 		    c.state == SO_CLIENT_CONNECTED || c.state == SO_CLIENT_DISCONNECTED)
@@ -317,13 +384,31 @@ static u32 NetworkThread(void *unused)
 			c.searches = 0;
 			begin_search();
 		}
+		/* Tests: the PC's "SLPWII EXIT" comes to the session socket, so it
+		 * is open from the boot's quiet time on, not only from a search. */
+		if (c.config.test_control && !so_socket_is_open() && so_client_traffic_allowed())
+			open_session_socket();
 		SO_TRACE(SO_THREAD_NET);
-		send_queued_pads();	/* first: they are the game's inputs */
-		step();
-		update_status();
+		{
+			u64 t0 = so_time_us(), t1, t2;
+			send_queued_pads();	/* first: they are the game's inputs */
+			t1 = so_time_us();
+			step();
+			t2 = so_time_us();
+			update_status();
+			note_hold(0, t1 - t0);
+			note_hold(1, t2 - t1);
+		}
 		so_mutex_unlock(&c.lock);
 
-		forward_logs();
+		forward_logs(0);
+		if (stopping)
+			continue;
+		now = so_time_us();
+		if (now - c.sender_checked_us > 1000000) {
+			c.sender_checked_us = now;
+			so_socket_check_sender();
+		}
 		so_exi_save_history();	/* after a search added a code (an SD write; not in a game) */
 		save_delay();
 		save_rumble();
@@ -369,7 +454,7 @@ int so_client_init(void)
 
 	SO_PHASE("init threads");
 	if (so_thread_start(NetworkThread, NULL, &__slippi_online_stack_addr, (u32)(size_t)&__slippi_online_stack_size,
-			NET_THREAD_PRIORITY) < 0)
+			c.config.online_net_priority ? c.config.online_net_priority : NET_THREAD_PRIORITY) < 0)
 		return -4;
 
 	so_mutex_lock(&c.lock);
@@ -381,8 +466,11 @@ int so_client_init(void)
 
 	/* Slippi's codeset and menu files, for the game's online modes. */
 	so_files_init();
-	if (so_client_online_game())
+	if (so_client_online_game()) {
 		so_files_preload();
+		if (!c.config.prefetch_off)
+			so_pf_init();
+	}
 	if (c.config.selftest)
 		so_selftest_start(&c.config);
 	return 0;
@@ -421,7 +509,10 @@ int so_client_step_delay(int step)
 static void load_delay(void)
 {
 	char text[8];
-	int n = so_read_file(SO_DELAY_PATH, text, sizeof(text) - 1);
+	int n;
+	if (c.config.test_control)
+		return;	/* tests: config.ini's, not what a player last chose on this card */
+	n = so_read_file(SO_DELAY_PATH, text, sizeof(text) - 1);
 	if (n > 0 && text[0] >= '1' && text[0] <= '9')
 		c.config.delay = (u8)(text[0] - '0');
 }
@@ -579,6 +670,39 @@ int so_client_open_socket(u16 *port)
 	*port = c.port;
 	so_mutex_unlock(&c.lock);
 	return res;
+}
+
+void so_client_stop(void)
+{
+	int waited;
+	stopping = 1;
+	so_event_signal(&c.wake);
+	for (waited = 0; !stopped_io && waited < 500; waited++)
+		so_sleep_us(1000);
+	so_log("client: stopped for the exit (%s)", stopped_io ? "no SD writes" : "the network thread did not answer");
+}
+
+/* The kernel's log to the PC now, even in the boot's quiet time: the exit's
+ * lines (a crash's report among them) before the PPC reloads IOS. */
+void so_client_flush_logs(void)
+{
+	int waited;
+	flush_asked = 1;
+	so_event_signal(&c.wake);
+	for (waited = 0; flush_asked && waited < 300; waited++)
+		so_sleep_us(1000);
+}
+
+/* The end of the kernel's exit: the session ends, the last logs go out and
+ * the socket closes, so no receive is left pending in IOS's network stack
+ * while the loader has IOS reloaded. */
+void so_client_close(void)
+{
+	int waited;
+	closing = 1;
+	so_event_signal(&c.wake);
+	for (waited = 0; !closed && waited < 500; waited++)
+		so_sleep_us(1000);
 }
 
 int so_client_traffic_allowed(void)

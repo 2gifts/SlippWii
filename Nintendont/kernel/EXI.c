@@ -699,6 +699,16 @@ u32 EXIDeviceSP1( u8 *Data, u32 Length, u32 Mode )
 	return 0;
 }
 
+// Slippi Online: replay data the rollback engine left in MEM2 rather than wait for
+// the EXI (tools/rollback/rollback.c, replay_queue)
+void SlippiOnlineReplayData( void )
+{
+	const u8 *data;
+	u32 len;
+	while ((data = so_exi_replay_next(&len)))
+		SlippiMemoryWrite(data, len);
+}
+
 void EXIUpdateRegistersNEW( void )
 {
 	if( EXI_IRQ == true )//still working
