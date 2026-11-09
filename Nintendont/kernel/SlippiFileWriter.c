@@ -75,7 +75,10 @@ void SlippiFileWriterUpdateRegisters()
 
 void SlippiFileWriterShutdown()
 {
-	thread_cancel(Slippi_Thread, 0);
+	// Thread 0 is the caller: with replays off the writer never started, and
+	// cancelling 0 stopped the kernel's exit here.
+	if (Slippi_Thread)
+		thread_cancel(Slippi_Thread, 0);
 }
 
 void flashLED()

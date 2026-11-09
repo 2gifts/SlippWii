@@ -103,6 +103,18 @@ def main():
             sys.exit(f'uncommitted changes:\n{dirty}')
         if (APP / 'boot.dol').stat().st_mtime < int(git('log', '-1', '--format=%ct')):
             sys.exit('boot.dol is older than the last commit: run sh tools/build.sh')
+    # The committed boot codes (inside boot.dol) must be what their sources build.
+    boot_codes = ROOT / 'Nintendont/kernel/gecko/g_online_boot.bin'
+    committed = boot_codes.read_bytes()
+    try:
+        subprocess.run([sys.executable, str(ROOT / 'tools/build_online_boot.py')], check=True, cwd=ROOT,
+                       capture_output=True)
+        fresh = boot_codes.read_bytes()
+    finally:
+        boot_codes.write_bytes(committed)
+    if fresh != committed:
+        sys.exit(f'{boot_codes.name} is not what its sources build: run python tools/build_online_boot.py, '
+                 'then sh tools/build.sh, and commit')
     if f'SLIPPWII_VERSION\t"{v}"' not in (ROOT / 'Nintendont/common/include/Metadata.h').read_text():
         sys.exit(f'Nintendont/common/include/Metadata.h does not say SLIPPWII_VERSION "{v}"')
 

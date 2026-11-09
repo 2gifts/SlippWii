@@ -105,6 +105,7 @@ extern int dbgprintf( const char *fmt, ...);
 #endif
 
 extern u32 UseReadLimit;
+void ReadSpeed_Quicker(u32 pace, u32 seek_ms);
 extern u32 RealDiscCMD;
 extern u32 drcAddress;
 extern u32 drcAddressAligned;
@@ -126,6 +127,25 @@ u32 IsN64Emu = 0;
 #include "gecko/g_crash_output.h"
 
 // Boundaries of the tournament mode region in NTSC-U v1.02
+/* tests: a game that never reached its first retrace (so_diag.c). Are its boot codes as they were
+ * written, and is the way to them there? */
+static u32 so_codes_at, so_codes_base_word;
+void so_patch_check_codes(void)
+{
+	u32 i, bad = 0, first = 0, base = 0x80000000u | (so_codes_at + 8);
+	for (i = 0; i + 4 <= g_online_boot_size; i += 4) {
+		u32 want = (u32)g_online_boot[i] << 24 | (u32)g_online_boot[i + 1] << 16 | (u32)g_online_boot[i + 2] << 8 | g_online_boot[i + 3];
+		if (so_game_word(base + i) != want && !bad++)
+			first = i;
+	}
+	so_log("diag: boot codes at %08x: %u of %u words differ, the first at +%x", (unsigned)base, (unsigned)bad,
+		(unsigned)(g_online_boot_size / 4), (unsigned)first);
+	so_log("diag: __init_user %08x; list pointer %08x at %08x; handler %08x %08x %08x; 80003100 %08x %08x",
+		(unsigned)so_game_word(0x8034CAD8), (unsigned)so_game_word(0x80000000u | so_codes_base_word),
+		(unsigned)so_codes_base_word, (unsigned)so_game_word(0x80001000), (unsigned)so_game_word(0x800010A0),
+		(unsigned)so_game_word(0x80001100), (unsigned)so_game_word(0x80003100), (unsigned)so_game_word(0x80003104));
+}
+
 #define CODELIST_TOURNAMENT_BASE	0x001910E0
 #define CODELIST_TOURNAMENT_END		0x0019AF4C
 
@@ -3348,6 +3368,8 @@ void DoPatches( char *Buffer, u32 Length, u32 DiscOffset )
 			dbgprintf("Codelist at 0x%08x\r\n", (gct_cursor | 0x80000000));
 			memset((void*)gct_cursor, 0, max_gct_size);
 			write32(gct_base_addr, (gct_cursor | 0x80000000));
+			so_codes_at = gct_cursor;
+			so_codes_base_word = gct_base_addr;
 		}
 		if (onlineGame)
 			so_log("patch: Slippi Online codes at %08x (%u of %u bytes)", (unsigned)(gct_cursor | 0x80000000),
@@ -3954,6 +3976,8 @@ void DoPatches( char *Buffer, u32 Length, u32 DiscOffset )
 	// Triforce titles, and the N64 Emu work better without read speed
 	if((RealDiscCMD != 0 && !Datel) || TRIGame != TRI_NONE || IsN64Emu)
 		UseReadLimit = 0;
+	if (MeleeVersion && so_client_online_game())
+		ReadSpeed_Quicker(so_client_config()->test_read_pace, so_client_config()->test_read_seek_ms);
 }
 
 void PatchInit()

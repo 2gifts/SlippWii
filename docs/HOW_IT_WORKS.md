@@ -31,11 +31,14 @@ the Wii's ARM coprocessor (Starlet) beside the game. SlippWii adds the online ha
 
 ### Lockstep instead of rollback
 
-The Wii can't save and restore Melee's state fast enough to roll back, so it doesn't predict: when
-the opponent's input for a frame hasn't arrived, the kernel tells the online code to *skip* the
-frame (Slippi's own "wait" answer) and the game holds until it does. The opponent's Slippi Dolphin
+In releases the Wii doesn't predict: when the opponent's input for a frame hasn't arrived, the
+kernel tells the online code to *skip* the frame (Slippi's own "wait" answer) and the game holds
+until it does. The opponent's Slippi Dolphin
 still predicts and rolls back as usual. Both sides run the exact same inputs, so the games stay in
 sync. Desync detection (Slippi's per-frame checksums) works as on PC.
+
+Rollback on the Wii itself is in development: a savestate engine that runs on the Wii's CPU and
+tracks the game's writes with the MMU. See [ROLLBACK.md](ROLLBACK.md).
 
 ### Things a console needs that Dolphin doesn't
 

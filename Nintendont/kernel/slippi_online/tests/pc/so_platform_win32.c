@@ -56,6 +56,42 @@ void so_sleep_us(u32 us)
 	Sleep(us >= 1000 ? us / 1000 : (us ? 1 : 0));
 }
 
+/* The PPC's scratch is free: the rollback engine's side is the game's here
+ * (pc_game.c --rollback). */
+int so_ppc_scratch_free = 1;
+
+int so_launch_title(u64 title_id)
+{
+	(void)title_id;
+	return -1;
+}
+
+/* The words shared with the PowerPC (so_diag.h): plain memory here. */
+static u32 ppc_words[16];
+
+u32 so_ppc_word(u32 addr)
+{
+	return ppc_words[(addr >> 2) & 15];
+}
+
+void so_ppc_will_read(u32 addr, u32 len)
+{
+	(void)addr;
+	(void)len;
+}
+
+void so_ppc_set_block(u32 addr, const void *data, u32 len)
+{
+	(void)addr;
+	(void)data;
+	(void)len;
+}
+
+void so_set_ppc_word(u32 addr, u32 value)
+{
+	ppc_words[(addr >> 2) & 15] = value;
+}
+
 u32 so_random(void)
 {
 	u32 x = random_state;
@@ -319,3 +355,15 @@ size_t so_test_strlcpy(char *dest, const char *src, size_t size)
 	}
 	return n;
 }
+
+void so_drive_log(const char *what, int reset) { (void)what; (void)reset; }
+int so_drive_runs_line(int n, const char *what) { (void)n; (void)what; return 0; }
+
+/* so_prefetch (Wii only) */
+void so_pf_init(void) {}
+void so_pf_close(void) {}
+void so_pf_open(void) {}
+void so_pf_want_char(int who, unsigned char character, unsigned char color) { (void)who; (void)character; (void)color; }
+void so_pf_want_stage(unsigned short stage) { (void)stage; }
+
+void so_patch_check_codes(void) {}	/* (Patch.c on the Wii) */

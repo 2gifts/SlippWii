@@ -18,30 +18,105 @@ extern u8 wifi_mac_address[6];
 #define TICKS_PER_SECOND 1898614ULL
 
 static SoMutex time_lock;
-static u32 time_last_ticks;
-static u64 time_high;	/* ticks lost to wraps, in ticks */
+/* The timer's wraps, x 2, and its top bit when last seen. Read without the lock:
+ * the sender and receive threads, below IOS's network module, read the clock all
+ * the time, and with a lock around it, one preempted inside it held up the network
+ * thread and the game's polls behind it for milliseconds. Written only as the
+ * top bit changes, twice in the timer's 37 minutes. */
+static volatile u32 time_state;
 static int platform_ready;
+int so_ppc_scratch_free;
 
 u64 so_time_us(void)
 {
-	u64 ticks;
+	u32 now, state;
 	if (!platform_ready)
 		return (u64)read32(HW_TIMER) * 1000000ULL / TICKS_PER_SECOND;
-	so_mutex_lock(&time_lock);
-	{
-		u32 now = read32(HW_TIMER);
-		if (now < time_last_ticks)
-			time_high += 1ULL << 32;
-		time_last_ticks = now;
-		ticks = time_high + now;
+	state = time_state;
+	now = read32(HW_TIMER);
+	if ((state & 1) != now >> 31) {
+		so_mutex_lock(&time_lock);
+		state = time_state;
+		now = read32(HW_TIMER);
+		if ((state & 1) != now >> 31) {
+			state++;	/* 0 -> 1, or 1 -> 0 and a wrap: state >> 1 counts the wraps */
+			time_state = state;
+		}
+		so_mutex_unlock(&time_lock);
 	}
-	so_mutex_unlock(&time_lock);
-	return ticks * 1000000ULL / TICKS_PER_SECOND;
+	return (((u64)(state >> 1) << 32) + now) * 1000000ULL / TICKS_PER_SECOND;
 }
 
 u32 so_time_ms(void)
 {
 	return (u32)(so_time_us() / 1000);
+}
+
+u32 so_ppc_word(u32 addr)
+{
+	sync_before_read((void *)addr, 4);
+	return read32(addr);
+}
+
+void so_set_ppc_word(u32 addr, u32 value)
+{
+	write32(addr, value);
+	sync_after_write((void *)addr, 4);
+}
+
+void so_ppc_will_read(u32 addr, u32 len)
+{
+	sync_before_read((void *)addr, len);
+}
+
+void so_ppc_set_block(u32 addr, const void *data, u32 len)
+{
+	memcpy((void *)addr, data, len);
+	sync_after_write((void *)addr, len);
+}
+
+/* ES_GetViewCount, ES_GetViews, ES_LaunchTitle: resetstub/main.c's
+ * es_launchtitle, from the kernel's side of IPC. */
+int so_launch_title(u64 title_id)
+{
+	static const char es_path[] __attribute__((aligned(32))) = "/dev/es";
+	u64 *id = so_malloc(32);
+	u32 *count = so_malloc(32);
+	u8 *views = so_malloc(0xD8 * 4);
+	vector *v = so_malloc(3 * sizeof(vector) + 32);
+	int fd, res = -1;
+	if (!id || !count || !views || !v)
+		goto out;
+	fd = IOS_Open(es_path, 0);
+	if (fd < 0) {
+		res = fd;
+		goto out;
+	}
+	*id = title_id;
+	v[0].data = (u32)id;
+	v[0].len = 8;
+	v[1].data = (u32)count;
+	v[1].len = 4;
+	res = IOS_Ioctlv(fd, 0x12, 1, 1, v);	/* the ticket views' count */
+	if (res >= 0 && (*count < 1 || *count > 4))
+		res = -2;
+	if (res >= 0) {
+		v[2].data = (u32)views;
+		v[2].len = 0xD8 * *count;
+		res = IOS_Ioctlv(fd, 0x13, 2, 1, v);	/* the views */
+	}
+	if (res >= 0) {
+		v[1].data = (u32)views;
+		v[1].len = 0xD8;
+		res = IOS_Ioctlv(fd, 0x08, 2, 0, v);	/* launch: reboots, if it works */
+	}
+	IOS_Close(fd);
+out:
+	so_free(id);
+	so_free(count);
+	so_free(views);
+	so_free(v);
+	return res;
 }
 
 void so_sleep_us(u32 us)
@@ -182,7 +257,7 @@ s32 so_thread_start(u32 (*entry)(void *), void *arg, void *stack_top, u32 stack_
 
 /* ---- logging ------------------------------------------------------------- */
 
-#define LOG_LINES 64
+#define LOG_LINES 56
 #define LOG_LINE_SIZE 160
 
 static struct {
@@ -478,4 +553,41 @@ int so_platform_init(void)
 		random_state = 0x2545F491;
 	platform_ready = 1;
 	return 0;
+}
+
+extern u32 iso_reads, iso_read_bytes, iso_read_ticks, iso_cache_hits;
+
+extern u32 rs_cmds, rs_seeks, rs_bytes, rs_ticks;
+
+void so_drive_log(const char *what, int reset)
+{
+	so_log("%s: %u reads, %u KB, %u ms reading; %u from the cache; paced %u commands (%u seeks), %u KB, %u ms",
+		what, (unsigned)iso_reads, (unsigned)(iso_read_bytes >> 10), (unsigned)(iso_read_ticks / 1898),
+		(unsigned)iso_cache_hits, (unsigned)rs_cmds, (unsigned)rs_seeks, (unsigned)(rs_bytes >> 10),
+		(unsigned)(rs_ticks / 1898));
+	if (reset) {
+		rs_cmds = rs_seeks = rs_bytes = rs_ticks = 0;
+		iso_reads = iso_read_bytes = iso_read_ticks = iso_cache_hits = 0;
+		iso_ext_n = 0;
+	}
+}
+
+/* Runs as "start ms before now +offset KB/reads ms": the start's age, the
+ * disc offset (hex), its length, reads and read time */
+int so_drive_runs_line(int n, const char *what)
+{
+	char line[150];
+	u32 first = iso_ext_n > ISO_EXTENTS ? iso_ext_n - ISO_EXTENTS : 0, i, now = read32(HW_TIMER);
+	int len;
+	i = first + (u32)n * 4;
+	if (i >= iso_ext_n)
+		return 0;
+	len = so_snprintf(line, sizeof(line), "%s %u:", what, (unsigned)i);
+	for (; i < iso_ext_n && i < first + (u32)n * 4 + 4; i++) {
+		IsoExtent *e = &iso_ext[i % ISO_EXTENTS];
+		len += so_snprintf(line + len, sizeof(line) - len, " -%u@%x+%uK/%u/%u", (unsigned)((now - e->t_start) / 1898),
+			(unsigned)e->offset, (unsigned)(e->len >> 10), (unsigned)e->reads, (unsigned)(e->ticks / 1898));
+	}
+	so_log("%s", line);
+	return 1;
 }

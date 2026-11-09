@@ -3,9 +3,11 @@
  * to Slippi Dolphin's SlippiNetplayClient, which this follows step by step.
  */
 #include "so_netplay.h"
+#include "so_prefetch.h"
 #include "so_alloc.h"
 #include "so_platform.h"
 #include "so_util.h"
+#include "so_socket.h"
 #include "string.h"
 #include "enet/enet.h"
 
@@ -42,6 +44,7 @@ typedef struct {
 	u8 log_packets;
 	u8 drop_pct;
 	u16 ack_delay_us;
+	u8 fast_ack;
 	/* With ack_delay_us: the newest ack, held back until our next send
 	 * (ENet sends whatever it has queued on every service call). */
 	u8 ack_pending;
@@ -55,11 +58,17 @@ typedef struct {
 	u8 connected[SO_REMOTE_MAX];
 	Connection conns[MAX_CONNECTIONS];
 	u8 player_active[SO_MAX_PLAYERS];
+	SoLocalPad last_pad;	/* the newest pad pushed this game (frame 0: none yet) */
+	u32 pad_gaps;
 	u32 disconnect_reason;	/* ours, or the one an opponent sent */
 	u32 pending_reason;	/* sent with our disconnects */
 
 	/* game */
 	int game_started;
+	s32 frozen_head;	/* the newest pad sent ahead of the game (send_frozen_pads) */
+	u8 frozen_on, frozen_game_on;
+	s32 newest_offset_us;
+	u32 head_word, changed_word;	/* so_np_publish_head */
 	SoLocalPads local_pads;
 	SoRemotePads remote_pads[SO_REMOTE_MAX];
 	SoAckTimers ack_timers[SO_REMOTE_MAX];
@@ -200,10 +209,209 @@ static void flush(void)
 	enet_host_flush(np->host);
 }
 
+/* ---- the fast ack ----------------------------------------------------------
+ * The opponent measures its ping by our acks, and Dolphin's time sync takes our
+ * pads to have left half that ping before they came: every ms an ack waits here
+ * puts our pads half a ms late on the PC (its rollbacks deeper). Acked the usual
+ * way, a pad packet waits for the network thread, ENet's service and the send
+ * queue: 3.5-6 ms in all, of which IOS's sendto is ~1.5. So the receive thread
+ * acks it as it arrives, once it is queued: the same ENet datagram send_ack makes
+ * (unsequenced, channel 2, the group from ENet's own counter), sent before the
+ * send queue. The network thread then skips that ack. One opponent only.
+ *
+ * An ack makes the sender drop those frames for good, so only what will surely be
+ * kept is acked: a packet in the receive queue, that ENet will take (this peer, its
+ * session) and on_pad too (the opponent's player index), no more than FA_AHEAD frames
+ * past what the network thread has stored (a stalled thread: the usual acks, later).
+ * fa is published and torn down under unseq_lock, which the hook holds throughout. */
+#define FA_AHEAD 8
+static struct {
+	int on;
+	u32 addr;
+	u16 port;
+	u16 in_header;		/* the header (peer ID, session) on what they send us */
+	u16 out_header;		/* and on what we send them: their ID for us, the session */
+	u8 local_idx, remote_player;
+	ENetPeer *peer;
+	volatile s32 acked;	/* the newest frame acked, this game */
+	u32 sent, busy, held;
+} fa;
+static SoMutex unseq_lock;
+static int unseq_lock_ok;
+
+static void fa_lock(void)
+{
+	if (unseq_lock_ok)
+		so_mutex_lock(&unseq_lock);
+}
+
+static void fa_unlock(void)
+{
+	if (unseq_lock_ok)
+		so_mutex_unlock(&unseq_lock);
+}
+
+/* ENet's unsequenced groups (peer.c), for its sends and the fast acks alike: the
+ * receiver drops a group it has seen */
+enet_uint16 so_enet_next_unsequenced_group(ENetPeer *peer)
+{
+	enet_uint16 g;
+	fa_lock();
+	g = ++peer->outgoingUnsequencedGroup;
+	fa_unlock();
+	return g;
+}
+
+static u32 be16(const u8 *p) { return (u32)p[0] << 8 | p[1]; }
+
+/* The receive thread, every datagram: the newest pad frame in it, if it is the
+ * opponent's pad packet (else 0) */
+static s32 pad_frame_in(const u8 *d, u32 len)
+{
+	u32 off, header = len >= 2 ? be16(d) : 0;
+	s32 newest = 0;
+	if (len < 2 || (header & ~(u32)ENET_PROTOCOL_HEADER_FLAG_MASK) != fa.in_header ||
+	    (header & ENET_PROTOCOL_HEADER_FLAG_COMPRESSED))
+		return 0;
+	off = header & ENET_PROTOCOL_HEADER_FLAG_SENT_TIME ? 4 : 2;
+	while (off + 4 <= len) {
+		u32 cmd = d[off] & ENET_PROTOCOL_COMMAND_MASK, size = 0, data = 0;
+		switch (cmd) {
+		case ENET_PROTOCOL_COMMAND_ACKNOWLEDGE: size = 8; break;
+		case ENET_PROTOCOL_COMMAND_DISCONNECT: size = 8; break;
+		case ENET_PROTOCOL_COMMAND_PING: size = 4; break;
+		case ENET_PROTOCOL_COMMAND_BANDWIDTH_LIMIT: size = 12; break;
+		case ENET_PROTOCOL_COMMAND_THROTTLE_CONFIGURE: size = 16; break;
+		case ENET_PROTOCOL_COMMAND_SEND_RELIABLE:
+			if (off + 6 > len)
+				return newest;
+			size = 6;
+			data = be16(d + off + 4);
+			break;
+		case ENET_PROTOCOL_COMMAND_SEND_UNRELIABLE:
+		case ENET_PROTOCOL_COMMAND_SEND_UNSEQUENCED:
+			if (off + 8 > len)
+				return newest;
+			size = 8;
+			data = be16(d + off + 6);
+			break;
+		case ENET_PROTOCOL_COMMAND_SEND_FRAGMENT:
+		case ENET_PROTOCOL_COMMAND_SEND_UNRELIABLE_FRAGMENT:
+			if (off + 8 > len)
+				return newest;
+			size = 24;
+			data = be16(d + off + 6);
+			break;
+		default:
+			return newest;	/* (connect and verify: not in a game) */
+		}
+		if (off + size + data > len)
+			return newest;
+		/* (MSG_PAD: frame u32, player, checksum frame, checksum, the pads) */
+		if (cmd == ENET_PROTOCOL_COMMAND_SEND_UNSEQUENCED && d[off + 1] == 1 && data >= 14 &&
+		    d[off + size] == MSG_PAD && d[off + size + 5] == fa.remote_player) {
+			const u8 *m = d + off + size;
+			s32 f = (s32)((u32)m[1] << 24 | (u32)m[2] << 16 | (u32)m[3] << 8 | m[4]);
+			if (f > newest)
+				newest = f;
+		}
+		off += size + data;
+	}
+	return newest;
+}
+
+/* (frames count from 1 again each game: a frame far below the last acked starts one) */
+static int fa_already(s32 frame)
+{
+	return frame <= fa.acked && fa.acked - frame < 600;
+}
+
+/* so_socket's receive hook: the datagram is queued */
+static void fast_ack_hook(const u8 *d, u32 len, u32 addr, u16 port)
+{
+	u8 out[16];
+	s32 frame, head;
+	u32 g;
+	if (!fa.on)
+		return;
+	fa_lock();
+	if (!fa.on || addr != fa.addr || port != fa.port || np->remote_count != 1)
+		goto out;
+	frame = pad_frame_in(d, len);
+	if (frame <= 0 || fa_already(frame))
+		goto out;
+	head = np->remote_pads[0].head_frame;
+	if (frame > head + FA_AHEAD) {
+		fa.held++;	/* (the network thread behind: it acks this one) */
+		goto out;
+	}
+	if (((fa.peer->outgoingUnsequencedGroup + 1) & 1023) < 16) {
+		fa.held++;	/* (a new block of groups: out of order, it could push ENet's own queued ones out) */
+		goto out;
+	}
+	g = ++fa.peer->outgoingUnsequencedGroup;
+	out[0] = (u8)(fa.out_header >> 8);
+	out[1] = (u8)fa.out_header;
+	out[2] = ENET_PROTOCOL_COMMAND_SEND_UNSEQUENCED | ENET_PROTOCOL_COMMAND_FLAG_UNSEQUENCED;
+	out[3] = 2;		/* channel, as send_ack */
+	out[4] = out[5] = 0;	/* reliable sequence number: 0 for these */
+	out[6] = (u8)(g >> 8);
+	out[7] = (u8)g;
+	out[8] = 0;
+	out[9] = 6;		/* the data's length */
+	out[10] = MSG_PAD_ACK;
+	so_put_u32(out + 11, (u32)frame);
+	out[15] = fa.local_idx;
+	if (so_socket_send_urgent(addr, port, out, sizeof(out)) == (int)sizeof(out)) {
+		fa.acked = frame;
+		fa.sent++;
+	} else {
+		fa.busy++;	/* (the group is spent: the receiver takes a gap) */
+	}
+out:
+	fa_unlock();
+}
+
+static void fast_ack_off(void)
+{
+	fa_lock();
+	fa.on = 0;
+	fa_unlock();
+}
+
+/* The network thread, on each pad packet: what the receive thread needs */
+static void fast_ack_publish(ENetPeer *peer)
+{
+	u16 in_header, out_header;
+	if (!np->fast_ack || np->remote_count != 1 || peer != np->server[0] ||
+	    peer->state != ENET_PEER_STATE_CONNECTED || peer->outgoingPeerID >= ENET_PROTOCOL_MAXIMUM_PEER_ID) {
+		if (fa.on)
+			fast_ack_off();
+		return;
+	}
+	in_header = (u16)(peer->incomingPeerID | peer->incomingSessionID << ENET_PROTOCOL_HEADER_SESSION_SHIFT);
+	out_header = (u16)(peer->outgoingPeerID | peer->outgoingSessionID << ENET_PROTOCOL_HEADER_SESSION_SHIFT);
+	if (fa.on && fa.peer == peer && fa.in_header == in_header && fa.out_header == out_header &&
+	    fa.addr == peer->address.host && fa.port == peer->address.port)
+		return;
+	fa_lock();
+	fa.addr = peer->address.host;
+	fa.port = peer->address.port;
+	fa.in_header = in_header;
+	fa.out_header = out_header;
+	fa.local_idx = np->local_idx;
+	fa.remote_player = so_np_remote_player_idx(0);
+	fa.peer = peer;
+	fa.on = 1;
+	fa_unlock();
+}
+
 /* Acks a pad packet. Acking only the newest frame is enough: the sender
  * keeps its highest acked frame, and its ping timer skips older entries. */
 static void ack_pad(ENetPeer *peer, s32 frame, u64 now_us)
 {
+	if (fa.on && peer == fa.peer && fa_already(frame))
+		return;	/* (the receive thread did) */
 	if (!np->ack_delay_us) {
 		send_ack(peer, frame);
 		flush();
@@ -281,6 +489,74 @@ static u32 rd_u32(Reader *r)
 
 /* ---- receiving (OnData) -------------------------------------------------- */
 
+static int frozen_pads_allowed;
+
+s32 so_np_newest_offset_us(void)
+{
+	return np->newest_offset_us;
+}
+
+/* What must start afresh before a game's first pad goes out */
+static void restart_sending(void)
+{
+	u64 now = so_time_us();
+	int i;
+	np->game_started = 0;
+	if (fa.sent || fa.busy || fa.held)
+		so_log("np: fast acks since the last game's start: %u sent, %u left to the network thread (%u slot taken)",
+			(unsigned)fa.sent, (unsigned)(fa.busy + fa.held), (unsigned)fa.busy);
+	fa.sent = fa.busy = fa.held = 0;
+	fa.acked = 0;	/* (frames count from 1 again) */
+	so_local_pads_reset(&np->local_pads);
+	np->last_pad.frame = 0;
+	np->pad_gaps = 0;
+	for (i = 0; i < np->remote_count; i++) {
+		np->last_frame[i] = 0;
+		np->last_frame_us[i] = now;
+		np->last_acked[i] = 0;
+		so_ack_timers_reset(&np->ack_timers[i]);
+	}
+}
+
+/* A Wii reads its disc slower than a PC, so the opponent reaches its first frames
+ * first, and without our pads it could only stop at its rollback limit and wait.
+ * But the pads for those frames are known: Slippi's own code clears them, for both
+ * players (SO_NP_FROZEN_PADS_END). So while our game loads they go out on the
+ * opponent's time, each new pad of its bringing ours up to where it must be by
+ * now. The game then runs the frames it missed two to a refresh (so_exi.c), and
+ * sends on from there. To the opponent this is a player on time from the first
+ * frame. The first newer than we can vouch for waits for the game, as ever. */
+/* A game gains one frame a refresh, so one starting at frame N is level at 2N, and
+ * the pads it cannot send ahead of itself begin at SO_NP_FROZEN_PADS_END. Later than
+ * this and the opponent would stop for it at its rollback limit just after those: as
+ * GO comes up, where a player sees it. It had better wait here, frozen anyway. */
+#define FROZEN_PADS_BEFORE_GAME 34
+
+static void send_frozen_pads(int remote)
+{
+	SoLocalPad pad;
+	s32 head = np->remote_pads[remote].head_frame, to, f;
+	if (!np->frozen_on || np->remote_count != 1 || head >= SO_NP_FROZEN_PADS_END)
+		return;
+	/* (its newest is half a round trip old; a frame ahead rather than behind, as Dolphin
+	 * stops for an opponent over 10 ms late, and only speeds up for one early) */
+	to = head + (s32)(np->ping_us[remote] / 2 / SO_FRAME_US) + 1;
+	if (to > (np->frozen_game_on ? SO_NP_FROZEN_PADS_END - 1 : FROZEN_PADS_BEFORE_GAME))
+		to = np->frozen_game_on ? SO_NP_FROZEN_PADS_END - 1 : FROZEN_PADS_BEFORE_GAME;
+	if (to <= np->frozen_head)
+		return;
+	if (!np->frozen_head)
+		restart_sending();
+	memset(&pad, 0, sizeof(pad));
+	for (f = np->frozen_head + 1; f < to; f++) {
+		pad.frame = f;
+		so_local_pads_push(&np->local_pads, &pad);
+	}
+	pad.frame = to;
+	np->frozen_head = to;
+	so_np_send_pad(&pad);
+}
+
 static void on_pad(Reader *r, ENetPeer *peer, u64 now_us)
 {
 	s32 frame = (s32)rd_u32(r), checksum_frame;
@@ -335,6 +611,9 @@ static void on_pad(Reader *r, ENetPeer *peer, u64 now_us)
 	else
 		offset = so_time_sync_sample(now_us, np->ping_us[remote], frame, 0, now_us);
 	so_time_sync_add(&np->time_sync[remote], (s32)offset);
+	np->newest_offset_us = (s32)offset;
+
+	s32 old_head = np->remote_pads[remote].head_frame;
 
 	added = so_remote_pads_add(&np->remote_pads[remote], frame, r->p, r->left);
 	if (added < 0) {
@@ -347,11 +626,28 @@ static void on_pad(Reader *r, ENetPeer *peer, u64 now_us)
 	if (np->log_packets)
 		so_log("np: pad %d from player %u (+%d)", (int)frame, (unsigned)player, added);
 
+	fast_ack_publish(peer);
+
 	/* Ack only packets that brought new frames. */
-	if (added > 0)
+	if (added > 0) {
+		if (remote == 0 && np->head_word) {
+			/* (before the head: what the head brings is known by the time it is seen) */
+			s32 f, changed = 0;
+			u8 pad[SO_PAD_SIZE], before[SO_PAD_SIZE];
+			for (f = old_head + 1; f <= frame; f++)
+				if (so_remote_pads_get(&np->remote_pads[0], f, pad) == 0 &&
+				    so_remote_pads_get(&np->remote_pads[0], f - 1, before) == 0 &&
+				    memcmp(pad, before, SO_PAD_SIZE))
+					changed = f;
+			if (changed)
+				so_set_ppc_word(np->changed_word, (u32)changed);
+			so_set_ppc_word(np->head_word, (u32)np->remote_pads[0].head_frame);
+		}
 		ack_pad(peer, frame, now_us);
-	else
+		send_frozen_pads(remote);
+	} else {
 		np->stats.pad_packets_stale++;
+	}
 }
 
 static void on_ack(Reader *r, u64 now_us)
@@ -420,10 +716,17 @@ static void on_selections(Reader *r)
 		(unsigned)s.character_id, (unsigned)s.character_color, s.is_character_selected ? " (picked)" : "",
 		(unsigned)s.stage_id, s.is_stage_selected ? " (picked)" : "");
 	merge_selections(&np->remote_sel[remote], &s);
+	if (s.is_character_selected)
+		so_pf_want_char(1, s.character_id, s.character_color);
+	if (s.is_stage_selected)
+		so_pf_want_stage(s.stage_id);
 	/* The next game cannot start before this message, so the per-game
 	 * remote state restarts here. */
 	np->game_started = 0;
 	so_remote_pads_reset(&np->remote_pads[remote]);
+	np->frozen_head = 0;
+	np->frozen_on = frozen_pads_allowed;
+	np->frozen_game_on = 0;
 }
 
 static int chat_id_allowed(int id)
@@ -600,6 +903,8 @@ static void on_disconnect(ENetPeer *peer, u32 data)
 	u32 host = peer->address.host;
 	u16 port = peer->address.port;
 	so_log("np: %s:%u disconnected (reason %u)", ip_text(host, ip), (unsigned)port, (unsigned)data);
+	if (fa.on && fa.peer == peer)
+		fast_ack_off();
 	if (np->status != SO_NP_CONNECTED)
 		return;	/* during the connect phase only the timeout matters */
 	if (c)
@@ -627,6 +932,9 @@ int so_np_init(void)
 		if (!np)
 			return -1;
 		memset(np, 0, sizeof(*np));
+		if (!unseq_lock_ok && so_mutex_init(&unseq_lock) >= 0)
+			unseq_lock_ok = 1;
+		so_socket_set_rx_hook(fast_ack_hook);
 	}
 	return 0;
 }
@@ -645,6 +953,9 @@ int so_np_start(const SoMatchResult *match, u16 port, const SoConfig *config)
 	np->log_packets = config->log_packets;
 	np->drop_pct = config->test_drop_pct;
 	np->ack_delay_us = config->ack_delay_us;
+	np->fast_ack = config->fast_ack && !config->ack_delay_us && !config->test_drop_pct;
+	fast_ack_off();
+	fa.acked = 0;
 	np->local_sel.player_idx = np->local_idx;
 
 	/* The same port matchmaking used: that is the one the NATs opened. */
@@ -687,6 +998,11 @@ void so_np_poll(void)
 	while (enet_host_service(np->host, &event, 0) > 0) {
 		switch (event.type) {
 		case ENET_EVENT_TYPE_CONNECT:
+			/* ENet's throttle drops unreliable packets, a pad here and there, when the ping
+			 * swings: each costs the opponent a rollback. What isn't acked goes with the next
+			 * pad; this side's alone, so the opponent's sends are as against a PC. */
+			event.peer->packetThrottleAcceleration = 0;
+			event.peer->packetThrottleDeceleration = 0;
 			on_connect(event.peer);
 			break;
 		case ENET_EVENT_TYPE_RECEIVE:
@@ -723,6 +1039,7 @@ void so_np_poll(void)
 void so_np_stop(void)
 {
 	int i;
+	fast_ack_off();	/* (before the host goes: a hook in progress finishes first) */
 	if (!np || !np->host)
 		return;
 	for (i = 0; i < MAX_CONNECTIONS; i++) {
@@ -781,19 +1098,26 @@ u32 so_np_disconnect_reason(void)
 
 /* ---- game ---------------------------------------------------------------- */
 
+void so_np_allow_frozen_pads(int allow)
+{
+	frozen_pads_allowed = allow;
+}
+
+s32 so_np_frozen_pads_sent(s32 frame)
+{
+	np->frozen_game_on = 1;
+	if (frame >= np->frozen_head)
+		np->frozen_on = 0;
+	return np->frozen_head;
+}
+
 void so_np_start_game(void)
 {
-	u64 now = so_time_us();
 	int i;
-	np->game_started = 0;
-	so_local_pads_reset(&np->local_pads);
-	for (i = 0; i < np->remote_count; i++) {
-		np->last_frame[i] = 0;
-		np->last_frame_us[i] = now;
-		np->last_acked[i] = 0;
-		so_ack_timers_reset(&np->ack_timers[i]);
+	if (!np->frozen_head)	/* (or its pads are on their way already) */
+		restart_sending();
+	for (i = 0; i < np->remote_count; i++)
 		reset_selections(&np->remote_sel[i]);
-	}
 	np->prep_head = np->prep_count = 0;
 	reset_selections(&np->local_sel);
 }
@@ -805,10 +1129,26 @@ void so_np_send_pad(const SoLocalPad *pad)
 	int i, len, any = 0;
 	if (np->status == SO_NP_FAILED || np->status == SO_NP_DISCONNECTED || !np->host)
 		return;
-	if (pad)
+	if (pad) {
+		/* The opponent reads a packet's pads as every frame from the last it has to the
+		 * packet's newest: a frame skipped here and it stops reading ours for good, held
+		 * at its rollback limit ("packet too small to read pad buffer"; seen after games
+		 * that end by stocks, the frame numbers 3 ahead from the first frame after).
+		 * Skipped frames get the last pad again, as Dolphin fills a dropped player's. */
+		s32 last = np->last_pad.frame;
+		if (last > 0 && pad->frame > last + 1 && pad->frame - last <= 120) {
+			SoLocalPad fill = np->last_pad;
+			if (!np->pad_gaps++)
+				so_log("np: pad for frame %d after %d: the frames between filled", (int)pad->frame, (int)last);
+			for (fill.frame = last + 1; fill.frame < pad->frame; fill.frame++)
+				so_local_pads_push(&np->local_pads, &fill);
+		}
+		if (pad->frame > last)
+			np->last_pad = *pad;
 		so_local_pads_push(&np->local_pads, pad);
-	else
+	} else {
 		np->stats.resends++;
+	}
 
 	/* Drop what every active opponent has acked. */
 	for (i = 0; i < np->remote_count; i++) {
@@ -845,6 +1185,12 @@ int so_np_remote_pad(int remote, s32 frame, u8 *out)
 	if (remote < 0 || remote >= np->remote_count)
 		return -1;
 	return so_remote_pads_get(&np->remote_pads[remote], frame, out);
+}
+
+void so_np_publish_head(u32 head_word, u32 changed_word)
+{
+	np->head_word = head_word;
+	np->changed_word = changed_word;
 }
 
 s32 so_np_remote_head_frame(int remote)

@@ -647,6 +647,29 @@ static void test_gct(void)
 	}
 
 	{
+		/* the capture check: changed once, where it is; no change when it is not all there */
+		static const u8 check[] = {
+			0x00, 0xD0, 0xC0, 0xDE, 0x00, 0xD0, 0xC0, 0xDE,
+			0xC2, 0x1A, 0x4D, 0xE4, 0x00, 0x00, 0x00, 0x04,
+			0x88, 0x7E, 0x03, 0x8C, 0x2C, 0x03, 0x00, 0x00,
+			0x41, 0x82, 0x00, 0x2C, 0x80, 0x7E, 0x0A, 0xC9,
+			0x7C, 0x1F, 0x18, 0x00, 0x40, 0x81, 0x00, 0x20,
+			0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+			0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		};
+		u8 c[sizeof(check)];
+		memcpy(c, check, sizeof(c));
+		CHECK(so_gct_fix_capture_check(c, sizeof(c)) == 1);
+		CHECK(so_get_u32(c + 36) == 0x41800020);
+		CHECK(memcmp(c, check, 36) == 0 && memcmp(c + 40, check + 40, sizeof(c) - 40) == 0);
+		CHECK(so_gct_fix_capture_check(c, sizeof(c)) == 0);	/* done already: no such check */
+		memcpy(c, check, sizeof(c));
+		c[33] = 0;	/* not the check */
+		CHECK(so_gct_fix_capture_check(c, sizeof(c)) == 0);
+		CHECK(memcmp(c + 36, check + 36, 4) == 0);
+	}
+
+	{
 		const char *old_path = getenv("SO_TEST_GCT_OLD"), *new_path = getenv("SO_TEST_GCT_NEW");
 		static u8 a[0x10000], b[0x10000];
 		static const u32 dolphin_only[] = { 0x803761EC, 0x80376238 };	/* as so_files.c */

@@ -2,6 +2,7 @@
  * config.ini and user.json (see so_config.h).
  */
 #include "so_config.h"
+#include "so_alloc.h"
 #include "so_json.h"
 #include "so_platform.h"
 #include "so_util.h"
@@ -10,6 +11,9 @@
 void so_config_defaults(SoConfig *config)
 {
 	memset(config, 0, sizeof(*config));
+	config->rollback_wait_ms = 5;	/* see input_wait in tools/rollback/rollback.c */
+	config->rollback_poll_early_us = 5500;
+	config->rollback_poll_deep_us = 2500;
 	strlcpy(config->user_path, SO_USER_PATH, sizeof(config->user_path));
 	strlcpy(config->mm_host, SO_MM_HOST_DEFAULT, sizeof(config->mm_host));
 	config->mm_port = SO_MM_PORT_DEFAULT;
@@ -17,11 +21,12 @@ void so_config_defaults(SoConfig *config)
 	config->delay = 2;
 	config->boot_quiet_s = 60;
 	config->selftest_stage_pause_s = 3;
-	/* Above the network threads (0x78): Melee's EXI requests (the 0xB0 every
-	 * frame, the replay data) are served first. A low main loop (0x30)
-	 * let network work hold them for milliseconds: missed refreshes. */
 	config->online_main_priority = 0x7C;
-	config->online_loop_us = 200;
+	config->online_loop_us = 500;
+	config->rollback_bg_saves = 2;
+	config->rollback_bg_ping_ms = 80;
+	config->rollback_nudge_poll = 1;
+	config->fast_ack = 1;
 	config->log_port = 51450;
 	config->selftest_frames = 600;
 	config->chat = 1;
@@ -79,6 +84,7 @@ static int apply(SoConfig *c, const char *key, const char *value)
 	RANGED("boot_quiet_s", boot_quiet_s, 0, 255)
 	RANGED("status_beacon", status_beacon, 0, 1)
 	RANGED("ack_delay_us", ack_delay_us, 0, 50000)
+	RANGED("fast_ack", fast_ack, 0, 1)
 	RANGED("selftest", selftest, 0, 1)
 	RANGED("selftest_frames", selftest_frames, 1, 36000)
 	RANGED("selftest_allow_real_mm", selftest_allow_real_mm, 0, 1)
@@ -89,10 +95,36 @@ static int apply(SoConfig *c, const char *key, const char *value)
 	RANGED("diag_main_priority", diag_main_priority, 0, 0x7F)
 	RANGED("online_main_priority", online_main_priority, 0, 0x7F)
 	RANGED("online_loop_us", online_loop_us, 20, 5000)
+	RANGED("online_net_priority", online_net_priority, 0, 0x7F)
+	RANGED("prefetch_off", prefetch_off, 0, 1)
+	RANGED("test_read_pace", test_read_pace, 0, 16)
+	RANGED("test_read_seek_ms", test_read_seek_ms, 0, 10)
+	RANGED("test_no_frozen_assume", test_no_frozen_assume, 0, 1)
+	RANGED("rollback_bg_saves", rollback_bg_saves, 0, 2)
+	RANGED("rollback_bg_ping_ms", rollback_bg_ping_ms, 0, 500)
+	RANGED("rollback_nudge_poll", rollback_nudge_poll, 0, 2)
+	RANGED("rollback_sync_most_us", rollback_sync_most_us, 0, 12000)
+	RANGED("rollback_nudge_on_us", rollback_nudge_on_us, 0, 10000)
+	RANGED("rollback_nudge_off_us", rollback_nudge_off_us, 0, 10000)
 	RANGED("chat", chat, 0, 1)
 	RANGED("rumble", rumble, 0, 1)
 	RANGED("ping_display", ping_display, 0, 1)
 	RANGED("test_drop_pct", test_drop_pct, 0, 90)
+	RANGED("rollback", rollback, 0, 1)
+	RANGED("test_lag_frames", test_lag_frames, 0, 6)
+	RANGED("test_spike_ms", test_spike_ms, 0, 2000)
+	RANGED("test_stuck_frame", test_stuck_frame, 0, 60000)
+	RANGED("test_hang_frame", test_hang_frame, 0, 60000)
+	RANGED("test_slow_frame_ms", test_slow_frame_ms, 0, 30)
+	RANGED("test_old_capture_check", test_old_capture_check, 0, 1)
+	RANGED("test_file_sleep", test_file_sleep, 0, 1)
+	RANGED("test_frozen_pads", test_frozen_pads, 0, 1)
+	RANGED("test_scratch_junk", test_scratch_junk, 0, 1)
+	RANGED("test_no_scratch", test_no_scratch, 0, 1)
+	RANGED("rollback_wait_ms", rollback_wait_ms, 0, 16)
+	RANGED("rollback_poll_early_us", rollback_poll_early_us, 0, 12000)
+	RANGED("rollback_poll_deep_us", rollback_poll_deep_us, 0, 6000)
+	RANGED("test_control", test_control, 0, 1)
 #undef RANGED
 	return -2;
 }
@@ -172,13 +204,15 @@ static const char test_overrides[] =
 #include "so_test_config.inc"
 ;
 
-int so_config_load(SoConfig *config, SoUser *user)
+#define FILE_MAX 2048
+
+/* The settings, then the account, read into `text` (FILE_MAX bytes). */
+static int load(SoConfig *config, SoUser *user, char *text)
 {
-	static char text[2048];
 	int n, res;
 
 	so_config_defaults(config);
-	n = so_read_file(SO_CONFIG_PATH, text, sizeof(text) - 1);
+	n = so_read_file(SO_CONFIG_PATH, text, FILE_MAX - 1);
 	if (n >= 0)
 		so_config_parse(config, text, (u32)n);
 	if (test_overrides[0]) {
@@ -190,13 +224,13 @@ int so_config_load(SoConfig *config, SoUser *user)
 	}
 
 	memset(user, 0, sizeof(*user));
-	n = so_read_file(config->user_path, text, sizeof(text) - 1);
+	n = so_read_file(config->user_path, text, FILE_MAX - 1);
 	if (n < 0 && test_overrides[0] && !so_config_is_real_mm(config)) {
 		/* A test build against a test server: the dummy account
 		 * (online_selftest.py's WII_USER), nothing needed on the SD card */
 		strlcpy(text, "{\"uid\": \"local-test-uid-wii\", \"playKey\": \"dummy-play-key-wii\", "
 			"\"connectCode\": \"WIIT#001\", \"displayName\": \"Test Wii\", \"latestVersion\": \"3.6.4\"}",
-			sizeof(text));
+			FILE_MAX);
 		n = (int)strlen(text);
 		so_log("account: %s not found; the test account", config->user_path);
 	}
@@ -205,7 +239,6 @@ int so_config_load(SoConfig *config, SoUser *user)
 		return -1;
 	}
 	res = so_user_parse(user, text, (u32)n);
-	memset(text, 0, sizeof(text));	/* do not leave the play key around */
 	if (res < 0) {
 		so_log("account: %s is not a valid Slippi user.json", config->user_path);
 		return -2;
@@ -214,4 +247,20 @@ int so_config_load(SoConfig *config, SoUser *user)
 	so_log("account: %s (%s), play key %d chars", user->connect_code, user->display_name,
 		(int)strlen(user->play_key));
 	return 0;
+}
+
+int so_config_load(SoConfig *config, SoUser *user)
+{
+	/* on the online heap, only while loading (the kernel's data is full) */
+	char *text = so_malloc(FILE_MAX);
+	int res;
+	if (!text) {
+		so_config_defaults(config);
+		memset(user, 0, sizeof(*user));
+		return -1;
+	}
+	res = load(config, user, text);
+	memset(text, 0, FILE_MAX);	/* do not leave the play key around */
+	so_free(text);
+	return res;
 }

@@ -25,6 +25,8 @@ static RxSlot ring[RX_SLOTS];
 static u32 rx_head, rx_tail;
 static SoMutex rx_lock, stats_lock;
 static SoSocketStats stats;
+static u32 control_host;	/* tests: "SLPWII EXIT" from here (so_socket_set_control) */
+static void (*control_exit)(void);
 
 static u32 ReceiveThread(void *unused)
 {
@@ -47,6 +49,11 @@ static u32 ReceiveThread(void *unused)
 				so_mutex_unlock(&stats_lock);
 				Sleep(5);
 			}
+			continue;
+		}
+		if (control_host && ntohl(from.sin_addr.s_addr) == control_host && n >= 11 &&
+		    memcmp(buf, "SLPWII EXIT", 11) == 0) {
+			control_exit();
 			continue;
 		}
 		so_mutex_lock(&rx_lock);
@@ -243,6 +250,12 @@ u32 so_local_ip(void)
 	return ip;
 }
 
+volatile int so_socket_test_stuck;
+
+void so_socket_check_sender(void)
+{
+}
+
 void so_socket_stats(SoSocketStats *out)
 {
 	so_mutex_lock(&stats_lock);
@@ -259,4 +272,10 @@ int so_socket_experiment_async_send(u32 addr, u16 port, const void *data, u32 le
 void so_socket_stats_peek(SoSocketStats *out)
 {
 	*out = stats;
+}
+
+void so_socket_set_control(u32 host, void (*on_exit)(void))
+{
+	control_exit = on_exit;
+	control_host = host;
 }

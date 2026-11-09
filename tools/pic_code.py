@@ -14,7 +14,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BIN = ROOT / '.toolchain/opt/devkitpro/devkitPPC/bin'
-CFLAGS = ['-O2', '-mcpu=750', '-meabi', '-mno-sdata', '-G', '0', '-fno-jump-tables', '-ffreestanding',
+# (-fno-inline-functions: what must be inlined says so. Without it the engine is 11 KB bigger, and
+# Patch.c's region for these codes holds 40556 bytes: past that, Melee hangs at boot, some boots.)
+CFLAGS = ['-O2', '-fno-inline-functions', '-mcpu=750', '-meabi', '-mno-sdata', '-G', '0', '-fno-jump-tables', '-ffreestanding',
           '-fno-builtin', '-fno-pic', '-fno-common', '-fno-asynchronous-unwind-tables', '-fno-tree-loop-distribute-patterns',
           '-nostdlib', '-Wall', '-Werror']
 RELATIVE = {'R_PPC_REL24', 'R_PPC_REL14', 'R_PPC_LOCAL24PC', 'R_PPC_REL14_BRTAKEN', 'R_PPC_REL14_BRNTAKEN'}
@@ -56,15 +58,20 @@ def check_object(obj):
             sys.exit(f'{obj.name}: absolute relocation {parts[2]} ({" ".join(parts[3:])})')
 
 
-def build(glue, sources, start='.pic_start', tail='.pic_tail', defines=()):
-    """(code bytes, {symbol: offset}); `defines`: -D names for the C"""
+def build(glue, sources, start='.pic_start', tail='.pic_tail', defines=(), size=False):
+    """(code bytes, {symbol: offset}); `defines`: -D names for the C; `size`: -Os, with GCC's
+    register save routines (tools/rollback/savres.s)"""
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         objs = [tmp / 'glue.o']
         run(tool('as'), '-mregnames', '-mgekko', '-o', objs[0], glue)
+        flags = [f if f != '-O2' or not size else '-Os' for f in CFLAGS]
         for i, src in enumerate(sources):
             objs.append(tmp / f'c{i}.o')
-            run(tool('gcc'), *CFLAGS, *(f'-D{d}' for d in defines), '-c', '-o', objs[-1], src)
+            run(tool('gcc'), *flags, *(f'-D{d}' for d in defines), '-c', '-o', objs[-1], src)
+        if size:
+            objs.append(tmp / 'savres.o')
+            run(tool('as'), '-mregnames', '-mgekko', '-o', objs[-1], ROOT / 'tools/rollback/savres.s')
         for obj in objs:
             check_object(obj)
         elf, raw, ld = tmp / 'a.elf', tmp / 'a.bin', tmp / 'link.ld'

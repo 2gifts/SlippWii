@@ -18,6 +18,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 */
 #include "slippi_online/so_client.h"
 #include "slippi_online/so_platform.h"
+#include "slippi_online/so_prefetch.h"
+#include "slippi_online/so_exi.h"
 #include "Config.h"
 #include "ISO.h"
 #include "FST.h"
@@ -79,6 +81,14 @@ typedef struct _CISO_t {
 static uint16_t ciso_block_map[CISO_MAP_SIZE];
 static bool ISO_IsCISO = false;	// Set to 1 for CISO mode.
 
+/* (Slippi Online: how much the game reads from the drive, and how long it takes: the
+ * kernel logs it at each game's start, so_exi.c) */
+u32 iso_reads, iso_read_bytes, iso_read_ticks, iso_cache_hits;
+static void ISOReadDirectTimed(void *Buffer, u32 Length, u64 Offset64);
+extern u64 ISOShift64;
+IsoExtent iso_ext[ISO_EXTENTS];
+u32 iso_ext_n;
+
 /**
  * Read directly from the ISO file.
  * CISO mapping is done here.
@@ -87,6 +97,34 @@ static bool ISO_IsCISO = false;	// Set to 1 for CISO mode.
  * @param Offset ISO file offset. (Must have ISOShift64 added!)
  */
 static inline void ISOReadDirect(void *Buffer, u32 Length, u64 Offset64)
+{
+	u32 t0 = read32(HW_TIMER), t;
+	ISOReadDirectTimed(Buffer, Length, Offset64);
+	t = read32(HW_TIMER) - t0;
+	iso_read_ticks += t;
+	iso_reads++;
+	iso_read_bytes += Length;
+	{	/* the reads as runs of the disc (diagnostics: what a game's load reads) */
+		IsoExtent *e = iso_ext_n ? &iso_ext[(iso_ext_n - 1) % ISO_EXTENTS] : 0;
+		u32 off = (u32)(Offset64 - ISOShift64);
+		if (e && e->offset + e->len == off && t0 - e->t_end < 1898 * 30) {
+			e->len += Length;
+			e->ticks += t;
+			e->t_end = t0 + t;
+			e->reads++;
+		} else {
+			e = &iso_ext[iso_ext_n++ % ISO_EXTENTS];
+			e->t_start = t0;
+			e->t_end = t0 + t;
+			e->offset = off;
+			e->len = Length;
+			e->ticks = t;
+			e->reads = 1;
+		}
+	}
+}
+
+static void ISOReadDirectTimed(void *Buffer, u32 Length, u64 Offset64)
 {
 	if(ISOFileOpen == 0)
 		return;
@@ -436,8 +474,21 @@ void ISOSetupCache()
 
 		/* Slippi Online keeps Slippi's menu files in RAM at the top of
 		 * this region (slippi_online/so_files.c). */
-		if (so_client_online_game())
-			DCacheLimit -= SO_FILE_CACHE_SIZE;
+		if (so_client_online_game()) {
+			/* The PPC's scratch (the rollback engine) too, when at least
+			 * 1 MB of cache is left: about 3.4 MB next to a 2 MB memory
+			 * card, nothing next to a big one (then no rollback). */
+			/* (tests: test_no_scratch, as next to a big card) */
+			if (DCacheLimit >= SO_FILE_CACHE_SIZE + SO_PPC_SCRATCH_SIZE + 0x100000 &&
+			    !so_client_config()->test_no_scratch) {
+				DCacheLimit -= SO_FILE_CACHE_SIZE + SO_PPC_SCRATCH_SIZE;
+				so_ppc_scratch_free = 1;
+				so_exi_scratch_boot();
+			} else {
+				DCacheLimit -= SO_FILE_CACHE_SIZE;
+				so_ppc_scratch_free = 0;
+			}
+		}
 	}
 	dbgprintf("DCCache: %X, DCacheLimit: %X\r\n", DCCache, DCacheLimit);
 	memset32(DC, 0, sizeof(DataCache)* CACHE_MAX);
@@ -501,7 +552,16 @@ const u8 *ISORead(u32* Length, u32 Offset)
 		if( Offset >= DC[i].Offset && Offset + *Length <= DC[i].Offset + DC[i].Size )
 		{
 			//dbgprintf("DI: Cached Read Offset:%08X Size:%08X Buffer:%p\r\n", DC[i].Offset, DC[i].Size, DC[i].Data );
+			iso_cache_hits++;
 			return DC[i].Data + (Offset - DC[i].Offset);
+		}
+	}
+
+	{	/* Slippi Online: what so_prefetch fetched between games */
+		const u8 *pf = so_pf_lookup(Offset, *Length);
+		if (pf) {
+			iso_cache_hits++;
+			return pf;
 		}
 	}
 

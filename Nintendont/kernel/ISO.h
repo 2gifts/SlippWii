@@ -28,4 +28,14 @@ void ISOSetupCache();
 const u8 *ISORead(u32* Length, u32 Offset);
 void ISOSeek(u32 Offset);
 
+/* Slippi Online diagnostics: the drive's reads as runs of the disc
+ * (consecutive reads merged), the newest ISO_EXTENTS kept */
+typedef struct {
+	u32 t_start, t_end, ticks;	/* HW timer */
+	u32 offset, len, reads;
+} IsoExtent;
+#define ISO_EXTENTS 96
+extern IsoExtent iso_ext[ISO_EXTENTS];
+extern u32 iso_ext_n;
+
 #endif
