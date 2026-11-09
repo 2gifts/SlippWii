@@ -160,7 +160,7 @@ static void css(Bot *b, Pad *o)
 	}
 	u8 icon = b->plan_len ? b->plan[b->round % b->plan_len][0] : 0;
 	u32 port = rd8(0x804D6CF0) & 3;
-	u32 cursor = rd32(0x804A0BC0 + port * 4);
+	u32 cursor = rd32(0x804A0BC0 + (rd8(0x804D6CF5) <= 1 ? 0 : port) * 4);	/* (one hand in a one-player CSS) */
 	if (b->scene_polls < 40)
 		return;
 	if (b->step == 0 && valid_ptr(cursor)) {

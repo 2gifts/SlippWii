@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.1
+
+- The online character select's settings (Delay Frames, Rumble, Show Ping) now work from any controller port, not just port 1 (#4).
+
 ## 1.3.0
 
 - Ping display: your ping to your opponent in the top left corner during a game, in the same cyan as

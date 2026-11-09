@@ -17,7 +17,8 @@
  *   0x804D6640 Slippi: the online mode (r13 - 0x5060; 2 = Direct)
  *   0x804D6643 Slippi: name entry mode (r13 - 0x505D; 1 = connect code)
  *   0x804D6CF0 the port in control of the CSS
- *   0x804A0BC0 CSS cursors (pointer per port; x at +0x0C, y at +0x10)
+ *   0x804A0BC0 CSS cursors (pointer per hand; x at +0x0C, y at +0x10)
+ *   0x804D6CF5 the hands made (1 in a one-player CSS: cursors[0] for any port)
  *   0x804C20BC HSD_PadCopyStatus[4], 0x44 each; trigger at +0x08
  *   0x8034DEBC PADControlMotor
  */
@@ -315,7 +316,10 @@ void css_delay_think(void *gobj, Ui *u)
 	port = rd8(0x804D6CF0);
 	if (port > 3)
 		return;
-	cursor = rd32(0x804A0BC0 + port * 4);
+	/* The online CSS is Melee's one-player kind: one hand (0x804D6CF5, the hands made, is 1),
+	 * cursors[0], whichever port plays; the A button is that port's (issue #4: port 2's hand
+	 * never lit a button, its cursor slot being empty) */
+	cursor = rd32(0x804A0BC0 + (rd8(0x804D6CF5) <= 1 ? 0 : port) * 4);
 	if (valid_ptr(cursor)) {
 		hover = hovered(u, cursor);
 		rumble_hover = on_switch(u, cursor, u->x);
