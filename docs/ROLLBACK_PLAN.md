@@ -171,7 +171,8 @@ The last row looks like the cheapest remaining win: fresher controller sampling 
 | Burst loss, spikes, uneven routes | Network | Better relay | Random loss only |
 | Real internet | Both | Relay on a small rented server, plus real matches | Manual |
 | The exact player build | Wii | Release build with rig | Never |
-| Other setups: second Wii, USB adapters, replays on, rumble, 480i vs 480p | Both | Occasional matrix | No |
+| Other setups: second Wii, USB adapters, replays on, rumble | Both | Occasional matrix | No |
+| 480p (a component cable, Force Progressive) | Wii | `run_sweep.py --force-480p`: the timing and the comparison with Dolphin, no picture (composite capture). Broken until 1.5.1: half speed (ROLLBACK.md, Known issues) | Since 2026-11-11 |
 
 ### What to build, in order
 

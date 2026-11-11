@@ -576,6 +576,21 @@ most on a regional connection.
 
 ## Known issues
 
+- **Fixed (a56facd, 1.5.1): in 480p a game ran at half speed and the picture blacked out.** Every
+  rollback build up to 1.5.0 had it, for a player with a component cable (or the loader's *Force
+  Progressive*); nobody here had ever run 480p. The engine reads the pad on a line interrupt before
+  each retrace, and took 480p for one field a line count (1-525) with one read. VI counts a frame of
+  two fields in 480p as in 480i: 1-1050, retraces at 526 and 1. One read a frame was a frame every
+  other refresh: polls 33 ms apart, `per=31180` in `PERF rb`, a game of 980 frames in 20 s. So far
+  behind, the kernel asked for frames ending early all game, and in 480p the engine shortened both
+  fields: a 524-line picture at nearly every refresh (`ndg 3880` a game), which a digital display may
+  blank on. The player's log (the **Diagnostic Log** switch) and a run here with the same settings
+  gave the same slow frames, number for number (`132:31 133:33 135:33 ...`). Now both fields' lines
+  are set (`poll_line_pair`), and in 480p no field is ever shortened: the Wii stays level by the
+  pad's earlier read and the kernel's time sync. **480p cannot be seen here** (the capture card is
+  composite): `run_sweep.py --force-480p` runs Melee in 480p timing with no picture, and the Wii's
+  log and the frame-for-frame comparison with Dolphin are the test. What a 480p display shows is
+  known only from players.
 - **Fixed (24f5ab6): the crash after a lag spike's deepest rollback, and games desynced at frame 87.**
   A load keeps a bit a page (`T_MARK`) for the pages on its list, so that a page of a later capture is
   listed once, and clears the bits it set. Nothing cleared the table before a game: it was whatever

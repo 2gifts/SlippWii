@@ -211,14 +211,18 @@ def wii_lines(run_dir):
     return [l[6:] for l in path.read_text(encoding='utf-8', errors='replace').splitlines() if l.startswith('wii | ')]
 
 
-def loader_cfg(run_dir, replays=False, codes=0, screen=0, diag_log=False):
+def loader_cfg(run_dir, replays=False, codes=0, screen=0, diag_log=False, force_480p=False):
     """The Wii's loader settings for a run (a NIN_CFG, CommonConfig.h): Slippi Replays on (it saves each game
     on the other drive), SlippWii's switches (bits 16-19: Slippi Dolphin's optional codes; 20: the log on the
     SD card) and the Screen setting (1 default, 2 16:9 to 73:60, 3 widescreen)."""
     import wii_boot
     cfg = bytearray(wii_boot.BASE_CFG.read_bytes())
     flags = (int.from_bytes(cfg[8:12], 'big') | (1 << 14 if replays else 0) | (codes & 0xF) << 16 | (1 << 20 if diag_log else 0)
-             | (1 << 21 if codes & 16 else 0))  # (16: No Music, the bit after the log's)
+             | (1 << 21 if codes & 16 else 0)  # (16: No Music, the bit after the log's)
+             # Force Progressive (and Force Widescreen with it, as the player's settings were whose 480p games
+             # ran at half speed, 2026-11-11): the kernel then patches Melee's video modes to 480p whatever
+             # cable is in. Over composite there is no picture to capture; the logs have the timing.
+             | (0x30 if force_480p else 0))
     cfg[8:12] = flags.to_bytes(4, 'big')
     if screen:
         cfg[288 + 6 * 4:288 + 7 * 4] = screen.to_bytes(4, 'big')  # MeleeCodeOptions[MELEE_CODES_SCREEN_OPTION_ID]
@@ -512,6 +516,9 @@ def main():
     ap.add_argument('--no-boot', action='store_true', help='the Wii already runs this build: do not send it')
     ap.add_argument('--build-to', help='only build, into this directory (for --skip-build later)')
     ap.add_argument('--report-only', help='write this run directory\'s report again (current comparer)')
+    ap.add_argument('--force-480p', action='store_true',
+                    help="the loader's Force Progressive and Force Widescreen: Melee in 480p, as on a component cable "
+                         "(no picture over composite: the Wii's log is the result)")
     ap.add_argument('--update-first', action='store_true',
                     help='the loader runs "Check for Updates" by itself before it starts Melee (a server here says '
                          'there is none): do the games still play, their kernel on the network the loader used?')
@@ -622,8 +629,8 @@ def main():
             run_dir / 'update-test-key.pem', '0.0.1', b'no zip: nothing is downloaded',
             url='https://github.com/2gifts/SlippWii/releases/download/v0.0.1/none.zip')
         boot += ['--first-arg', f'slippwii-update-then-boot={update_server.url}/plain/uptodate.txt;{update_wii_test.FOLDER}']
-    if (args.replays or args.codes or args.screen or args.diag_log) and not args.no_boot:
-        boot += ['--cfg', loader_cfg(run_dir, args.replays, args.codes, args.screen, args.diag_log)]
+    if (args.replays or args.codes or args.screen or args.diag_log or args.force_480p) and not args.no_boot:
+        boot += ['--cfg', loader_cfg(run_dir, args.replays, args.codes, args.screen, args.diag_log, args.force_480p)]
     procs.append(start('watch', [sys.executable, '-u', ROOT / 'tools/online_selftest.py', 'watch', *boot,
                                  '--wii-ip', args.wii_ip, '--timeout', args.timeout_min * 60], run_dir))
     if args.capture:

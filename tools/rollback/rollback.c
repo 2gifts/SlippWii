@@ -2808,6 +2808,22 @@ void rb_render_built(Engine *e)
 }
 #endif
 
+/* The two lines the pad is read at, `us` before each of a frame's two retraces. `second`: the line the
+ * frame's second field starts at, where its first retrace comes (DI0's: 263 in 480i, 526 in 480p); the
+ * other retrace is at line 1, after the frame's last line. */
+static void poll_line_pair(u32 second, u32 us, u32 *first_read, u32 *second_read)
+{
+	u32 lines;
+	if (second < 300) {	/* 480i: a field 262.5 lines */
+		lines = us * second / FIELD_US;
+		*second_read = second * 2 - 1 - lines;
+	} else {		/* 480p: a field 525 lines, half as long each */
+		lines = us * (second - 1) / FIELD_US;
+		*second_read = (second - 1) * 2 + 1 - lines;
+	}
+	*first_read = second - lines;
+}
+
 #ifndef RB_HOST
 /* The pad read a little before the retrace.
  *
@@ -2834,8 +2850,11 @@ void rb_render_built(Engine *e)
  * to be shown at the poll. Often so of a frame that then finished in time, and the next frame through
  * was shown early, a repeat a minute or so at a 70 ms ping.)
  *
- * VI counts lines over a frame: 1-525, in 480p a refresh, in 480i two, each field with its own
- * retrace (lines 263 and 1), so 480i takes both interrupts.
+ * VI counts lines over a frame of two fields, each field a refresh with its own retrace: 1-525 in
+ * 480i (retraces at lines 263 and 1), 1-1050 in 480p, where a field is a whole picture of 525 lines
+ * (retraces at 526 and 1). So a read before every retrace is two line interrupts in both. (Until
+ * 1.5.0 480p was taken for one field a count, with one read: a player's 480p games ran at half
+ * speed, a frame every other refresh, 2026-11-11.)
  *
  * The controller answers the SI when the SI polls it, not when the game reads. Melee's setting
  * polls twice a field, at lines 131 and 262, so a read before the retrace gets an answer about
@@ -2896,14 +2915,12 @@ typedef char direct_from_is_the_polls[DIRECT_FROM == POLL_EARLY_FROM ? 1 : -1];
 
 static void poll_lines(Engine *e)
 {
-	u32 last = VI_DI0[0] & 0x3FF;	/* where the (first) retrace comes */
-	u32 lines = e->poll_us * last / FIELD_US, read_at = last - lines;
+	u32 first_read, second_read;
+	poll_line_pair(VI_DI0[0] & 0x7FF, e->poll_us, &first_read, &second_read);
 	VI_DI2[1] = 1;
-	VI_DI2[0] = (u16)(VI_INT_ENABLE | read_at);
-	if (last < 300) {	/* 480i */
-		VI_DI3[1] = 1;
-		VI_DI3[0] = (u16)(VI_INT_ENABLE | (last * 2 - 1 - lines));
-	}
+	VI_DI2[0] = (u16)(VI_INT_ENABLE | first_read);
+	VI_DI3[1] = 1;
+	VI_DI3[0] = (u16)(VI_INT_ENABLE | second_read);
 }
 
 static void poll_early_on(Engine *e)
@@ -2988,7 +3005,13 @@ static void poll_early_track(Engine *e)
  * doesn't move against the vertical sync, so a display has nothing to lose its lock on (tried: lines
  * a tick shorter, and a capture card lost the picture each time). At most one a frame: a line of 480i
  * is 63 us, 2 ms a second. In 480i it's the second field, so the frame's first retrace (at its middle
- * line) comes as ever; the other is at line 1, wherever the frame ended. */
+ * line) comes as ever; the other is at line 1, wherever the frame ended.
+ *
+ * Never in 480p: there a field is a whole picture, and one of 524 lines is a signal a digital display
+ * may answer with a black screen while it finds the picture again (a player's 480p games "blacked
+ * out", 2026-11-11, with a field short at nearly every refresh; nobody here can see a 480p picture to
+ * say what a display forgives). In 480p the Wii stays level by the pad's earlier read alone, and by
+ * the kernel's time sync when that is not enough. */
 #define VI_PSB_ODD ((volatile u16 *)0xCC00200Cu)
 #define VI_PSB_EVEN ((volatile u16 *)0xCC002010u)
 #define VI_LINE ((volatile u16 *)0xCC00202Cu)
@@ -3021,7 +3044,7 @@ static u32 poll_target(Engine *e)
 
 static void vi_nudge(Engine *e)
 {
-	u32 middle = VI_DI0[0] & 0x3FF, line = *VI_LINE & 0x7FF, want = *SCRATCH_WORD(T_VI_NUDGE), lead;
+	u32 middle = VI_DI0[0] & 0x7FF, line = *VI_LINE & 0x7FF, want = *SCRATCH_WORD(T_VI_NUDGE), lead;
 	vi_nudge_end(e);
 	if (!(want & 1) != !(e->video_through & VI_NUDGING)) {
 		e->video_through ^= VI_NUDGING;
@@ -3038,15 +3061,13 @@ static void vi_nudge(Engine *e)
 		e->sync_lead = (u16)(lead + POLL_SYNC_STEP);
 		return;
 	}
-	if (want & 4)
-		return;	/* (tests: the pad read earlier only) */
-	if (middle < 300 && (line < middle || line > middle + 128))
+	if ((want & 4) || middle >= 300)
+		return;	/* (tests: the pad read earlier only; and 480p, always) */
+	if (line < middle || line > middle + 128)
 		return;
 	if (*VI_PSB_ODD < VI_PSB_LINE || *VI_PSB_EVEN < VI_PSB_LINE)
 		return;
 	e->vi_saved = (u32)*VI_PSB_ODD << 16 | *VI_PSB_EVEN;
-	if (middle >= 300)
-		*VI_PSB_ODD = (u16)(*VI_PSB_ODD - VI_PSB_LINE);
 	*VI_PSB_EVEN = (u16)(*VI_PSB_EVEN - VI_PSB_LINE);
 	if ((e->video_through & 0xFFF) != 0xFFF)
 		e->video_through++;
@@ -3316,8 +3337,8 @@ static void tr_retrace(Engine *e)
 	t->refresh++;
 	tr_stamp('R');
 	line = *(volatile u16 *)TR_VI_LINE & 0x7FF;
-	{	/* lines past the retrace's own: 480p has one a frame, 480i two (DI0's line and the last) */
-		u32 at = VI_DI0[0] & 0x3FF;
+	{	/* lines past the retrace's own: two a frame, at DI0's line and after the last (480i; 480p's are at 526 and 1) */
+		u32 at = VI_DI0[0] & 0x7FF;
 		if (at < 300 && line >= at * 2 - 1)
 			line -= at * 2 - 1;
 		else if (line >= at)

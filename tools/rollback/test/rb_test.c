@@ -605,8 +605,35 @@ static int test_direct(void)
 	return direct_fails;
 }
 
+/* The lines the pad is read at (poll_line_pair): in 480i as they have always been, in 480p one before
+ * each of the frame's two retraces, a refresh apart. */
+static int test_poll_lines(void)
+{
+	static const u32 us[] = { 2000, 3500, 5500, 7996, 8000, 12000 };
+	u32 i, a, b, bad = 0;
+	for (i = 0; i < sizeof(us) / sizeof(us[0]); i++) {
+		u32 lines = us[i] * 263 / FIELD_US;
+		poll_line_pair(263, us[i], &a, &b);
+		if (a != 263 - lines || b != 525 - lines || b - a != 262)
+			bad++;
+		lines = us[i] * 525 / FIELD_US;
+		poll_line_pair(526, us[i], &a, &b);
+		/* before the retrace at 526 and before the one at 1 (after line 1050): 525 lines apart, both
+		 * in their own field, as early as asked to within a line (31.8 us) */
+		if (a != 526 - lines || b != 1051 - lines || b - a != 525 || a < 1 || a > 525 || b < 527 || b > 1050)
+			bad++;
+		if ((526 - a) * FIELD_US / 525 > us[i] || (526 - a + 1) * FIELD_US / 525 < us[i])
+			bad++;
+	}
+	if (bad)
+		printf("poll lines: %u cases wrong\n", (unsigned)bad);
+	return (int)bad;
+}
+
 int main(int argc, char **argv)
 {
+	if (test_poll_lines())
+		return 1;
 	int frames = argc > 1 ? atoi(argv[1]) : 3000, f, loads = 0, captures = 0, i;
 	Engine *e;
 	Data *d;

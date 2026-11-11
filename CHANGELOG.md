@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.5.1
+
+- Fixed: with the Wii in **480p** (a component cable, or *Force Progressive*), online games ran in
+  slow motion and the screen could go black a few seconds in. Rollback read the controller only
+  every other screen refresh in 480p, so the game ran at about half speed, and then tried to catch
+  up in a way a 480p display may answer with a black screen. Every rollback version had this; 480i
+  (the standard cables) was never affected. Found from a player's diagnostic log.
+- The diagnostic log's first line now says whether the game runs in 480p.
+- This is the first update you can install from the Wii: **Check for Updates** on the *Slippi
+  Settings* page.
+
 ## 1.5.0
 
 - **Check for Updates**, the first row of the *Slippi Settings* page: SlippWii looks on GitHub for a

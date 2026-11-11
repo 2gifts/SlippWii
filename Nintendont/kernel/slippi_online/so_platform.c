@@ -433,13 +433,15 @@ int so_platform_info(char *out, int size)
 {
 	/* (0x0D8005A0: the Wii U's mark in its Wii mode, as Nintendont's own check reads it) */
 	return so_snprintf(out, size, "SlippWii %s on a %s, the game on %s; loader settings %08x, video %08x (TV format %u), "
-		"memory card blocks %u, code options %u %u %u %u %u %u %u %u; the engine's memory %s\n",
+		"memory card blocks %u, code options %u %u %u %u %u %u %u %u; %s\n",
 		SLIPPWII_VERSION, (read32(0x0D8005A0) >> 16) == 0xCAFE ? "Wii U" : "Wii", ncfg->UseUSB ? "USB" : "SD",
 		(unsigned)ncfg->Config, (unsigned)ncfg->VideoMode, (unsigned)so_ppc_word(0x000000CC),
 		(unsigned)ncfg->MemCardBlocks, (unsigned)ncfg->MeleeCodeOptions[0], (unsigned)ncfg->MeleeCodeOptions[1],
 		(unsigned)ncfg->MeleeCodeOptions[2], (unsigned)ncfg->MeleeCodeOptions[3], (unsigned)ncfg->MeleeCodeOptions[4],
 		(unsigned)ncfg->MeleeCodeOptions[5], (unsigned)ncfg->MeleeCodeOptions[6], (unsigned)ncfg->MeleeCodeOptions[7],
-		so_ppc_scratch_free ? "free" : "not free (no rollback)");
+		/* (what the picture is, for whoever reads the log: the engine's timing goes by it. Whether the
+		 * engine has its memory is not known this early: "rollback engine ... at boot" says it later.) */
+		(ncfg->Config & NIN_CFG_FORCE_PROG) || (ncfg->VideoMode & NIN_VID_PROG) ? "480p (progressive)" : "480i or 576i");
 }
 
 int so_diag_log_setting(void)
