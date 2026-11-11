@@ -40,6 +40,15 @@ u32 so_exi_read(u8 *out, u32 len);
  * handshake itself never waits for the network: the game waits for it with
  * interrupts off, every frame. */
 void so_exi_after_ack(void);
+/* Once the scratch is the engine's (ISO.c), before the game runs: its words from the
+ * kernel cleared, MEM2 outliving reboots (in tests, junk first: test_scratch_junk). */
+void so_exi_scratch_boot(void);
+/* 1: the game's next poll is about due, so the main loop should not sleep. */
+int so_exi_poll_due(void);
+int so_exi_file_busy(void);	/* main.c: a file load in a game: no sleep */
+/* DI.c: a disc read's data has been copied into the game's memory (by this kernel: the game's CPU,
+ * and so the rollback engine's page table, sees no write) */
+void so_exi_disc_read(u32 dest, u32 length, u32 offset);
 
 /* The direct-code history (connect-code autocomplete) is kept on the SD card,
  * as Slippi Dolphin keeps direct-codes.json: when a search added a code, this
@@ -50,11 +59,13 @@ void so_exi_save_history(void);
  * again until the next online command, so nothing else on the slot (the
  * memory card library's probes) ever gets an answer meant for the game. */
 void so_exi_other_write(void);
+const u8 *so_exi_replay_next(u32 *len);
 
 /* Counters for diagnostics. */
 typedef struct {
 	u32 commands, reads;
 	u32 b0_polls, b0_skips, b0_frames;
+	u32 early_pads, early_wrong;	/* pads sent ahead of their 0xB0, and wrongly */
 	u32 savestate_requests;	/* 0xB1/0xB2: never expected in lockstep */
 	u32 unknown;
 	u32 file_loads;
@@ -68,5 +79,14 @@ typedef struct {
 	u32 panics;	/* Melee's HSD_Panic/OSPanic reports (0xDA) */
 } SoExiStats;
 void so_exi_stats(SoExiStats *out);
+
+/* The game's last polls and the engine's last captures and loads, to the log. */
+void so_exi_report_last(void);
+/* The game's 0xB0 polls so far: one a frame in a match (so_diag.c: a game that has stopped). */
+u32 so_exi_poll_count(void);
+/* How long ago the last one was, in ms (0xFFFFFFFF: there has been none) */
+u32 so_exi_poll_age_ms(void);
+/* 1 while the game is in an online match's scene (a word of its memory) */
+int so_exi_in_match(void);
 
 #endif

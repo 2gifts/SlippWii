@@ -114,4 +114,33 @@ s32 so_time_sync_offset(const SoTimeSync *s, int *valid);
  * sent frame and its send time; `ping_us` is the latest round trip. */
 s32 so_time_sync_sample(u64 arrived_us, u32 ping_us, s32 remote_frame, s32 local_frame, u64 local_sent_us);
 
+/* ---- frames a refresh sooner: the ping's part ----------------------------- */
+
+/* How the rollback engine starts a game with rollback_direct 1 (so_exi.c, direct_wanted; rollback.c,
+ * direct_track), by the ping (measured: not 0) and the limit for this delay:
+ *   1  under the limit: the skip in the countdown, unless the opponent's games say the frames do not fit;
+ *   3  up to try_ms over it (rollback_direct_try_ms; 0, as set: no such band): only against an
+ *      opponent whose last game was counted and fits;
+ *   0  further over it: never.
+ * `was` is what it said last: once 1 or 3, the same until 5 ms over that band's end. */
+u32 so_direct_mode(u32 ping_us, s32 limit_ms, s32 try_ms, u32 was);
+
+/* ---- an opponent's games ------------------------------------------------- */
+
+/* Whose games the rollback engine has counted (rollback.c, direct_track: the work of the last game's
+ * frames says how the next game starts). An opponent is a hash of the connect code, which is kept
+ * nowhere else and said nowhere. */
+typedef struct {
+	u32 connected;	/* this connection's opponent */
+	u32 played;	/* the opponent of the last game started */
+	u32 games;	/* the games started against them, one after another */
+} SoPeerGames;
+
+void so_peer_connected(SoPeerGames *g, const char *connect_code);
+void so_peer_game_started(SoPeerGames *g);
+/* 1 until a second game in a row against this opponent has started. By the connect code, so across
+ * connections (a rematch through matchmaking is the same opponent); and by games, not by connections (one
+ * that ended before a game counted nothing). */
+int so_peer_first_game(const SoPeerGames *g);
+
 #endif

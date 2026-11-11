@@ -191,6 +191,72 @@ static const char *desc_slippi_port_a[] = {
 	NULL
 };
 
+static const char *desc_sw_diag_log[] = {
+	"Write SlippWii's log to the SD",
+	"card, in /slippwii/logs/, to",
+	"send with a problem report.",
+	"",
+	"Leave off otherwise: a write",
+	"can hitch a match now and then.",
+	"A crash is saved there either",
+	"way.",
+	NULL
+};
+static const char *desc_sw_lcancel[] = {
+	"One of Slippi's optional codes:",
+	"a character flashes red when",
+	"it misses an L-cancel.",
+	"",
+	"Online and offline. Only this",
+	"console shows it.",
+	NULL
+};
+static const char *desc_sw_no_shake[] = {
+	"One of Slippi's optional codes:",
+	"the screen does not shake.",
+	"",
+	"Online and offline. Only this",
+	"console shows it.",
+	NULL
+};
+static const char *desc_sw_center_hud[] = {
+	"One of Slippi's optional codes:",
+	"with two players, the percents",
+	"sit in the middle of the screen.",
+	"",
+	"Online and offline. Only this",
+	"console shows it.",
+	NULL
+};
+static const char *desc_sw_freeze_fd[] = {
+	"One of Slippi's optional codes:",
+	"Final Destination's background",
+	"stands still.",
+	"",
+	"Online and offline. Only this",
+	"console shows it.",
+	NULL
+};
+
+// SlippWii's switches on the Slippi page: the row (CommonConfig.h, ninslippisettings), the bit of
+// ncfg->Config (NIN_CFG_SW_*), what it is called. The kernel reads the bits: Patch.c and
+// slippi_online/so_files.c for the codes, slippi_online/so_logfile.c for the log.
+static const struct {
+	int row;
+	unsigned int bit;
+	const char *name;
+	const char **desc;
+} slippwiiSwitches[] = {
+	{ NIN_SLIPPI_DIAG_LOG, NIN_CFG_SW_DIAG_LOG, "Diagnostic Log", desc_sw_diag_log },
+	{ NIN_SLIPPI_LCANCEL_FLASH, NIN_CFG_SW_LCANCEL_FLASH, "L-Cancel Red Flash", desc_sw_lcancel },
+	{ NIN_SLIPPI_NO_SHAKE, NIN_CFG_SW_NO_SHAKE, "No Screen Shake", desc_sw_no_shake },
+	{ NIN_SLIPPI_CENTER_HUD, NIN_CFG_SW_CENTER_HUD, "Center 2P HUD", desc_sw_center_hud },
+	{ NIN_SLIPPI_FREEZE_FD, NIN_CFG_SW_FREEZE_FD, "Freeze FD", desc_sw_freeze_fd },
+};
+#define SLIPPWII_SWITCHES (sizeof(slippwiiSwitches) / sizeof(slippwiiSwitches[0]))
+
+int SlippWiiMenuTest;	// (menu.h)
+
 const pageinfo slippiSettingsPage = {
 	PAGE_SLIPPI_SETTINGS,
 	"Slippi Settings",
@@ -902,7 +968,7 @@ static const char *const *GetMeleeDescription(int posX)
 	const MeleeCodeConfig *codeConfig = GetMeleeCodeConfig();
 
 	// If outside of the range for codes, do nothing
-	if (index < 0 || index > codeConfig->lineItemCount)
+	if (index < 0 || index >= codeConfig->lineItemCount)
 		return NULL;
 
 	const MeleeCodeLineItem *item = codeConfig->items[index];
@@ -954,6 +1020,12 @@ static const char *const *GetSettingsDescription(const MenuCtx *ctx)
 		case NIN_SLIPPI_CUSTOM_CODES:
 			return desc_cheats;
 		default: 
+			{
+				unsigned int sw;
+				for (sw = 0; sw < SLIPPWII_SWITCHES; sw++)
+					if (slippwiiSwitches[sw].row == ctx->settings.posX)
+						return (const char *const *)slippwiiSwitches[sw].desc;
+			}
 			return GetMeleeDescription(ctx->settings.posX);
 		}
 	default: 
@@ -1008,15 +1080,9 @@ static void Menu_Settings_InputHandler(MenuCtx *ctx)
 			// Handle slippi page position
 			if (ctx->settings.posX > NIN_SLIPPI_DYNAMIC_CODES_START + codeConfig->lineItemCount - 1)
 				ctx->settings.posX = 0;
-			else if (ctx->settings.posX == NIN_SLIPPI_BLANK_0)
+			else if (ctx->settings.posX == NIN_SLIPPI_BLANK_1)
 			{
-				// skip
-				ctx->settings.posX++;
-			}
-			else if (ctx->settings.posX == NIN_SLIPPI_BLANK_1 ||
-				ctx->settings.posX == NIN_SLIPPI_BLANK_2)
-			{
-				// skip
+				// skip (the MELEE CODES heading)
 				ctx->settings.posX = NIN_SLIPPI_DYNAMIC_CODES_START;
 			}
 			break;
@@ -1054,15 +1120,10 @@ static void Menu_Settings_InputHandler(MenuCtx *ctx)
 			// Handle slippi page positioning
 			if (ctx->settings.posX < 0)
 				ctx->settings.posX = NIN_SLIPPI_DYNAMIC_CODES_START + codeConfig->lineItemCount - 1;
-			else if (ctx->settings.posX == NIN_SLIPPI_BLANK_0)
+			else if (ctx->settings.posX == NIN_SLIPPI_BLANK_1)
 			{
-				// skip
-				ctx->settings.posX--;
-			}
-			else if (ctx->settings.posX == NIN_SLIPPI_BLANK_1 || ctx->settings.posX == NIN_SLIPPI_BLANK_2)
-			{
-				// Blank spots are skipped
-				ctx->settings.posX = NIN_SLIPPI_DYNAMIC_CODES_START - 3;
+				// skip (the MELEE CODES heading)
+				ctx->settings.posX = NIN_SLIPPI_BLANK_1 - 1;
 			}
 
 			// Skip replays led line if replays are off
@@ -1259,10 +1320,20 @@ static void Menu_Settings_InputHandler(MenuCtx *ctx)
 			case NIN_SLIPPI_CUSTOM_CODES:
 				ncfg->Config ^= (NIN_CFG_CHEATS);
 				break;
+			case NIN_SLIPPI_DIAG_LOG:
+			case NIN_SLIPPI_LCANCEL_FLASH:
+			case NIN_SLIPPI_NO_SHAKE:
+			case NIN_SLIPPI_CENTER_HUD:
+			case NIN_SLIPPI_FREEZE_FD: ;
+				unsigned int sw;
+				for (sw = 0; sw < SLIPPWII_SWITCHES; sw++)
+					if (slippwiiSwitches[sw].row == ctx->settings.posX)
+						ncfg->Config ^= slippwiiSwitches[sw].bit;
+				break;
 			default: ; // need semicolon to declare variable on next line
 				const MeleeCodeConfig *codeConfig = GetMeleeCodeConfig();
 				int index = ctx->settings.posX - NIN_SLIPPI_DYNAMIC_CODES_START;
-				if (index < 0 || index > codeConfig->lineItemCount) {
+				if (index < 0 || index >= codeConfig->lineItemCount) {
 					// If outside of the range for codes, do nothing
 					ctx->saveSettings = false;
 					ctx->redraw = false;
@@ -1430,7 +1501,7 @@ static void Menu_Settings_Redraw(MenuCtx *ctx)
 			PrintFormat(MENU_SIZE, BLACK, MENU_POS_X + SETTINGS_X_START, SettingY(ListLoopIndex),
 					"%-18s:%-4s", "Slippi Replays LED", ncfg->ReplaysLED == 0 ? "Yes" : "No");
 		}
-		ListLoopIndex += 2;
+		ListLoopIndex++;
 
 		// Slippi Port A
 		PrintFormat(MENU_SIZE, BLACK, MENU_POS_X + SETTINGS_X_START, SettingY(ListLoopIndex),
@@ -1440,7 +1511,15 @@ static void Menu_Settings_Redraw(MenuCtx *ctx)
 		// Custom Cheats
 		PrintFormat(MENU_SIZE, BLACK, MENU_POS_X + SETTINGS_X_START, SettingY(ListLoopIndex),
 				"%-18s:%-4s", "Custom Cheats/GCT", (ncfg->Config & (NIN_CFG_CHEATS)) ? "Yes" : "No ");
-		ListLoopIndex += 2;
+		ListLoopIndex++;
+
+		// SlippWii's switches: the log, and Slippi Dolphin's optional codes
+		unsigned int sw;
+		for (sw = 0; sw < SLIPPWII_SWITCHES; sw++) {
+			PrintFormat(MENU_SIZE, BLACK, MENU_POS_X + SETTINGS_X_START, SettingY(slippwiiSwitches[sw].row),
+					"%-18s:%-4s", slippwiiSwitches[sw].name, (ncfg->Config & slippwiiSwitches[sw].bit) ? "Yes" : "No ");
+		}
+		ListLoopIndex = NIN_SLIPPI_BLANK_1;
 
 		PrintFormat(14, DARK_BLUE, MENU_POS_X + SETTINGS_X_START, SettingY(ListLoopIndex), "MELEE CODES");
 		ListLoopIndex++;
@@ -1587,6 +1666,14 @@ static int Menu_GameSelection(void)
 	ctx.pages.selected = 0;
 	ctx.pages.count = 2;
 	ctx.pages.pages = allPages;
+	u32 menuTestFrames = 0;
+	if (SlippWiiMenuTest)
+	{
+		// tests: straight to the Slippi Settings page (the first of the pages), the cursor on the row asked for
+		ctx.menuMode = 1;
+		ctx.pages.selected = ctx.pages.pages[0].ID;
+		ctx.settings.posX = SlippWiiMenuTest - 1;
+	}
 
 	// Set the default game
 	u32 i;
@@ -1615,6 +1702,8 @@ static int Menu_GameSelection(void)
 		VIDEO_WaitVSync();
 		FPAD_Update();
 		if(Shutdown) LoaderShutdown();
+		if (SlippWiiMenuTest && ++menuTestFrames > 1500)
+			ExitToLoader(0);	// tests: 25 s of the page, then out
 
 		// Go back to the Device Selection menu
 		if (FPAD_Start(0))
@@ -1796,9 +1885,13 @@ bool Menu_DeviceSelection(void)
 		}
 
 		// Select a device and move into game selection menu
-		if (FPAD_OK(0))
+		// (tests, SlippWiiMenuTest: with the device the settings have, nobody being there to press A.
+		// 2026-11-10: without this the first such boot sat on this screen until a person came.)
+		if (FPAD_OK(0) || SlippWiiMenuTest)
 		{
 			int ret = Menu_GameSelection();
+			if (SlippWiiMenuTest)
+				ExitToLoader(0);	// tests: the game list came back (no device, no games): out, not round again
 			if (ret & 2) res = true;
 			if (ret & 1) break;
 			redraw = true;
@@ -1869,11 +1962,20 @@ void ShowMessageScreenAndExit(const char *msg, int ret)
  */
 void PrintBuildInfo(void)
 {
+	// The build's revision goes beside its date: since the version got longer ("1.4.0-beta.3") the first
+	// line has no room for all of "v1.3.1-225-g423fbbf-dirty" before the buttons' column (41 characters
+	// in), and ran into "Home". Of such a name the 7 characters after "-g"; a tag's own name as it is.
+	static char rev[12];
+	if (!rev[0])
+	{
+		const char *g = strstr(NIN_GIT_VERSION, "-g");
+		strncpy(rev, g ? g + 2 : NIN_GIT_VERSION, g ? 7 : 10);
+	}
 	PrintFormat(DEFAULT_SIZE, BLACK, MENU_POS_X, MENU_POS_Y + 20*0,
-		"[SlippWii %s][%s][IOS%u v%u]", SLIPPWII_VERSION,
-		NIN_GIT_VERSION, *(vu16*)0x80003140, *(vu16*)0x80003142);
+		"[SlippWii %s][IOS%u v%u]", SLIPPWII_VERSION,
+		*(vu16*)0x80003140, *(vu16*)0x80003142);
 	PrintFormat(DEFAULT_SIZE, BLACK, MENU_POS_X, MENU_POS_Y + 20*1,
-		"Built   : " __DATE__ " " __TIME__);
+		"Built   : " __DATE__ " " __TIME__ " %s", rev);
 }
 
 /**

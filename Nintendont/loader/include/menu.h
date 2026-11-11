@@ -210,4 +210,9 @@ void SetShutdown(void);
 void HandleWiiMoteEvent(s32 chan);
 void ReconfigVideo( GXRModeObj *vidmode );
 
+/* Tests (tools/menu_shot.py): not 0 when the loader was started with the argument "slippwii-menu-test=ROW":
+ * ROW + 1. The menu then opens on the Slippi Settings page with the cursor on that row, and the loader goes
+ * back to where it was started from after 25 s, with no button pressed anywhere (the device is the settings'). */
+extern int SlippWiiMenuTest;
+
 #endif

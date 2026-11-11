@@ -73,6 +73,11 @@ const SoMatchResult *so_client_match(void);
 /* False during Melee's boot: until the game asks for a match, or
  * boot_quiet_s seconds after start-up. Nothing is sent before then. */
 int so_client_traffic_allowed(void);
+/* The kernel is closing down (the game exits): the network thread stops
+ * writing to the SD card before it is unmounted; the log still goes out. */
+void so_client_stop(void);
+void so_client_flush_logs(void);
+void so_client_close(void);
 
 /* The status for Slippi's LAN broadcast (32 bytes, as the nickname), or NULL
  * unless status_beacon=1. */
@@ -91,6 +96,7 @@ int so_client_open_socket(u16 *port);
 /* The kernel main loop's sleep per pass (main.c): 20 us, or online_loop_us
  * while online. */
 extern volatile u32 so_main_loop_sleep_us;
+extern volatile u32 so_main_loop_quick;	/* the next pass comes at once: the game is reading an answer */
 
 /* Queues a pad for the network thread to send (pad NULL: resend what is not
  * acked), so the EXI device, on the kernel's main thread, never does
@@ -98,9 +104,11 @@ extern volatile u32 so_main_loop_sleep_us;
 void so_client_queue_pad(const SoLocalPad *pad);
 /* The longest a queued pad waited to be sent since the last call, in us. */
 u32 so_client_take_pad_latency_us(void);
+void so_client_take_pad_send_us(u32 *avg, u32 *max);
 
 /* Guards every so_np_* call made outside the network thread. */
 void so_client_lock(void);
 void so_client_unlock(void);
+void so_client_log_holds(void);	/* (with the lock) a line on how long it was held, since the last */
 
 #endif

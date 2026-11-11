@@ -2,11 +2,13 @@
  * IOS-backed platform services (see so_platform.h).
  */
 #include "so_platform.h"
+#include "so_logfile.h"
 #include "so_alloc.h"
 #include "so_util.h"
 #include "common.h"
 #include "ff_utf8.h"
 #include "ISO.h"
+#include "Config.h"
 #include "syscalls.h"
 #include "string.h"
 
@@ -18,30 +20,105 @@ extern u8 wifi_mac_address[6];
 #define TICKS_PER_SECOND 1898614ULL
 
 static SoMutex time_lock;
-static u32 time_last_ticks;
-static u64 time_high;	/* ticks lost to wraps, in ticks */
+/* The timer's wraps, x 2, and its top bit when last seen. Read without the lock:
+ * the sender and receive threads, below IOS's network module, read the clock all
+ * the time, and with a lock around it, one preempted inside it held up the network
+ * thread and the game's polls behind it for milliseconds. Written only as the
+ * top bit changes, twice in the timer's 37 minutes. */
+static volatile u32 time_state;
 static int platform_ready;
+int so_ppc_scratch_free;
 
 u64 so_time_us(void)
 {
-	u64 ticks;
+	u32 now, state;
 	if (!platform_ready)
 		return (u64)read32(HW_TIMER) * 1000000ULL / TICKS_PER_SECOND;
-	so_mutex_lock(&time_lock);
-	{
-		u32 now = read32(HW_TIMER);
-		if (now < time_last_ticks)
-			time_high += 1ULL << 32;
-		time_last_ticks = now;
-		ticks = time_high + now;
+	state = time_state;
+	now = read32(HW_TIMER);
+	if ((state & 1) != now >> 31) {
+		so_mutex_lock(&time_lock);
+		state = time_state;
+		now = read32(HW_TIMER);
+		if ((state & 1) != now >> 31) {
+			state++;	/* 0 -> 1, or 1 -> 0 and a wrap: state >> 1 counts the wraps */
+			time_state = state;
+		}
+		so_mutex_unlock(&time_lock);
 	}
-	so_mutex_unlock(&time_lock);
-	return ticks * 1000000ULL / TICKS_PER_SECOND;
+	return (((u64)(state >> 1) << 32) + now) * 1000000ULL / TICKS_PER_SECOND;
 }
 
 u32 so_time_ms(void)
 {
 	return (u32)(so_time_us() / 1000);
+}
+
+u32 so_ppc_word(u32 addr)
+{
+	sync_before_read((void *)addr, 4);
+	return read32(addr);
+}
+
+void so_set_ppc_word(u32 addr, u32 value)
+{
+	write32(addr, value);
+	sync_after_write((void *)addr, 4);
+}
+
+void so_ppc_will_read(u32 addr, u32 len)
+{
+	sync_before_read((void *)addr, len);
+}
+
+void so_ppc_set_block(u32 addr, const void *data, u32 len)
+{
+	memcpy((void *)addr, data, len);
+	sync_after_write((void *)addr, len);
+}
+
+/* ES_GetViewCount, ES_GetViews, ES_LaunchTitle: resetstub/main.c's
+ * es_launchtitle, from the kernel's side of IPC. */
+int so_launch_title(u64 title_id)
+{
+	static const char es_path[] __attribute__((aligned(32))) = "/dev/es";
+	u64 *id = so_malloc(32);
+	u32 *count = so_malloc(32);
+	u8 *views = so_malloc(0xD8 * 4);
+	vector *v = so_malloc(3 * sizeof(vector) + 32);
+	int fd, res = -1;
+	if (!id || !count || !views || !v)
+		goto out;
+	fd = IOS_Open(es_path, 0);
+	if (fd < 0) {
+		res = fd;
+		goto out;
+	}
+	*id = title_id;
+	v[0].data = (u32)id;
+	v[0].len = 8;
+	v[1].data = (u32)count;
+	v[1].len = 4;
+	res = IOS_Ioctlv(fd, 0x12, 1, 1, v);	/* the ticket views' count */
+	if (res >= 0 && (*count < 1 || *count > 4))
+		res = -2;
+	if (res >= 0) {
+		v[2].data = (u32)views;
+		v[2].len = 0xD8 * *count;
+		res = IOS_Ioctlv(fd, 0x13, 2, 1, v);	/* the views */
+	}
+	if (res >= 0) {
+		v[1].data = (u32)views;
+		v[1].len = 0xD8;
+		res = IOS_Ioctlv(fd, 0x08, 2, 0, v);	/* launch: reboots, if it works */
+	}
+	IOS_Close(fd);
+out:
+	so_free(id);
+	so_free(count);
+	so_free(views);
+	so_free(v);
+	return res;
 }
 
 void so_sleep_us(u32 us)
@@ -182,7 +259,7 @@ s32 so_thread_start(u32 (*entry)(void *), void *arg, void *stack_top, u32 stack_
 
 /* ---- logging ------------------------------------------------------------- */
 
-#define LOG_LINES 64
+#define LOG_LINES 56
 #define LOG_LINE_SIZE 160
 
 static struct {
@@ -192,19 +269,16 @@ static struct {
 } log_ring;
 static SoMutex log_lock;
 
-void so_log(const char *fmt, ...)
+static void log_line(const char *fmt, va_list ap, int to_file)
 {
 	char line[LOG_LINE_SIZE];
-	va_list ap;
 	u32 ms;
 	int n;
 	if (!platform_ready)
 		return;
 	ms = so_time_ms();
 	n = so_snprintf(line, sizeof(line), "%u.%03u ", (unsigned)(ms / 1000), (unsigned)(ms % 1000));
-	va_start(ap, fmt);
 	so_vsnprintf(line + n, sizeof(line) - n, fmt, ap);
-	va_end(ap);
 	so_mutex_lock(&log_lock);
 	if (log_ring.head - log_ring.tail >= LOG_LINES) {
 		log_ring.tail++;	/* overwrite the oldest line */
@@ -213,6 +287,24 @@ void so_log(const char *fmt, ...)
 	strlcpy(log_ring.lines[log_ring.head % LOG_LINES], line, LOG_LINE_SIZE);
 	log_ring.head++;
 	so_mutex_unlock(&log_lock);
+	if (to_file)
+		so_logfile_line(line);	/* (the card's file, if there is to be one: so_logfile.c) */
+}
+
+void so_log(const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	log_line(fmt, ap, 1);
+	va_end(ap);
+}
+
+void so_log_private(const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	log_line(fmt, ap, 0);
+	va_end(ap);
 }
 
 int so_log_take(char *out, int size)
@@ -294,7 +386,75 @@ int so_write_file(const char *path, const void *buf, u32 size)
 	return res == FR_OK && done == size ? 0 : -2;
 }
 
+/* The file added to stays open from one call to the next (the log's: so_logfile.c). Opening it and
+ * finding its end again were most of a write's 88-120 ms (seen, an SD card); what a write still costs
+ * is its sectors and f_sync's, after which the card has it whatever comes next. */
+static FIL append_file;
+static char append_path[48];
+
+int so_append_file(const char *path, const void *buf, u32 size, int create)
+{
+	UINT done = 0;
+	FRESULT res = FR_OK;
+	so_fs_lock();
+	if (create || strcmp(path, append_path)) {
+		if (append_path[0]) {
+			f_close(&append_file);
+			append_path[0] = 0;
+		}
+		res = f_open_main_drive(&append_file, path, (create ? FA_CREATE_ALWAYS : FA_OPEN_ALWAYS) | FA_WRITE);
+		if (res == FR_OK && !create)
+			res = f_lseek(&append_file, f_size(&append_file));
+		if (res != FR_OK) {
+			so_fs_unlock();
+			return -1;
+		}
+		strlcpy(append_path, path, sizeof(append_path));
+	}
+	res = f_write(&append_file, buf, size, &done);
+	if (res == FR_OK)
+		res = f_sync(&append_file);
+	if (res != FR_OK) {
+		f_close(&append_file);
+		append_path[0] = 0;
+	}
+	so_fs_unlock();
+	return res == FR_OK && done == size ? 0 : -2;
+}
+
+void so_make_dir(const char *path)
+{
+	so_fs_lock();
+	f_mkdir_main_drive(path);	/* (there already: fine) */
+	so_fs_unlock();
+}
+
+int so_platform_info(char *out, int size)
+{
+	/* (0x0D8005A0: the Wii U's mark in its Wii mode, as Nintendont's own check reads it) */
+	return so_snprintf(out, size, "SlippWii %s on a %s, the game on %s; loader settings %08x, video %08x (TV format %u), "
+		"memory card blocks %u, code options %u %u %u %u %u %u %u %u; the engine's memory %s\n",
+		SLIPPWII_VERSION, (read32(0x0D8005A0) >> 16) == 0xCAFE ? "Wii U" : "Wii", ncfg->UseUSB ? "USB" : "SD",
+		(unsigned)ncfg->Config, (unsigned)ncfg->VideoMode, (unsigned)so_ppc_word(0x000000CC),
+		(unsigned)ncfg->MemCardBlocks, (unsigned)ncfg->MeleeCodeOptions[0], (unsigned)ncfg->MeleeCodeOptions[1],
+		(unsigned)ncfg->MeleeCodeOptions[2], (unsigned)ncfg->MeleeCodeOptions[3], (unsigned)ncfg->MeleeCodeOptions[4],
+		(unsigned)ncfg->MeleeCodeOptions[5], (unsigned)ncfg->MeleeCodeOptions[6], (unsigned)ncfg->MeleeCodeOptions[7],
+		so_ppc_scratch_free ? "free" : "not free (no rollback)");
+}
+
+int so_diag_log_setting(void)
+{
+	return ConfigGetConfig(NIN_CFG_SW_DIAG_LOG);
+}
+
 char *getMainDrivePath(const char *path);	/* common.c */
+
+u32 SlippWiiOptionalCodes(u8 *out, u32 room, int screen);	/* Patch.c */
+
+u32 so_optional_codes(u8 *out, u32 room)
+{
+	return SlippWiiOptionalCodes(out, room, 1);
+}
 
 static SoMutex fs_mutex;
 static volatile int fs_lock_ready;
@@ -478,4 +638,41 @@ int so_platform_init(void)
 		random_state = 0x2545F491;
 	platform_ready = 1;
 	return 0;
+}
+
+extern u32 iso_reads, iso_read_bytes, iso_read_ticks, iso_cache_hits;
+
+extern u32 rs_cmds, rs_seeks, rs_bytes, rs_ticks;
+
+void so_drive_log(const char *what, int reset)
+{
+	so_log("%s: %u reads, %u KB, %u ms reading; %u from the cache; paced %u commands (%u seeks), %u KB, %u ms",
+		what, (unsigned)iso_reads, (unsigned)(iso_read_bytes >> 10), (unsigned)(iso_read_ticks / 1898),
+		(unsigned)iso_cache_hits, (unsigned)rs_cmds, (unsigned)rs_seeks, (unsigned)(rs_bytes >> 10),
+		(unsigned)(rs_ticks / 1898));
+	if (reset) {
+		rs_cmds = rs_seeks = rs_bytes = rs_ticks = 0;
+		iso_reads = iso_read_bytes = iso_read_ticks = iso_cache_hits = 0;
+		iso_ext_n = 0;
+	}
+}
+
+/* Runs as "start ms before now +offset KB/reads ms": the start's age, the
+ * disc offset (hex), its length, reads and read time */
+int so_drive_runs_line(int n, const char *what)
+{
+	char line[150];
+	u32 first = iso_ext_n > ISO_EXTENTS ? iso_ext_n - ISO_EXTENTS : 0, i, now = read32(HW_TIMER);
+	int len;
+	i = first + (u32)n * 4;
+	if (i >= iso_ext_n)
+		return 0;
+	len = so_snprintf(line, sizeof(line), "%s %u:", what, (unsigned)i);
+	for (; i < iso_ext_n && i < first + (u32)n * 4 + 4; i++) {
+		IsoExtent *e = &iso_ext[i % ISO_EXTENTS];
+		len += so_snprintf(line + len, sizeof(line) - len, " -%u@%x+%uK/%u/%u", (unsigned)((now - e->t_start) / 1898),
+			(unsigned)e->offset, (unsigned)(e->len >> 10), (unsigned)e->reads, (unsigned)(e->ticks / 1898));
+	}
+	so_log("%s", line);
+	return 1;
 }

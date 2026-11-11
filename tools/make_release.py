@@ -60,6 +60,10 @@ put it where Nintendont finds it, e.g. SD:/games/), and a Slippi account
    Melee. The first start takes a minute: SlippWii makes Slippi's online menus
    from your disc. Then: Online Play > Direct or Unranked.
 
+Updating? Extract the zip over the old files: your account and settings stay.
+Had the rollback beta? Rollback is in SlippWii itself since 1.4.0: delete the
+folder apps/SlippWii-Rollback from the card, it is no longer needed.
+
 Slippi Nintendont, if you have it, keeps working as before.
 Help and bug reports: https://github.com/2gifts/SlippWii
 """
@@ -103,6 +107,18 @@ def main():
             sys.exit(f'uncommitted changes:\n{dirty}')
         if (APP / 'boot.dol').stat().st_mtime < int(git('log', '-1', '--format=%ct')):
             sys.exit('boot.dol is older than the last commit: run sh tools/build.sh')
+    # The committed boot codes (inside boot.dol) must be what their sources build.
+    boot_codes = ROOT / 'Nintendont/kernel/gecko/g_online_boot.bin'
+    committed = boot_codes.read_bytes()
+    try:
+        subprocess.run([sys.executable, str(ROOT / 'tools/build_online_boot.py')], check=True, cwd=ROOT,
+                       capture_output=True)
+        fresh = boot_codes.read_bytes()
+    finally:
+        boot_codes.write_bytes(committed)
+    if fresh != committed:
+        sys.exit(f'{boot_codes.name} is not what its sources build: run python tools/build_online_boot.py, '
+                 'then sh tools/build.sh, and commit')
     if f'SLIPPWII_VERSION\t"{v}"' not in (ROOT / 'Nintendont/common/include/Metadata.h').read_text():
         sys.exit(f'Nintendont/common/include/Metadata.h does not say SLIPPWII_VERSION "{v}"')
 

@@ -69,7 +69,8 @@ static bool overflowEncountered;
  * after NCDInit() has actually brought up the networking stack and we have
  * some connectivity.
  */
-void SlippiNetworkShutdown() { thread_cancel(SlippiNetwork_Thread, 0); }
+// Thread 0 is the caller: never started (no network), nothing to cancel.
+void SlippiNetworkShutdown() { if (SlippiNetwork_Thread) thread_cancel(SlippiNetwork_Thread, 0); }
 s32 SlippiNetworkInit()
 {
 	server_sock = -1;

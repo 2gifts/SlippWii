@@ -25,6 +25,10 @@ static RxSlot ring[RX_SLOTS];
 static u32 rx_head, rx_tail;
 static SoMutex rx_lock, stats_lock;
 static SoSocketStats stats;
+static u32 control_host;	/* tests: "SLPWII EXIT" from here (so_socket_set_control) */
+static void (*control_exit)(void);
+/* so_socket_set_rx_hook: a look at each datagram as it arrives, on the receive thread (the fast ack) */
+static void (*rx_hook)(const u8 *data, u32 len, u32 addr, u16 port);
 
 static u32 ReceiveThread(void *unused)
 {
@@ -49,6 +53,11 @@ static u32 ReceiveThread(void *unused)
 			}
 			continue;
 		}
+		if (control_host && ntohl(from.sin_addr.s_addr) == control_host && n >= 11 &&
+		    memcmp(buf, "SLPWII EXIT", 11) == 0) {
+			control_exit();
+			continue;
+		}
 		so_mutex_lock(&rx_lock);
 		if (rx_head - rx_tail >= RX_SLOTS) {
 			stats.receive_dropped++;
@@ -61,6 +70,8 @@ static u32 ReceiveThread(void *unused)
 			memcpy(slot->data, buf, n);
 			rx_head++;
 			stats.received++;
+			if (rx_hook)	/* (queued: it will be taken; a dropped one is never looked at) */
+				rx_hook(slot->data, (u32)n, slot->addr, slot->port);
 		}
 		so_mutex_unlock(&rx_lock);
 		if (wake_event)
@@ -204,6 +215,31 @@ int so_socket_receive(u32 *addr, u16 *port, void *buf, u32 size, u64 *arrived_us
 	return n;
 }
 
+void so_socket_set_rx_hook(void (*hook)(const u8 *data, u32 len, u32 addr, u16 port))
+{
+	rx_hook = hook;
+}
+
+/* (the Wii's goes ahead of its sender's queue; here every send goes at once. Its own sendto: send_on's
+ * buffer is the main thread's, and this comes from the receive thread.) */
+int so_socket_send_urgent(u32 addr, u16 port, const void *data, u32 len)
+{
+	struct sockaddr_in to;
+	int n;
+	memset(&to, 0, sizeof(to));
+	to.sin_family = AF_INET;
+	to.sin_addr.s_addr = htonl(addr);
+	to.sin_port = htons(port);
+	n = sendto(sock, (const char *)data, (int)len, 0, (struct sockaddr *)&to, sizeof(to));
+	so_mutex_lock(&stats_lock);
+	if (n < 0)
+		stats.send_errors++;
+	else
+		stats.sent++, stats.urgent_sent++;
+	so_mutex_unlock(&stats_lock);
+	return n < 0 ? -1 : n;
+}
+
 int so_socket_pending(void)
 {
 	int pending;
@@ -243,6 +279,12 @@ u32 so_local_ip(void)
 	return ip;
 }
 
+volatile int so_socket_test_stuck;
+
+void so_socket_check_sender(void)
+{
+}
+
 void so_socket_stats(SoSocketStats *out)
 {
 	so_mutex_lock(&stats_lock);
@@ -259,4 +301,10 @@ int so_socket_experiment_async_send(u32 addr, u16 port, const void *data, u32 le
 void so_socket_stats_peek(SoSocketStats *out)
 {
 	*out = stats;
+}
+
+void so_socket_set_control(u32 host, void (*on_exit)(void))
+{
+	control_exit = on_exit;
+	control_host = host;
 }

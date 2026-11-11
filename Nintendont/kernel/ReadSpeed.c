@@ -57,6 +57,23 @@ void ReadSpeed_Init()
 u32 UseReadLimit = 1;
 extern vu32 TRIGame;
 extern u32 RealDiscCMD;
+/* Slippi Online: a 2 ms seek and 60 MB/s (a drive: 50 ms, 3 MB/s). Slippi Dolphin
+ * reads at once, so a console at a drive's pace starts each match 1.5 s after its
+ * opponent, who waits at its rollback limit; at 10 ms and 15 MB/s it still waited
+ * about 7 frames a game, 21 in the first; at this pace under 1.
+ * Not unpaced: reads finishing at once crashed Melee in stage loads (a frame of its
+ * main stack overwritten, about one load in 27, cause not understood). 10 ms and
+ * 15 MB/s had hundreds of clean loads, this pace 108 (sweeps of 2026-11-08). */
+/* (diagnostics: the paced commands since the last game, so_drive_log) */
+u32 rs_cmds, rs_seeks, rs_bytes, rs_ticks;
+
+void ReadSpeed_Quicker(u32 pace, u32 seek_ms)
+{
+	/* (tests: pace = N times 15 MB/s, seek_ms; 0 for this pace) */
+	SEEK_TICKS = 1898 * (seek_ms ? seek_ms : 2);
+	READ_TICKS = 8.285f * (float)(pace ? pace : 4);
+}
+
 void ReadSpeed_Start()
 {
 	if(UseReadLimit == 0)
@@ -80,10 +97,14 @@ void ReadSpeed_Setup(u32 Offset, int Length)
 		return;
 
 	u32 CurrentBlock = ALIGN_BACKWARD(Offset, READ_BLOCK);
+	rs_cmds++;
+	rs_bytes += Length;
 	if(CurrentBlock < CMDBaseBlock || //always seek and read
 		((Offset+Length) - CMDBaseBlock) > CACHE_SIZE)
 	{
+		rs_seeks++;
 		CMDTicks = (Length / READ_TICKS) + SEEK_TICKS;
+		rs_ticks += CMDTicks;
 		//dbgprintf("Reading uncached, %u ticks\r\n", CMDTicks);
 		CMDBaseBlock = ALIGN_BACKWARD(Offset+Length, READ_BLOCK);
 		return;
@@ -106,6 +127,7 @@ void ReadSpeed_Setup(u32 Offset, int Length)
 	}
 	if(Length > 0)
 		CMDTicks += Length / READ_TICKS;
+	rs_ticks += CMDTicks;
 
 	//dbgprintf("Reading possibly cached, %u ticks\r\n", CMDTicks);
 	if((CurrentBlock - CMDBaseBlock) > READ_BLOCK)

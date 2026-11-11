@@ -49,6 +49,15 @@ enum ninconfigbitpos
 	NIN_CFG_BIT_SLIPPI_REPLAYS	= (14),
 	NIN_CFG_BIT_SLIPPI_PORT_A = (15),
 
+	// SlippWii's own settings (1.4.0-beta.3), in bits that Slippi Nintendont and SlippWii 1.3 leave as
+	// they find them: the file keeps its layout and its version, and the rollback beta and 1.3 go on
+	// sharing /slippwii_nincfg.bin.
+	NIN_CFG_BIT_SW_LCANCEL_FLASH = (16),	// Slippi Dolphin's "Flash Red on Failed L-Cancel"
+	NIN_CFG_BIT_SW_NO_SHAKE	= (17),		// "Disable Screen Shake"
+	NIN_CFG_BIT_SW_CENTER_HUD = (18),	// "Center Align 2P HUD"
+	NIN_CFG_BIT_SW_FREEZE_FD = (19),	// "Freeze Final Destination Background"
+	NIN_CFG_BIT_SW_DIAG_LOG	= (20),		// the kernel's log on the SD card (slippi_online/so_logfile.c)
+
 	// Internal kernel settings.
 	NIN_CFG_BIT_MC_SLOTB	= (31),	// Slot B image is loaded
 };
@@ -73,6 +82,12 @@ enum ninconfig
 	NIN_CFG_SLIPPI_REPLAYS 	= (1<<NIN_CFG_BIT_SLIPPI_REPLAYS),
 	NIN_CFG_SLIPPI_PORT_A 	= (1<<NIN_CFG_BIT_SLIPPI_PORT_A),
 
+	NIN_CFG_SW_LCANCEL_FLASH = (1<<NIN_CFG_BIT_SW_LCANCEL_FLASH),
+	NIN_CFG_SW_NO_SHAKE	= (1<<NIN_CFG_BIT_SW_NO_SHAKE),
+	NIN_CFG_SW_CENTER_HUD	= (1<<NIN_CFG_BIT_SW_CENTER_HUD),
+	NIN_CFG_SW_FREEZE_FD	= (1<<NIN_CFG_BIT_SW_FREEZE_FD),
+	NIN_CFG_SW_DIAG_LOG	= (1<<NIN_CFG_BIT_SW_DIAG_LOG),
+
 	NIN_CFG_MC_SLOTB	= (1<<NIN_CFG_BIT_MC_SLOTB),
 };
 
@@ -96,11 +111,14 @@ enum ninslippisettings
 	NIN_SLIPPI_NETWORKING,
 	NIN_SLIPPI_REPLAYS,
 	NIN_SLIPPI_REPLAYS_LED,
-	NIN_SLIPPI_BLANK_0,
 	NIN_SLIPPI_PORT_A,
 	NIN_SLIPPI_CUSTOM_CODES,
-	NIN_SLIPPI_BLANK_1,
-	NIN_SLIPPI_BLANK_2,
+	NIN_SLIPPI_DIAG_LOG,		// SlippWii's switches (NIN_CFG_SW_*)
+	NIN_SLIPPI_LCANCEL_FLASH,
+	NIN_SLIPPI_NO_SHAKE,
+	NIN_SLIPPI_CENTER_HUD,
+	NIN_SLIPPI_FREEZE_FD,
+	NIN_SLIPPI_BLANK_1,		// (the "MELEE CODES" heading)
 	NIN_SLIPPI_DYNAMIC_CODES_START,
 };
 

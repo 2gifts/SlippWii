@@ -59,18 +59,23 @@ es_launchtitle(u64 titleID)
 	return ret;
 }
 #define SYSTEM_MENU			0x0000000100000002ULL
+/* The exit's progress, for the kernel's log (slippi_online/so_diag.h SO_EXIT_STEP) */
+#define EXIT_STEP(n)	(*(vu32*)0xD30034E8 = (n))
 void
 _main(void)
 {
+	EXIT_STEP(3);
 #if DEBUG
 	usbgecko_init();
 	usbgecko_printf("_main()\n");
 #endif
+	EXIT_STEP(4);
 	sync_before_read((void*)0x93010010, 0x1800);
 	_memcpy((void*)0x80001800, (void*)0x93010010, 0x1800);
 	sync_after_write((void*)0x80001800, 0x1800);
 	if(*(vu32*)0xC0001804 == 0x53545542 && *(vu32*)0xC0001808 == 0x48415858) //stubhaxx
 	{
+		EXIT_STEP(5);
 		__asm(
 			"sync ; isync\n"
 			"lis %r3, 0x8000\n"
@@ -82,10 +87,12 @@ _main(void)
 #if DEBUG
 	usbgecko_printf("no loader stub, using internal\n");
 #endif
+	EXIT_STEP(6);
 	ios_cleanup();
 #if DEBUG
 	usbgecko_printf("ios_cleanup()\n");
 #endif
+	EXIT_STEP(7);
 	es_init();
 #if DEBUG
 	usbgecko_printf("es_init()\n");

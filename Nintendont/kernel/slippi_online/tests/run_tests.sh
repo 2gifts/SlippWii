@@ -6,10 +6,10 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 SRC="$HERE/.."
 OUT="${TMPDIR:-/tmp}/slippi_online_tests"
 mkdir -p "$OUT"
-${CC:-gcc} -std=gnu99 -O1 -g -Wall -Wextra -Wno-unused-parameter -Werror \
+${CC:-gcc} -std=gnu99 -O1 -g -Wall -Wextra -Wno-unused-parameter -Werror -DSO_LOGFILE_TEST \
 	-fsanitize=undefined -fsanitize-trap=undefined \
 	-I"$HERE/shim" -I"$HERE" -I"$SRC" \
 	"$HERE/test_main.c" "$HERE/host_platform.c" \
-	"$SRC/so_util.c" "$SRC/so_json.c" "$SRC/so_alloc.c" "$SRC/so_config.c" "$SRC/so_pads.c" "$SRC/so_mm_msg.c" "$SRC/so_text.c" "$SRC/so_files.c" \
+	"$SRC/so_util.c" "$SRC/so_json.c" "$SRC/so_alloc.c" "$SRC/so_config.c" "$SRC/so_pads.c" "$SRC/so_mm_msg.c" "$SRC/so_text.c" "$SRC/so_files.c" "$SRC/so_logfile.c" \
 	-o "$OUT/test_main" 2>&1
 "$OUT/test_main"

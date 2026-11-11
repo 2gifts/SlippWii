@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.4.0
+
+**Rollback netcode is now the regular SlippWii.** What the "SlippWii Rollback" betas were is this
+release: one app, one download.
+
+- Rollback: when the opponent's input is late, the Wii carries on with a guess and corrects it when
+  the input arrives, as Slippi Dolphin does, where 1.3 stopped and waited. A late packet no longer
+  freezes the game, and to the opponent a Wii plays like another PC.
+- With it, everything of the betas (below): the fix for the crash or desync a few seconds into a
+  match, less input lag, four of Slippi Dolphin's optional codes as switches, widescreen online,
+  crash reports and the **Diagnostic Log** on the SD card.
+- If you had a beta: delete `apps/SlippWii-Rollback` from the SD card. The regular app replaces it.
+- Next to a virtual memory card of 1019 blocks or more there is no room for rollback, and a game
+  waits for late inputs as in 1.3. The line `rollback=0` in `slippwii/config.ini` does the same on
+  purpose, for troubleshooting.
+- Since 1.4.0-beta.3 nothing else changed: the version, and rollback on without a setting.
+
+## 1.4.0-beta.3 (rollback beta)
+
+- Fixed a crash or desync a few seconds into a match that some consoles had again and again: "GO" left
+  on the screen, characters that could not move, or a crash. The rollback code used a table it had not
+  cleared, and what the table held depended on what the console had done before.
+- Less input lag: under about 75 ms of ping at 2 delay frames (42 ms at 1), each frame reaches the
+  screen one refresh sooner than in beta 2. About 92 ms from a button to the middle of a CRT's picture
+  becomes about 75 at 2 delay frames, and about 75 becomes about 59 at 1, which is what a console has
+  offline. Over those pings a game is as it was.
+- Four of Slippi Dolphin's optional codes, as switches on the *Slippi Settings* page: **L-Cancel Red
+  Flash**, **No Screen Shake**, **Center 2P HUD** and **Freeze FD**. They work online and offline and
+  change only what your console draws.
+- Widescreen (the *Screen* setting) now works online too.
+- A crash report is saved on the SD card (`slippwii/logs`) when the game crashes or hangs, and the new
+  **Diagnostic Log** switch saves the whole log there, to send with a problem report. IP addresses and
+  connect codes are masked; names and the Slippi play key are never written.
+- The loader's screen and the logs now say the beta's version (betas 1 and 2 said 1.3.1).
+
 ## 1.3.1
 
 - The online character select's settings (Delay Frames, Rumble, Show Ping) now work from any controller port, not just port 1 (#4).

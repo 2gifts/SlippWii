@@ -9,6 +9,8 @@
 #include "so_pads.h"
 #include "so_text.h"
 #include "so_files.h"
+#include "so_logfile.h"
+#include "so_platform.h"
 #include "so_util.h"
 #include "string.h"
 #include "host_platform.h"
@@ -435,6 +437,94 @@ static void test_time_sync(void)
 	CHECK_INT(so_time_sync_sample(1010000, 4000, 99, 100, 1000000), 8000 + SO_FRAME_US);
 }
 
+static void test_direct_mode(void)
+{
+	/* with a band of 15 ms over the limit (rollback_direct_try_ms); 2 delay frames, the limit as set, 75 ms */
+	CHECK_INT(so_direct_mode(38000, 75, 15, 0), 1);
+	CHECK_INT(so_direct_mode(74999, 75, 15, 0), 1);
+	CHECK_INT(so_direct_mode(75000, 75, 15, 0), 3);
+	CHECK_INT(so_direct_mode(83000, 75, 15, 0), 3);
+	CHECK_INT(so_direct_mode(89999, 75, 15, 0), 3);
+	CHECK_INT(so_direct_mode(90000, 75, 15, 0), 0);
+	CHECK_INT(so_direct_mode(100000, 75, 15, 0), 0);
+	CHECK_INT(so_direct_mode(160000, 75, 15, 0), 0);
+	/* once in a band, there until 5 ms over its end */
+	CHECK_INT(so_direct_mode(79000, 75, 15, 1), 1);
+	CHECK_INT(so_direct_mode(80000, 75, 15, 1), 3);
+	CHECK_INT(so_direct_mode(79000, 75, 15, 3), 3);
+	CHECK_INT(so_direct_mode(94000, 75, 15, 3), 3);
+	CHECK_INT(so_direct_mode(95000, 75, 15, 3), 0);
+	CHECK_INT(so_direct_mode(94000, 75, 15, 0), 0);
+	CHECK_INT(so_direct_mode(94000, 75, 15, 1), 0);
+	CHECK_INT(so_direct_mode(74000, 75, 15, 0), 1);	/* (and back under it at once) */
+	/* 1 delay frame: 33 ms less; none: 66 */
+	CHECK_INT(so_direct_mode(41000, 42, 15, 0), 1);
+	CHECK_INT(so_direct_mode(42000, 42, 15, 0), 3);
+	CHECK_INT(so_direct_mode(56000, 42, 15, 0), 3);
+	CHECK_INT(so_direct_mode(57000, 42, 15, 0), 0);
+	CHECK_INT(so_direct_mode(70000, 42, 15, 0), 0);
+	CHECK_INT(so_direct_mode(8000, 9, 15, 0), 1);
+	CHECK_INT(so_direct_mode(30000, 9, 15, 0), 0);
+	/* a limit set under a delay's 33 ms: no band under it, and what is left of the one over it */
+	CHECK_INT(so_direct_mode(1000, -10, 15, 0), 3);
+	CHECK_INT(so_direct_mode(5000, -10, 15, 0), 0);
+	CHECK_INT(so_direct_mode(1000, -30, 15, 0), 0);
+	CHECK_INT(so_direct_mode(1000, 0, 15, 1), 3);
+	/* with none, as set: 1 under the limit (and until 5 ms over it), 0 over it */
+	CHECK_INT(so_direct_mode(38000, 75, 0, 0), 1);
+	CHECK_INT(so_direct_mode(74999, 75, 0, 0), 1);
+	CHECK_INT(so_direct_mode(75000, 75, 0, 0), 0);
+	CHECK_INT(so_direct_mode(83000, 75, 0, 0), 0);
+	CHECK_INT(so_direct_mode(100000, 75, 0, 0), 0);
+	CHECK_INT(so_direct_mode(79000, 75, 0, 1), 1);
+	CHECK_INT(so_direct_mode(80000, 75, 0, 1), 0);
+	CHECK_INT(so_direct_mode(79000, 75, 0, 3), 0);	/* (no band to stay in) */
+	CHECK_INT(so_direct_mode(41000, 42, 0, 0), 1);
+	CHECK_INT(so_direct_mode(42000, 42, 0, 0), 0);
+	CHECK_INT(so_direct_mode(1000, -10, 0, 0), 0);
+}
+
+static void test_peer_games(void)
+{
+	static SoPeerGames g;
+	CHECK_INT(so_peer_first_game(&g), 1);	/* nobody yet */
+	so_peer_connected(&g, "ABCD#123");
+	CHECK_INT(so_peer_first_game(&g), 1);
+	so_peer_game_started(&g);
+	CHECK_INT(so_peer_first_game(&g), 1);	/* the first game against them */
+	so_peer_game_started(&g);
+	CHECK_INT(so_peer_first_game(&g), 0);	/* the second, on the same connection */
+	so_peer_game_started(&g);
+	CHECK_INT(so_peer_first_game(&g), 0);
+	/* the same opponent on a new connection is still known */
+	so_peer_connected(&g, "ABCD#123");
+	CHECK_INT(so_peer_first_game(&g), 0);
+	so_peer_game_started(&g);
+	CHECK_INT(so_peer_first_game(&g), 0);
+	/* another is new, and stays new through a connection that ends before a game */
+	so_peer_connected(&g, "WXYZ#456");
+	CHECK_INT(so_peer_first_game(&g), 1);
+	so_peer_connected(&g, "WXYZ#456");
+	CHECK_INT(so_peer_first_game(&g), 1);
+	/* ... during which the one played last is still known */
+	so_peer_connected(&g, "ABCD#123");
+	CHECK_INT(so_peer_first_game(&g), 0);
+	so_peer_connected(&g, "WXYZ#456");
+	so_peer_game_started(&g);
+	CHECK_INT(so_peer_first_game(&g), 1);
+	/* one game, then a new connection to them: the next game is their second */
+	so_peer_connected(&g, "WXYZ#456");
+	so_peer_game_started(&g);
+	CHECK_INT(so_peer_first_game(&g), 0);
+	/* back to the first opponent: the last game played was not theirs */
+	so_peer_connected(&g, "ABCD#123");
+	CHECK_INT(so_peer_first_game(&g), 1);
+	so_peer_game_started(&g);
+	CHECK_INT(so_peer_first_game(&g), 1);
+	so_peer_game_started(&g);
+	CHECK_INT(so_peer_first_game(&g), 0);
+}
+
 /* ---- so_mm messages ------------------------------------------------------ */
 
 static void test_mm_ticket(void)
@@ -638,12 +728,54 @@ static void test_gct(void)
 	len = so_gct_drop(g, sizeof(g), drop, 2);
 	CHECK(len == 8 + 16 + 8 + 8);
 	CHECK(so_get_u32(g + 8) == 0xC2100000 && so_get_u32(g + 24) == 0x04200000 && so_get_u32(g + 32) == 0xF0000000);
+	{
+		/* codes added at the end, before the terminator: a 04 and a C2 of one line */
+		static const u8 more[] = {
+			0x04, 0x03, 0x0E, 0x44, 0x4E, 0x80, 0x00, 0x20,
+			0xC2, 0x16, 0xE9, 0xAC, 0x00, 0x00, 0x00, 0x01,
+			0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		};
+		u8 big[sizeof(gct) + sizeof(more)];
+		u32 with;
+		memcpy(big, g, len);
+		CHECK(so_gct_append(big, len, len + sizeof(more) - 1, more, sizeof(more)) == len);	/* no room: as it was */
+		CHECK(!memcmp(big, g, len));
+		with = so_gct_append(big, len, sizeof(big), more, sizeof(more));
+		CHECK(with == len + sizeof(more));
+		CHECK(!memcmp(big, g, len - 8) && !memcmp(big + len - 8, more, sizeof(more)));
+		CHECK(so_get_u32(big + with - 8) == 0xF0000000 && so_get_u32(big + with - 4) == 0);
+		CHECK(so_gct_link(big, with, 0x80400000) == 2);	/* the added C2 is linked like the others */
+		CHECK(so_gct_append(big, 12, sizeof(big), more, sizeof(more)) == 12);	/* no terminator: as it was */
+	}
 	/* The C2's last word becomes a branch from load+8+8+4 back to 0x80100004. */
 	CHECK(so_gct_link(g, len, 0x80400000) == 1);
 	{
 		u32 insn = so_get_u32(g + 20), site = 0x80400000 + 8 + 8 + 4;
 		s32 disp = (s32)((insn & 0x03FFFFFC) << 6) >> 6;
 		CHECK((insn & 0xFC000003) == 0x48000000 && site + (u32)disp == 0x80100004);
+	}
+
+	{
+		/* the capture check: changed once, where it is; no change when it is not all there */
+		static const u8 check[] = {
+			0x00, 0xD0, 0xC0, 0xDE, 0x00, 0xD0, 0xC0, 0xDE,
+			0xC2, 0x1A, 0x4D, 0xE4, 0x00, 0x00, 0x00, 0x04,
+			0x88, 0x7E, 0x03, 0x8C, 0x2C, 0x03, 0x00, 0x00,
+			0x41, 0x82, 0x00, 0x2C, 0x80, 0x7E, 0x0A, 0xC9,
+			0x7C, 0x1F, 0x18, 0x00, 0x40, 0x81, 0x00, 0x20,
+			0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+			0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		};
+		u8 c[sizeof(check)];
+		memcpy(c, check, sizeof(c));
+		CHECK(so_gct_fix_capture_check(c, sizeof(c)) == 1);
+		CHECK(so_get_u32(c + 36) == 0x41800020);
+		CHECK(memcmp(c, check, 36) == 0 && memcmp(c + 40, check + 40, sizeof(c) - 40) == 0);
+		CHECK(so_gct_fix_capture_check(c, sizeof(c)) == 0);	/* done already: no such check */
+		memcpy(c, check, sizeof(c));
+		c[33] = 0;	/* not the check */
+		CHECK(so_gct_fix_capture_check(c, sizeof(c)) == 0);
+		CHECK(memcmp(c + 36, check + 36, 4) == 0);
 	}
 
 	{
@@ -703,6 +835,122 @@ static void test_disc_files(void)
 	test_set_disc(NULL, 0);
 }
 
+/* ---- so_logfile ------------------------------------------------------------ */
+
+static void test_logfile(void)
+{
+	static u8 arena[0x8000] __attribute__((aligned(32)));
+	char line[160];
+	const char *f;
+	int i;
+	/* what a person would not post: an address's last two numbers, a connect code but for its first character */
+	strcpy(line, "12.345 np: connection with 203.0.113.57:51441");
+	so_logfile_scrub(line);
+	CHECK_STR(line, "12.345 np: connection with 203.0.x.x:51441");
+	strcpy(line, "mm: connecting from port 2626 (mode 2, LAN address 192.168.1.20)");
+	so_logfile_scrub(line);
+	CHECK_STR(line, "mm: connecting from port 2626 (mode 2, LAN address 192.168.x.x)");
+	strcpy(line, "account: TEST#123 and X#1, version 1.4.0-beta.3, word 80003100, SO searching #3");
+	so_logfile_scrub(line);
+	CHECK_STR(line, "account: T***#*** and X#*, version 1.4.0-beta.3, word 80003100, SO searching #3");
+	strcpy(line, "1.2.3.4.5 and 1234.1.1.1 and 1.1.1.1234 and 714.508 are no addresses");
+	so_logfile_scrub(line);
+	CHECK_STR(line, "1.2.3.4.5 and 1234.1.1.1 and 1.1.1.1234 and 714.508 are no addresses");
+
+	/* a crash, the switch off: the boot's last lines and the report, as a crash file, at once */
+	test_log_files_reset();
+	so_logfile_test_reset();
+	CHECK_INT(so_alloc_init(arena, sizeof(arena)), 0);
+	test_set_time_us(0);
+	so_logfile_init(0);
+	CHECK(!so_logfile_diag());
+	for (i = 0; i < 400; i++) {
+		so_snprintf(line, sizeof(line), "%d.000 line %d of the boot, with 10.0.0.%d in it", i, i, i % 250);
+		so_logfile_line(line);
+	}
+	CHECK_INT(so_logfile_service(0, 1), 0);	/* (no crash, no switch: no file) */
+	CHECK(test_log_file("/slippwii/logs/number.txt", NULL) == NULL);
+	so_logfile_line("400.000 CRASH: exception 2 at 8005bc70");
+	so_logfile_crash();
+	CHECK(so_logfile_service(1, 0) > 0);
+	f = test_log_file("/slippwii/logs/crash-1.txt", NULL);
+	CHECK(f != NULL);
+	if (f) {
+		const char *body = strstr(f, "\n\n");
+		CHECK(strstr(f, "SlippWii crash report, number 1 on this card\n") == f);
+		CHECK(strstr(f, "a test's console\n") != NULL);
+		CHECK(strstr(f, "400.000 CRASH: exception 2 at 8005bc70\n") != NULL);
+		CHECK(strstr(f, "399.000 line 399 of the boot, with 10.0.x.x in it\n") != NULL);
+		CHECK(strstr(f, "line 0 of the boot") == NULL);	/* (older than the ring) */
+		CHECK(strstr(f, "10.0.0.") == NULL);
+		CHECK(strstr(f, "lines are missing") == NULL);
+		/* (the first line of the log in it is a whole one) */
+		CHECK(body && body[2] >= '0' && body[2] <= '9' && strstr(body + 2, ".000 line ") < strchr(body + 2, '\n'));
+	}
+	CHECK_STR(test_log_file("/slippwii/logs/number.txt", NULL), "1\n");
+	CHECK(strstr(test_log_file("/slippwii/logs/newest.txt", NULL), "crash-1.txt (number 1)") != NULL);
+	so_logfile_line("401.000 exit: done");	/* (what comes after goes on into it) */
+	CHECK(so_logfile_service(1, 1) > 0);
+	CHECK(strstr(test_log_file("/slippwii/logs/crash-1.txt", NULL), "401.000 exit: done\n") != NULL);
+
+	/* the switch on: every line; between games a write a second, in one every 5 s, at once when asked */
+	so_logfile_test_reset();
+	CHECK_INT(so_alloc_init(arena, sizeof(arena)), 0);
+	test_set_time_us(0);
+	so_logfile_init(1);
+	CHECK(so_logfile_diag());
+	so_logfile_line("0.100 first");
+	CHECK(so_logfile_service(0, 0) > 0);
+	f = test_log_file("/slippwii/logs/log-2.txt", NULL);
+	CHECK(f && strstr(f, "SlippWii diagnostic log, number 2 on this card\n") == f && strstr(f, "0.100 first\n"));
+	so_logfile_line("0.200 second");
+	CHECK_INT(so_logfile_service(0, 0), 0);
+	test_advance_us(1100000);
+	CHECK(so_logfile_service(0, 0) > 0);
+	so_logfile_line("1.300 in a game");
+	test_advance_us(1100000);
+	CHECK_INT(so_logfile_service(1, 0), 0);
+	test_advance_us(4000000);
+	CHECK(so_logfile_service(1, 0) > 0);
+	so_logfile_line("6.500 poll gap");
+	so_logfile_now();
+	CHECK(so_logfile_service(1, 0) > 0);
+	CHECK(strstr(test_log_file("/slippwii/logs/log-2.txt", NULL), "6.500 poll gap\n") != NULL);
+	/* more than the ring holds between two writes: said, and on from a whole line */
+	for (i = 0; i < 900; i++) {
+		so_snprintf(line, sizeof(line), "7.%03d a burst's line %d", i, i);
+		so_logfile_line(line);
+	}
+	CHECK(so_logfile_service(1, 1) > 0);
+	f = test_log_file("/slippwii/logs/log-2.txt", NULL);
+	CHECK(f && strstr(f, "(lines are missing here") != NULL && strstr(f, "a burst's line 899\n") != NULL);
+	CHECK(f && strstr(f, "a burst's line 0\n") == NULL);
+
+	/* no card: nothing more is tried, and nothing breaks */
+	so_logfile_test_reset();
+	CHECK_INT(so_alloc_init(arena, sizeof(arena)), 0);
+	host_log_files_fail = 1;
+	so_logfile_init(1);
+	so_logfile_line("0.100 no card");
+	CHECK_INT(so_logfile_service(0, 1), 0);
+	CHECK(!so_logfile_diag());
+	host_log_files_fail = 0;
+
+	/* the ninth file takes the first one's place */
+	test_log_files_reset();
+	CHECK_INT(so_write_file("/slippwii/logs/number.txt", "8\n", 2), 0);
+	so_logfile_test_reset();
+	CHECK_INT(so_alloc_init(arena, sizeof(arena)), 0);
+	so_logfile_init(0);
+	so_logfile_line("0.100 PANIC");
+	so_logfile_crash();
+	CHECK(so_logfile_service(0, 0) > 0);
+	f = test_log_file("/slippwii/logs/crash-1.txt", NULL);
+	CHECK(f && strstr(f, "number 9 on this card") != NULL);
+	test_log_files_reset();
+	so_logfile_test_reset();
+}
+
 int main(void)
 {
 	RUN(test_snprintf);
@@ -719,11 +967,14 @@ int main(void)
 	RUN(test_remote_pads);
 	RUN(test_ack_timers);
 	RUN(test_time_sync);
+	RUN(test_direct_mode);
+	RUN(test_peer_games);
 	RUN(test_mm_ticket);
 	RUN(test_mm_match);
 	RUN(test_text);
 	RUN(test_gct);
 	RUN(test_disc_files);
+	RUN(test_logfile);
 	printf("%d checks, %d failures\n", test_checks, test_failures);
 	return test_failures ? 1 : 0;
 }

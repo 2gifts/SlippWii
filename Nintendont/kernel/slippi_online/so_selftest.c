@@ -253,14 +253,17 @@ static void report(const Results *r, int ok)
  * settings for this run, so a test changes without touching the SD card. */
 static void fetch_plan(void)
 {
-	static char reply[1024];
+	enum { REPLY = 1024 };
+	char *reply = so_malloc(REPLY);	/* (the kernel's data is full) */
 	u64 sent = so_time_us();
+	if (!reply)
+		return;
 	SO_PHASE("plan");
 	so_socket_send(test_config.log_host, test_config.log_port, "SLPWII PLAN?", 12);
 	while (so_time_us() - sent < 2000000) {
 		u32 addr;
 		u16 from;
-		int got = so_socket_receive(&addr, &from, reply, sizeof(reply) - 1, NULL);
+		int got = so_socket_receive(&addr, &from, reply, REPLY - 1, NULL);
 		if (got <= 0) {
 			so_sleep_us(5000);
 			continue;
@@ -269,9 +272,11 @@ static void fetch_plan(void)
 			so_client_apply_settings(reply + 12, (u32)(got - 12));
 			test_config = *so_client_config();
 			so_log("selftest: plan from the PC applied (%d bytes)", got - 12);
+			so_free(reply);
 			return;
 		}
 	}
+	so_free(reply);
 	so_log("selftest: no plan from the PC; using config.ini");
 }
 
