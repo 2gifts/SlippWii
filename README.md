@@ -28,6 +28,7 @@ with and help improve the project.
 | Ping display | The ping to your opponent in the top left corner during a game, as on Slippi Dolphin. On or off with the **Show Ping** switch on the online character select screen (remembered). |
 | Replays | As on Slippi Nintendont: with **Slippi Replays** on in the settings (the *Slippi* page), each game is saved as a Slippi replay (`.slp`) in a `Slippi` folder on your *other* drive: a USB drive if your game is on the SD card, the SD card if your game is on a USB drive. Both must be plugged in; the LAN adapter takes one of the Wii's USB ports, so the drive goes in the other. Off by default. |
 | Quick chat, connect code history | Work as on Slippi Dolphin. |
+| Updates | Since 1.5.0, SlippWii updates itself on the Wii: **Check for Updates** on the *Slippi Settings* page downloads a newer version and installs it on the card. |
 
 How it feels: both sides play with rollback. When your opponent's input is late, the Wii carries
 on with a guess and corrects it when the input arrives, as Slippi Dolphin does. A late packet no
@@ -68,11 +69,32 @@ on the Wii, and keeps them on the card. Later starts skip this. Nothing from Mel
 SlippWii; the zip has Project Slippi's own files (its online code, menu files and patches) and
 SlippWii.
 
-To update, extract the newer zip onto the card the same way (your account and settings stay).
 To uninstall, delete `apps/SlippWii`, `slippwii/` and `slippwii_nincfg.bin`.
 
-**Had the rollback beta?** Rollback is in the regular SlippWii since 1.4.0. Update as above, then
-delete `apps/SlippWii-Rollback` from the card: the beta's app is no longer needed.
+### Updating
+
+The first install is done with a computer, as above. After that the Wii updates itself (SlippWii
+1.5.0 and later):
+
+1. Start SlippWii and press **B** on the game list. *Check for Updates* is the first row of the
+   *Slippi Settings* page: press **A**.
+2. If a newer version is out, SlippWii shows what is new. Press **A** to install it. It downloads
+   the release from GitHub, checks it, and replaces SlippWii's files on the card. Your account and
+   your settings are kept.
+3. Start SlippWii again from the Homebrew Channel. The first start after an update takes a little
+   longer.
+
+It needs the same wired connection online play does. Don't turn the console off while it installs.
+If anything goes wrong, SlippWii says what, and the old version stays on the card.
+
+You can still update with a computer: extract the newer zip onto the card the same way as the first
+time. From 1.4.0 or older, that is the way to get 1.5.0.
+
+SlippWii only installs a release that carries SlippWii's own signature, and it contacts GitHub only
+when you press the button: nothing about you or your console is sent.
+
+**Had the rollback beta?** Rollback is in the regular SlippWii since 1.4.0. Extract the newest zip
+onto the card, then delete `apps/SlippWii-Rollback` from it: the beta's app is no longer needed.
 
 ### Your Slippi account
 
@@ -114,6 +136,8 @@ On the *Slippi Settings* page:
 
 | Setting | What it does |
 |---|---|
+| **Check for Updates** | Looks for a newer SlippWii and installs it (see *Updating*). |
+| **No Music** | Turns the game's music off, in the menus and in matches. Sound effects stay. |
 | **L-Cancel Red Flash** | A character flashes red when it misses an L-cancel. |
 | **No Screen Shake** | The screen does not shake. |
 | **Center 2P HUD** | With two players, the percents sit in the middle of the screen. |
@@ -121,8 +145,9 @@ On the *Slippi Settings* page:
 | **Screen** (under *MELEE CODES*) | Widescreen, online too. |
 | **Diagnostic Log** | Saves SlippWii's log on the SD card for a problem report (see *Reporting problems*). Leave it off otherwise. |
 
-The first four are Slippi's own optional codes, the ones you can turn on in Slippi Dolphin. They
-work online and offline, change only what your console draws, and your opponent does not need them.
+*L-Cancel Red Flash*, *No Screen Shake*, *Center 2P HUD* and *Freeze FD* are Slippi's own optional
+codes, the ones you can turn on in Slippi Dolphin. They and *No Music* work online and offline,
+change only what your console shows and plays, and your opponent does not need them.
 
 SlippWii has its own app folder, settings file and data folder, so **Slippi Nintendont stays
 installed and works as before**. Use it for offline play and console mirroring as usual.
@@ -204,6 +229,8 @@ Building from source: [`docs/BUILDING.md`](docs/BUILDING.md).
   (slippi-ssbm-asm) and Slippi Nintendont, which this is built on. Thank you, Fizzi and the Slippi team.
 - [Nintendont](https://github.com/FIX94/Nintendont) by FIX94, crediar and contributors.
 - [ENet](http://enet.bespin.org/) by Lee Salzman (MIT).
+- [BearSSL](https://bearssl.org/) by Thomas Pornin (MIT) and puff by Mark Adler (zlib licence), for
+  *Check for Updates*.
 
 SlippWii is licensed under the GNU General Public License v2 (see [LICENSE](LICENSE)), as
 Nintendont is. Slippi's online code that SlippWii downloads and runs (slippi-ssbm-asm) is GPLv3.

@@ -21,6 +21,11 @@ tools/slippi_files.py). --iso is your own NTSC 1.02 disc: the manifest needs
 the patched files' sizes and CRC-32s, and only those are kept. The tree
 must be clean and boot.dol built after the last commit, unless
 --allow-dirty.
+
+Beside the zip it writes dist/update.txt, the release's second file: what
+"Check for Updates" on a Wii reads (the version, the zip's SHA-256, up to
+three --note lines), signed with the release key (tools/sign_update.py).
+Both go on the GitHub release, update.txt under exactly that name.
 """
 import argparse
 import datetime
@@ -37,6 +42,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import slippi_files  # noqa: E402
+import sign_update  # noqa: E402
 
 APP = ROOT / 'dist/sd/apps/SlippWii'
 REL = ROOT / 'release'
@@ -80,7 +86,32 @@ Reduction" (Dolphin-only), as a console needs:
 SlippWii applies the patches on the Wii to your own Melee disc; no Melee
 files are included. SlippWii itself is GPLv2 (LICENSE.txt); source:
 https://github.com/2gifts/SlippWii
+
+"Check for Updates" uses BearSSL (Thomas Pornin, MIT licence,
+https://bearssl.org) and puff (Mark Adler, zlib licence).
 """
+
+
+SLIPPWII_FILES = ('netplay.gct', 'NOTICE.txt', 'LICENSE.txt', 'PUT user.json HERE.txt', 'copy-account.ps1')
+
+
+def update_allows(name):
+    """What a release's zip may hold, as "Check for Updates" has it (upd_name_allowed in
+    Nintendont/loader/source/update/upd_core.c; tools/test_update.py holds the two to each other).
+    An installed SlippWii refuses a whole release over one file outside this, so a new kind of file
+    needs the rule changed one release before the file comes."""
+    if not name or len(name) > 100 or name[0] == '/' or name[-1] == '/' or '..' in name or '//' in name:
+        return False
+    if any(ord(c) < 0x20 or ord(c) > 0x7E or c in '\\:*?"<>|' for c in name):
+        return False
+    for prefix in ('apps/SlippWii/', 'slippwii/files/', 'slippwii/patches/'):
+        if name.startswith(prefix):
+            return '/' not in name[len(prefix):]
+    if name.startswith('slippwii/'):
+        return name[9:] in SLIPPWII_FILES
+    if '/' in name:
+        return False
+    return len(name) > 4 and name.endswith(('.txt', '.bat'))
 
 
 def git(*args, cwd=ROOT):
@@ -96,6 +127,8 @@ def main():
     ap.add_argument('version')
     ap.add_argument('--iso', required=True, help='your NTSC 1.02 Melee disc (only the patched files\' CRC-32s are kept)')
     ap.add_argument('--allow-dirty', action='store_true')
+    ap.add_argument('--note', action='append', default=[],
+                    help='a line of what is new, for "Check for Updates" on the Wii (up to 3, 63 characters each)')
     args = ap.parse_args()
     v = args.version.lstrip('v')
 
@@ -121,6 +154,10 @@ def main():
                  'then sh tools/build.sh, and commit')
     if f'SLIPPWII_VERSION\t"{v}"' not in (ROOT / 'Nintendont/common/include/Metadata.h').read_text():
         sys.exit(f'Nintendont/common/include/Metadata.h does not say SLIPPWII_VERSION "{v}"')
+    # (a test's signing key in a release would let that test's server update players' consoles)
+    for inc in ('Nintendont/loader/source/update_test.inc', 'Nintendont/kernel/slippi_online/so_test_config.inc'):
+        if any(not line.startswith(('/*', '""')) for line in (ROOT / inc).read_text().splitlines() if line.strip()):
+            sys.exit(f'{inc} is a test build\'s: put the repo\'s own back and build again')
 
     meta = (REL / 'apps/SlippWii/meta.xml').read_text(encoding='utf-8')
     meta = re.sub(r'<version>[^<]*</version>', f'<version>{v}</version>', meta)
@@ -162,10 +199,30 @@ def main():
         z.writestr('slippwii/LICENSE.txt', crlf((ROOT / 'LICENSE').read_text(encoding='utf-8')))
         z.writestr('Copy my Slippi account to SD.bat', crlf((REL / 'Copy my Slippi account to SD.bat').read_text(encoding='utf-8')))
         z.writestr('SlippWii README.txt', crlf(README.format(version=v)))
+    with zipfile.ZipFile(out) as z:
+        refused = [n for n in z.namelist() if not update_allows(n)]
+    if refused:
+        sys.exit(f'"Check for Updates" would refuse this release: {refused} (update_allows, above)')
     sha = hashlib.sha256(out.read_bytes()).hexdigest()
     print(f'{out} ({out.stat().st_size // 1024} KB)\n  zip sha256 {sha}\n'
           f'  boot.dol sha256 {hashlib.sha256((APP / "boot.dol").read_bytes()).hexdigest()}\n'
           f'  source: SlippWii {git("rev-parse", "--short", "HEAD")}')
+
+    # What "Check for Updates" reads: the release's second file, signed with the release key.
+    key = sign_update.default_key()
+    if not key.exists():
+        print(f'  NO update.txt: the release key is not at {key} (tools/sign_update.py). Without it, installed\n'
+              '  copies of SlippWii do not see this release.')
+        return
+    key_h = (ROOT / 'Nintendont/loader/source/update/upd_key.h').read_text()
+    point = sign_update.public_point(key)
+    if ', '.join(f'0x{b:02X}' for b in point[:12]) not in key_h:
+        sys.exit(f'{key} is not the key whose public half is in upd_key.h: installed copies would refuse the release')
+    text = sign_update.manifest(key, v, out.read_bytes(), args.note)
+    sign_update.verify(text, point, out.read_bytes())
+    (ROOT / 'dist/update.txt').write_bytes(text)
+    (ROOT / f'dist/update-v{v}.txt').write_bytes(text)
+    print(f'  dist/update.txt ({len(text)} bytes): attach it to the GitHub release beside the zip, under that name')
 
 
 if __name__ == '__main__':

@@ -2709,6 +2709,9 @@ void so_exi_write(const u8 *request, u32 dma_len)
 			so_log("exi: optional codes: %u bytes in the codeset; in the game %08x (L-cancel flash), %08x (screen shake), "
 				"%08x (2P HUD), %08x (Final Destination)", (unsigned)so_files_optional(), (unsigned)so_ppc_word(0x000C0148),
 				(unsigned)so_ppc_word(0x00030E44), (unsigned)so_ppc_word(0x0016E9AC), (unsigned)so_ppc_word(0x0021AAE0));
+			/* (the No Music switch: 38800000 and 4e800020 with it, Melee's own words without) */
+			so_log("exi: music: in the game %08x (its volume), %08x (its stream)", (unsigned)so_ppc_word(0x00023FFC),
+				(unsigned)so_ppc_word(0x0038ADD0));
 			if (so_client_config()->test_logfile_dump)
 				logfile_dump();
 			/* (192 words, a bit a page; the first few: their first page, the word) */

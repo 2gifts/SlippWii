@@ -1,27 +1,20 @@
-/*
-
-Nintendont (Loader) - Playing Gamecubes in Wii mode on a Wii U
-
-Copyright (C) 2014  JoostinOnline
-
-This program is free software; you can redistribute it and/or
-modify it under the terms of the GNU General Public License
-as published by the Free Software Foundation version 2.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program; if not, write to the Free Software
-Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
-
-*/
-
+/* SlippWii: "Check for Updates" (source/update.c).
+ *
+ * The Slippi Settings page's first row: asks GitHub for the latest release and, if it is newer than
+ * this one, installs it on the card. Upstream Nintendont's own updater, which this header once
+ * declared, is not in Slippi Nintendont.
+ */
 #ifndef __UPDATE_H__
 #define __UPDATE_H__
 
-void UpdateNintendont(void);
+/* The screens of it. Returns when the person is done; after an update was installed it goes back to
+ * the Homebrew Channel instead (the app in memory is the old one). */
+void SlippWii_Update(void);
+
+/* tests (tools/update_wii_test.py): the launch argument "slippwii-update-test=URL;FOLDER", kept by
+ * main.c. Only a test build acts on it (source/update_test.inc): there SlippWii_UpdateTest runs the
+ * update by itself and returns 1. In every other build it returns 0 and does nothing. */
+extern const char *SlippWiiUpdateTest;
+int SlippWii_UpdateTest(void);
 
 #endif

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.5.0
+
+- **Check for Updates**, the first row of the *Slippi Settings* page: SlippWii looks on GitHub for a
+  newer release and installs it on the card, on the Wii, over the wired connection. Your account
+  and your settings are kept; if anything fails, the old version stays. It installs only a release
+  signed with SlippWii's key, and contacts GitHub only when you press the button. This first
+  version with it still comes by SD card; the ones after it need no computer.
+- **No Music**, a switch on the same page: the game's music off, in the menus and in matches,
+  online and offline, remembered with the other settings. Sound effects stay.
+
 ## 1.4.0
 
 **Rollback netcode is now the regular SlippWii.** What the "SlippWii Rollback" betas were is this

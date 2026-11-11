@@ -161,6 +161,17 @@ static const char *desc_memcard_multi[] = {
 	"games.",
 	NULL
 };
+static const char *desc_update[] = {
+	"Press A: looks on GitHub for a",
+	"newer SlippWii and installs it",
+	"on this card. No computer",
+	"needed.",
+	"",
+	"Needs the wired LAN adapter.",
+	"Your account and your settings",
+	"are kept.",
+	NULL
+};
 static const char *desc_networking[] = {
 	"Always on in SlippWii (Slippi",
 	"Online needs it). Network settings",
@@ -237,6 +248,15 @@ static const char *desc_sw_freeze_fd[] = {
 	"console shows it.",
 	NULL
 };
+static const char *desc_sw_no_music[] = {
+	"Turns the game's music off, in",
+	"the menus and in matches. Sound",
+	"effects stay.",
+	"",
+	"Online and offline. Only this",
+	"console hears it.",
+	NULL
+};
 
 // SlippWii's switches on the Slippi page: the row (CommonConfig.h, ninslippisettings), the bit of
 // ncfg->Config (NIN_CFG_SW_*), what it is called. The kernel reads the bits: Patch.c and
@@ -252,6 +272,7 @@ static const struct {
 	{ NIN_SLIPPI_NO_SHAKE, NIN_CFG_SW_NO_SHAKE, "No Screen Shake", desc_sw_no_shake },
 	{ NIN_SLIPPI_CENTER_HUD, NIN_CFG_SW_CENTER_HUD, "Center 2P HUD", desc_sw_center_hud },
 	{ NIN_SLIPPI_FREEZE_FD, NIN_CFG_SW_FREEZE_FD, "Freeze FD", desc_sw_freeze_fd },
+	{ NIN_SLIPPI_NO_MUSIC, NIN_CFG_SW_NO_MUSIC, "No Music", desc_sw_no_music },
 };
 #define SLIPPWII_SWITCHES (sizeof(slippwiiSwitches) / sizeof(slippwiiSwitches[0]))
 
@@ -1009,6 +1030,8 @@ static const char *const *GetSettingsDescription(const MenuCtx *ctx)
 		}
 	case PAGE_SLIPPI_SETTINGS:
 		switch (ctx->settings.posX) {
+		case NIN_SLIPPI_UPDATE:
+			return desc_update;
 		case NIN_SLIPPI_NETWORKING: 
 			return desc_networking;
 		case NIN_SLIPPI_REPLAYS: 
@@ -1303,6 +1326,12 @@ static void Menu_Settings_InputHandler(MenuCtx *ctx)
 
 			// Slippi page settings
 			switch (ctx->settings.posX) {
+			case NIN_SLIPPI_UPDATE:
+				// (what this visit changed is saved first: an installed update ends at the Homebrew Channel)
+				SaveNinCFG();
+				ctx->saveSettings = false;
+				SlippWii_Update();
+				break;
 			case NIN_SLIPPI_NETWORKING:
 				ncfg->Config |= (NIN_CFG_NETWORK);	// always on in SlippWii
 				break;
@@ -1324,7 +1353,8 @@ static void Menu_Settings_InputHandler(MenuCtx *ctx)
 			case NIN_SLIPPI_LCANCEL_FLASH:
 			case NIN_SLIPPI_NO_SHAKE:
 			case NIN_SLIPPI_CENTER_HUD:
-			case NIN_SLIPPI_FREEZE_FD: ;
+			case NIN_SLIPPI_FREEZE_FD:
+			case NIN_SLIPPI_NO_MUSIC: ;
 				unsigned int sw;
 				for (sw = 0; sw < SLIPPWII_SWITCHES; sw++)
 					if (slippwiiSwitches[sw].row == ctx->settings.posX)
@@ -1485,6 +1515,11 @@ static void Menu_Settings_Redraw(MenuCtx *ctx)
 	} 
 	else 
 	{
+		// SlippWii's updater (update.c): an action
+		PrintFormat(MENU_SIZE, BLACK, MENU_POS_X + SETTINGS_X_START, SettingY(ListLoopIndex),
+				"%-18s", "Check for Updates");
+		ListLoopIndex++;
+
 		// Networking
 		PrintFormat(MENU_SIZE, BLACK, MENU_POS_X + SETTINGS_X_START, SettingY(ListLoopIndex),
 				"%-18s:%-4s", "Slippi Networking", (ncfg->Config & (NIN_CFG_NETWORK)) ? "Yes" : "No ");
@@ -1674,6 +1709,8 @@ static int Menu_GameSelection(void)
 		ctx.pages.selected = ctx.pages.pages[0].ID;
 		ctx.settings.posX = SlippWiiMenuTest - 1;
 	}
+	if (SlippWii_UpdateTest())
+		ExitToLoader(0);	// tests, a test build only (update.h): the updater ran by itself
 
 	// Set the default game
 	u32 i;

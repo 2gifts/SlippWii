@@ -42,6 +42,7 @@ DSTATUS disk_status (BYTE pdrv);
 // Nintendont loader functions.
 DRESULT disk_shutdown (BYTE pdrv);
 DRESULT disk_flush (BYTE pdrv);
+DRESULT disk_forget (BYTE pdrv);	/* SlippWii (loader/source/diskio.c): flush, and read from the drive next */
 #endif
 
 DRESULT disk_read (BYTE pdrv, BYTE* buff, DWORD sector, UINT count);

@@ -57,6 +57,7 @@ enum ninconfigbitpos
 	NIN_CFG_BIT_SW_CENTER_HUD = (18),	// "Center Align 2P HUD"
 	NIN_CFG_BIT_SW_FREEZE_FD = (19),	// "Freeze Final Destination Background"
 	NIN_CFG_BIT_SW_DIAG_LOG	= (20),		// the kernel's log on the SD card (slippi_online/so_logfile.c)
+	NIN_CFG_BIT_SW_NO_MUSIC	= (21),		// no music (1.5.0): how Slippi Dolphin silences the game's own
 
 	// Internal kernel settings.
 	NIN_CFG_BIT_MC_SLOTB	= (31),	// Slot B image is loaded
@@ -87,6 +88,7 @@ enum ninconfig
 	NIN_CFG_SW_CENTER_HUD	= (1<<NIN_CFG_BIT_SW_CENTER_HUD),
 	NIN_CFG_SW_FREEZE_FD	= (1<<NIN_CFG_BIT_SW_FREEZE_FD),
 	NIN_CFG_SW_DIAG_LOG	= (1<<NIN_CFG_BIT_SW_DIAG_LOG),
+	NIN_CFG_SW_NO_MUSIC	= (1<<NIN_CFG_BIT_SW_NO_MUSIC),
 
 	NIN_CFG_MC_SLOTB	= (1<<NIN_CFG_BIT_MC_SLOTB),
 };
@@ -108,6 +110,7 @@ enum ninextrasettings
 
 enum ninslippisettings
 {
+	NIN_SLIPPI_UPDATE,		// "Check for Updates" (loader/source/update.c): an action, not a setting
 	NIN_SLIPPI_NETWORKING,
 	NIN_SLIPPI_REPLAYS,
 	NIN_SLIPPI_REPLAYS_LED,
@@ -118,6 +121,7 @@ enum ninslippisettings
 	NIN_SLIPPI_NO_SHAKE,
 	NIN_SLIPPI_CENTER_HUD,
 	NIN_SLIPPI_FREEZE_FD,
+	NIN_SLIPPI_NO_MUSIC,
 	NIN_SLIPPI_BLANK_1,		// (the "MELEE CODES" heading)
 	NIN_SLIPPI_DYNAMIC_CODES_START,
 };

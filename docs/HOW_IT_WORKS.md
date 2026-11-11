@@ -47,7 +47,9 @@ the games stay in sync. Desync detection (Slippi's per-frame checksums) works as
 ### Things a console needs that Dolphin doesn't
 
 - **Music:** Dolphin plays the music itself and the codeset mutes the game's. On a Wii those hooks
-  are left out, so the game plays its own music.
+  are left out, so the game plays its own music. The loader's *No Music* switch puts the two lines
+  that mute it back (`MuteMusic.asm`, `PreventMusicAlarm.asm`), with nobody to play it instead:
+  silence, as a player who turns the music off wants.
 - **"Normal Lag Reduction"** writes frames to a display buffer that only exists in Dolphin; on a
   console the GPU's write hangs the bus, so that code is dropped. The polling fix ("PD+VB") stays.
 - **Stage files loaded mid-game** (Pokémon Stadium's transformations) are kept in RAM, as Dolphin
@@ -67,6 +69,35 @@ the games stay in sync. Desync detection (Slippi's per-frame checksums) works as
   same measurement: the round trip of the last pad acknowledged.
 
 The research and measurements that led here are in [research/FEASIBILITY.md](research/FEASIBILITY.md).
+
+### Updates
+
+*Check for Updates* runs in the loader, before any game (`loader/source/update.c`), on the network
+the Wii already has for online play.
+
+- **What it asks.** One small text file, `update.txt`, from the latest release on GitHub
+  (`releases/latest/download/update.txt`): the version, where the release's zip is, its size and
+  SHA-256, and a few lines of what is new. If the version is newer than the one running and the
+  player says yes, it fetches the zip: the same file a person extracts onto the card.
+- **Why a file is trusted.** `update.txt` ends with a signature made with SlippWii's release key
+  (ECDSA P-256), whose public half is compiled into the loader. The loader reads nothing of a file
+  that is not signed with it, and installs no zip but the one whose SHA-256 the signed text names.
+  That holds whatever server answers and whoever sits on the connection, so the connection's
+  certificates are not checked: a Wii's clock is often wrong, which alone fails such a check, and no
+  certificate could say that a file is SlippWii's anyway.
+- **TLS.** GitHub takes TLS 1.2 and later; the Wii's own SSL (IOS, 2006) is older. The loader brings
+  BearSSL, which needs no operating system: it is given a socket's read and write.
+- **Onto the card.** The zip is unpacked in memory first, every file against its CRC-32 and against
+  a list of what a release may contain (the app, Slippi's files, the notes beside them; never the
+  account, the settings or the logs). Then each file is written under a temporary name and read
+  back; only when all are there do the new ones replace the old, the app itself last; and they are
+  read back once more. A card that fails before the replacing leaves the old version untouched.
+- **What leaves the console:** the two requests, to GitHub, when the button is pressed. No account
+  data, no identifier.
+
+The part that is the same on a Wii and a PC (`loader/source/update/`) is tested on a PC against a
+web server that plays GitHub and a folder that plays the card (`tools/test_update.py`), and on a
+Wii by a test build that updates into a folder of its own (`tools/update_wii_test.py`).
 
 ## Testing without a second person
 

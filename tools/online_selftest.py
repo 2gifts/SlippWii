@@ -344,7 +344,8 @@ class Run:
             print(f'Waiting for the Homebrew Channel at {self.args.wii_ip} (open it on the Wii)...')
             while True:
                 try:
-                    wii_boot.boot(self.args.wii_ip, self.args.dol, self.args.cfg or wii_boot.BASE_CFG, timeout=3)
+                    wii_boot.boot(self.args.wii_ip, self.args.dol, self.args.cfg or wii_boot.BASE_CFG, timeout=3,
+                                  first_arg=self.args.first_arg)
                     print(f'{time.strftime("%H:%M:%S")} sent the build to the Homebrew Channel.')
                     if wii_boot.handed_over(self.args.wii_ip):
                         print(f'{time.strftime("%H:%M:%S")} it took it; Melee is starting.')
@@ -567,6 +568,7 @@ def main():
                     help="the Wii's address (default: $SLIPPWII_WII_IP)")
     ap.add_argument('--dol', default=str(ROOT / 'Nintendont/loader/loader.dol'))
     ap.add_argument('--cfg', help='--boot: the NIN_CFG to start from (default: wii_boot.py\'s)')
+    ap.add_argument('--first-arg', help="--boot: a test's launch argument for the loader, before the settings")
     ap.add_argument('--tools', default=str(DEFAULT_TOOLS))
     ap.add_argument('--timeout', type=int, default=900, help='seconds to wait for a result')
     ap.add_argument('--rollback', type=int, metavar='LAG',

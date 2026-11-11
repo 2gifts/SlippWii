@@ -129,6 +129,7 @@ u32 IsN64Emu = 0;
 #include "gecko/g_opt_shake.h"
 #include "gecko/g_opt_centerhud.h"
 #include "gecko/g_opt_freezefd.h"
+#include "gecko/g_opt_nomusic.h"
 
 // Boundaries of the tournament mode region in NTSC-U v1.02
 /* tests: a game that never reached its first retrace (so_diag.c). Are its boot codes as they were
@@ -151,6 +152,10 @@ u32 SlippWiiOptionalCodes(u8 *out, u32 room, int screen)
 		{ NIN_CFG_SW_NO_SHAKE, g_opt_shake, g_opt_shake_size },
 		{ NIN_CFG_SW_CENTER_HUD, g_opt_centerhud, g_opt_centerhud_size },
 		{ NIN_CFG_SW_FREEZE_FD, g_opt_freezefd, g_opt_freezefd_size },
+		/* (not one of Dolphin's optional codes: the two lines its online codeset always has, to silence
+		 * the game's music, which Dolphin then plays itself. SlippWii's codeset leaves them out
+		 * (tools/slippi_files.py, DROPPED), so the game plays its music; with the switch they are back) */
+		{ NIN_CFG_SW_NO_MUSIC, g_opt_nomusic, g_opt_nomusic_size },
 	};
 	u32 i, n = 0;
 	for (i = 0; i < sizeof(codes) / sizeof(codes[0]); i++) {

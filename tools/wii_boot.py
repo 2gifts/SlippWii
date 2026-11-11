@@ -50,12 +50,14 @@ def wiiload_packet(dol, args):
     return header + packed + args
 
 
-def boot(wii_ip, dol_path, cfg_path, timeout=10, menu=False):
+def boot(wii_ip, dol_path, cfg_path, timeout=10, menu=False, first_arg=None):
+    """Sends the loader to the Homebrew Channel. `first_arg`: a test's launch argument for the loader, before
+    the settings (e.g. "slippwii-update-then-boot=...", Nintendont/loader/source/main.c)."""
     dol = Path(dol_path).read_bytes()
     if menu:
         args = b'sd:/apps/SlippWii/boot.dol\0'  # no settings passed: the loader reads its own and shows its menu
     else:
-        args = ARGV0 + b'\0' + autoboot_cfg(Path(cfg_path).read_bytes()) + b'\0'
+        args = ARGV0 + b'\0' + (first_arg.encode() + b'\0' if first_arg else b'') + autoboot_cfg(Path(cfg_path).read_bytes()) + b'\0'
     data = wiiload_packet(dol, args)
     with socket.create_connection((wii_ip, WIILOAD_PORT), timeout=timeout) as s:
         s.sendall(data)

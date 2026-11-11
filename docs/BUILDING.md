@@ -30,6 +30,11 @@ includes have been generated.
 | `tools/make_release.py` | The release zip (the SD card's files, with the manifest of what the Wii must make) |
 | `tools/make_beta.py` | A beta's zip, as rollback's betas were: an app alone (`apps/SlippWii-Rollback`), beside an installed SlippWii |
 | `tools/menu_shot.py` | A picture of the loader's Slippi Settings page from a capture card, with nobody at the console |
+| `Nintendont/loader/source/update.c`, `update/` | *Check for Updates*: the Wii's part (network, card, screen), and the part a PC can test (the signed manifest, HTTPS, the zip) |
+| `tools/build_bearssl.py` | BearSSL, the updater's TLS library: its pinned source built for the Wii into `Nintendont/loader/extlibs` (committed) |
+| `tools/sign_update.py` | The release key, and a release's signed `update.txt` |
+| `tools/test_update.py` | The updater's core on a PC: signatures, a web server playing GitHub, a folder playing the card |
+| `tools/update_wii_test.py` | The updater on a Wii with nobody there: a test build, a server on the PC, a capture card |
 | `tools/online_selftest.py`, `tools/sweep/`, `tools/wii_mirror.py`, `tools/slp_compare.py` | Test tools |
 
 ## Tests
@@ -40,6 +45,7 @@ sh Nintendont/kernel/slippi_online/tests/pc/build.sh            # the client bui
 python tools/online_selftest.py pc --game                       # the client vs a fake Melee and opponent
 python tools/online_selftest.py pc --game --rollback 2          # the same, rolling back (docs/ROLLBACK.md)
 python tools/rollback/test/run.py                               # the savestate engine vs a simulated Wii
+python tools/test_update.py [--live]                            # the updater's core (--live: a download from GitHub)
 ```
 
 `online_selftest.py pc` needs a fake matchmaking server and peer (`slippi_fake_mm.exe`,
@@ -64,9 +70,26 @@ setup --real` writes). Release builds log nothing.
 1. Bump `SLIPPWII_VERSION` in `Nintendont/common/include/Metadata.h` and `<version>` in
    `release/apps/SlippWii/meta.xml`, and add a `CHANGELOG.md` entry.
 2. `python tools/build_online_boot.py`, `sh tools/build.sh`, then commit.
-3. `python tools/make_release.py X.Y.Z --iso Melee.iso` makes `dist/SlippWii-vX.Y.Z.zip` (the disc
-   gives the patched files' CRC-32s for the manifest; nothing else of it is kept). Attach the zip to a
-   GitHub release tagged `vX.Y.Z`.
+3. `python tools/make_release.py X.Y.Z --iso Melee.iso --note "What is new"` makes
+   `dist/SlippWii-vX.Y.Z.zip` (the disc gives the patched files' CRC-32s for the manifest; nothing
+   else of it is kept) and `dist/update.txt`, which installed copies read when a player presses
+   *Check for Updates*: the version, the zip's SHA-256 and the notes, signed with the release key.
+4. Attach both files to a GitHub release tagged `vX.Y.Z`, `update.txt` under exactly that name, and
+   make it the latest release: `releases/latest/download/update.txt` is the address the Wii asks.
+   A pre-release is never "latest", so a beta reaches nobody by this way.
+
+**The release key** signs `update.txt` (`tools/sign_update.py`; ECDSA P-256). Its private half is
+one file on the release maker's PC, outside the repo (`SLIPPWII_UPDATE_KEY`, or
+`.slippwii/update-key.pem` in the home folder); its public half is compiled into the loader
+(`Nintendont/loader/source/update/upd_key.h`). An installed SlippWii installs nothing that is not
+signed with it, whatever server answers: without the key no release reaches the Wiis by themselves
+(they fall back to the SD card), and a new key is only known to copies installed after it. Keep a
+copy of it somewhere safe.
+
+**The zip's layout is a promise to installed copies.** The updater installs the app, Slippi's files
+and the notes beside them, and refuses a release with any other file in it (`update_allows` in
+`make_release.py`, `upd_name_allowed` in `upd_core.c`): a new kind of file needs the rule changed
+one release before the file comes.
 
 **A beta**, as rollback's three were before 1.4.0, is the app alone, as `apps/SlippWii-Rollback`
 ("SlippWii Rollback (beta)"), beside an installed SlippWii whose `slippwii` folder it uses. With

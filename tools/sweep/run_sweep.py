@@ -120,6 +120,15 @@ def build(run_dir, plan, args, ip):
     boot = NIN / 'kernel/gecko/g_online_boot.bin'
     dol = NIN / 'loader/loader.dol'
     original_inc, original_boot = inc.read_bytes(), boot.read_bytes()
+    update_inc = NIN / 'loader/source/update_test.inc'
+    original_update_inc = update_inc.read_bytes()
+    if args.update_first:
+        # (the loader's updater takes a key made for this run, and with it the test's launch argument: update.c)
+        import sign_update
+        key = run_dir / 'update-test-key.pem'
+        sign_update.new_key(key)
+        update_inc.write_text('/* TEST BUILD (tools/sweep/run_sweep.py --update-first) */\n#define UPD_TEST_KEY '
+                              + ', '.join(f'0x{b:02X}' for b in sign_update.public_point(key)) + '\n', newline='\n')
     original_dol = dol.read_bytes() if dol.exists() else None
     settings = (f'mm_host={ip}\\nmm_port=43113\\nselftest_code={DOLPHIN_CODE}\\n'
                 f'log_host={ip}:51450\\nstatus_beacon=1\\ntest_control=1\\nlocal_port={WII_PORT}\\n')
@@ -167,6 +176,7 @@ def build(run_dir, plan, args, ip):
     finally:
         inc.write_bytes(original_inc)
         boot.write_bytes(original_boot)
+        update_inc.write_bytes(original_update_inc)
         if original_dol is not None:
             dol.write_bytes(original_dol)  # the normal build stays the default one
     print(f'test build: {run_dir / "loader-sweep.dol"} (repo files restored)')
@@ -207,7 +217,8 @@ def loader_cfg(run_dir, replays=False, codes=0, screen=0, diag_log=False):
     SD card) and the Screen setting (1 default, 2 16:9 to 73:60, 3 widescreen)."""
     import wii_boot
     cfg = bytearray(wii_boot.BASE_CFG.read_bytes())
-    flags = int.from_bytes(cfg[8:12], 'big') | (1 << 14 if replays else 0) | (codes & 0xF) << 16 | (1 << 20 if diag_log else 0)
+    flags = (int.from_bytes(cfg[8:12], 'big') | (1 << 14 if replays else 0) | (codes & 0xF) << 16 | (1 << 20 if diag_log else 0)
+             | (1 << 21 if codes & 16 else 0))  # (16: No Music, the bit after the log's)
     cfg[8:12] = flags.to_bytes(4, 'big')
     if screen:
         cfg[288 + 6 * 4:288 + 7 * 4] = screen.to_bytes(4, 'big')  # MeleeCodeOptions[MELEE_CODES_SCREEN_OPTION_ID]
@@ -488,7 +499,7 @@ def main():
     ap.add_argument('--replays', action='store_true', help='the Wii saves its replays too, on the drive the game is not on')
     ap.add_argument('--codes', type=lambda v: int(v, 0), default=0, metavar='BITS',
                     help="the loader's switches for Slippi Dolphin's optional codes: 1 flash red on a failed L-cancel, "
-                         "2 no screen shake, 4 center the 2P HUD, 8 freeze Final Destination's background (15: all)")
+                         "2 no screen shake, 4 center the 2P HUD, 8 freeze Final Destination's background (15: all); 16 No Music")
     ap.add_argument('--screen', type=int, default=0, choices=[0, 1, 2, 3],
                     help="the loader's Screen setting: 1 default, 2 16:9 to 73:60, 3 widescreen (0: as the base settings)")
     ap.add_argument('--diag-log', action='store_true',
@@ -501,6 +512,9 @@ def main():
     ap.add_argument('--no-boot', action='store_true', help='the Wii already runs this build: do not send it')
     ap.add_argument('--build-to', help='only build, into this directory (for --skip-build later)')
     ap.add_argument('--report-only', help='write this run directory\'s report again (current comparer)')
+    ap.add_argument('--update-first', action='store_true',
+                    help='the loader runs "Check for Updates" by itself before it starts Melee (a server here says '
+                         'there is none): do the games still play, their kernel on the network the loader used?')
     ap.add_argument('--rollback', type=int, metavar='LAG',
                     help='roll back (tools/rollback), the opponent shown LAG frames late (0-6)')
     ap.add_argument('--spike', type=int, default=0, metavar='MS',
@@ -596,6 +610,18 @@ def main():
         procs.append(start('mirror', [sys.executable, '-u', ROOT / 'tools/wii_mirror.py', '--wii-ip', args.wii_ip,
                                       '--out', run_dir / 'wii-replays', '--dolphin', replays], run_dir))
     boot = [] if args.no_boot else ['--boot', '--dol', run_dir / 'loader-sweep.dol']
+    update_server = None
+    if args.update_first and not args.no_boot:
+        # "Check for Updates" by itself before the games: a server here says the installed version is the
+        # latest, the loader asks it over the network and goes on to start Melee, whose kernel then uses
+        # the network the loader used. The Wii's report of the check comes back to the server.
+        import sign_update
+        import update_wii_test
+        update_server = update_wii_test.Server(ip)
+        update_server.files['uptodate.txt'] = sign_update.manifest(
+            run_dir / 'update-test-key.pem', '0.0.1', b'no zip: nothing is downloaded',
+            url='https://github.com/2gifts/SlippWii/releases/download/v0.0.1/none.zip')
+        boot += ['--first-arg', f'slippwii-update-then-boot={update_server.url}/plain/uptodate.txt;{update_wii_test.FOLDER}']
     if (args.replays or args.codes or args.screen or args.diag_log) and not args.no_boot:
         boot += ['--cfg', loader_cfg(run_dir, args.replays, args.codes, args.screen, args.diag_log)]
     procs.append(start('watch', [sys.executable, '-u', ROOT / 'tools/online_selftest.py', 'watch', *boot,
@@ -687,6 +713,14 @@ def main():
             (run_dir / 'dolphin-replays').mkdir(exist_ok=True)
             for f in replays.rglob('*.slp'):
                 shutil.copy(f, run_dir / 'dolphin-replays' / f.name)
+    if update_server is not None:
+        told = update_server.reports[-1] if update_server.reports else None
+        line = ('the update check before the games: ' + (', '.join(f'{k} {v}' for k, v in told.items()) if told
+                else 'NO REPORT from the Wii') + f'; the server saw {len(update_server.seen)} requests')
+        print(line)
+        (run_dir / 'update-first.txt').write_text(line + '\n' + '\n'.join(update_server.seen) + '\n', encoding='utf-8')
+        if not told or told.get('result') != '1':
+            failure = failure or 'the update check before the games did not end as "up to date"'
     if failure:
         print(f'FAILED: {failure}')
         (run_dir / 'failure.txt').write_text(failure + '\n', encoding='utf-8')

@@ -184,11 +184,39 @@ DRESULT disk_ioctl (
 			// TODO?
 			break;
 
+		case CTRL_SYNC:
+			// SlippWii: FatFs asks this when a written file is closed or synced, and takes any answer
+			// but RES_OK for a disk error. It used to get RES_PARERR: every f_close of a written file
+			// said FR_DISK_ERR, whatever the card had done (nobody looked). Now the cache's pages go
+			// to the drive, and the answer says whether they did.
+			if (!disk_isInit[pdrv] || !cache[pdrv])
+				ret = RES_NOTRDY;
+			else
+				ret = _FAT_cache_flush(cache[pdrv]) ? RES_OK : RES_ERROR;
+			break;
+
 		default:
 			break;
 	}
 
 	return ret;
+}
+
+/*-----------------------------------------------------------------------*/
+/* SlippWii: flush the disk cache and forget what it holds, so that what */
+/* is read next comes from the drive itself (update.c reads back what it */
+/* wrote).                                                               */
+/*-----------------------------------------------------------------------*/
+DRESULT disk_forget (BYTE pdrv)
+{
+	if (/*pdrv < DEV_SD ||*/ pdrv > DEV_USB)
+		return RES_PARERR;
+	if (!disk_isInit[pdrv] || !cache[pdrv])
+		return RES_NOTRDY;
+	if (!_FAT_cache_flush(cache[pdrv]))
+		return RES_ERROR;
+	_FAT_cache_invalidate(cache[pdrv]);
+	return RES_OK;
 }
 
 

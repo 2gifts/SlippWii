@@ -23,6 +23,7 @@ TARGET		:= $(notdir $(CURDIR))
 BUILD		:= build
 SOURCES		:= source
 SOURCES		+= source/unzip
+SOURCES		+= source/update
 SOURCES		+= ../common/config
 DATA		:= data
 INCLUDES	:= include ../fatfs
@@ -44,7 +45,7 @@ LDFLAGS	= -g $(MACHDEP) -Wl,-Map,$(notdir $@).map,-wrap,wiiuse_register,-u,zz_pa
 #---------------------------------------------------------------------------------
 # any extra libraries we wish to link with the project
 #---------------------------------------------------------------------------------
-LIBS	:= -lfreetype -lpngu -lpng -lz \
+LIBS	:= -lbearssl -lfreetype -lpngu -lpng -lz \
 	   -lwiiuse -lwiidrc -lwupc -lbte -lfatfs-ppc -logc -ldi -lm
 
 #---------------------------------------------------------------------------------
