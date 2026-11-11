@@ -95,6 +95,9 @@ SECTIONS
 		*(.gnu.linkonce.t*)
 		*(.glue_7)
 		*(.glue_7t)
+		/* Slippi Online's boot codes (gecko/g_online_boot.h, read-only):
+		 * here, where there is room, not in the full data region */
+		*(.rodata.g_online_boot)
 		. = ALIGN(4);
 	} >code :code
 

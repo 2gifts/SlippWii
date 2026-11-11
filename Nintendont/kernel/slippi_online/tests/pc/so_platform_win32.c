@@ -56,6 +56,42 @@ void so_sleep_us(u32 us)
 	Sleep(us >= 1000 ? us / 1000 : (us ? 1 : 0));
 }
 
+/* The PPC's scratch is free: the rollback engine's side is the game's here
+ * (pc_game.c --rollback). */
+int so_ppc_scratch_free = 1;
+
+int so_launch_title(u64 title_id)
+{
+	(void)title_id;
+	return -1;
+}
+
+/* The words shared with the PowerPC (so_diag.h): plain memory here. */
+static u32 ppc_words[16];
+
+u32 so_ppc_word(u32 addr)
+{
+	return ppc_words[(addr >> 2) & 15];
+}
+
+void so_ppc_will_read(u32 addr, u32 len)
+{
+	(void)addr;
+	(void)len;
+}
+
+void so_ppc_set_block(u32 addr, const void *data, u32 len)
+{
+	(void)addr;
+	(void)data;
+	(void)len;
+}
+
+void so_set_ppc_word(u32 addr, u32 value)
+{
+	ppc_words[(addr >> 2) & 15] = value;
+}
+
 u32 so_random(void)
 {
 	u32 x = random_state;
@@ -269,6 +305,34 @@ int so_write_file(const char *path, const void *buf, u32 size)
 	return ok ? 0 : -2;
 }
 
+/* (the log on the card: none on a PC, whose log is its output) */
+void so_log_private(const char *fmt, ...)
+{
+	char line[256];
+	va_list ap;
+	va_start(ap, fmt);
+	so_vsnprintf(line, sizeof(line), fmt, ap);
+	va_end(ap);
+	so_log("%s", line);
+}
+
+int so_append_file(const char *path, const void *buf, u32 size, int create)
+{
+	(void)path; (void)buf; (void)size; (void)create;
+	return -1;
+}
+
+void so_make_dir(const char *path) { (void)path; }
+int so_platform_info(char *out, int size) { return so_snprintf(out, size, "a PC\n"); }
+int so_diag_log_setting(void) { return 0; }
+
+u32 so_optional_codes(u8 *out, u32 room)
+{
+	(void)out;
+	(void)room;
+	return 0;	/* (the loader's settings: none on a PC) */
+}
+
 int so_read_file(const char *path, void *buf, u32 size)
 {
 	char full[400];
@@ -319,3 +383,15 @@ size_t so_test_strlcpy(char *dest, const char *src, size_t size)
 	}
 	return n;
 }
+
+void so_drive_log(const char *what, int reset) { (void)what; (void)reset; }
+int so_drive_runs_line(int n, const char *what) { (void)n; (void)what; return 0; }
+
+/* so_prefetch (Wii only) */
+void so_pf_init(void) {}
+void so_pf_close(void) {}
+void so_pf_open(void) {}
+void so_pf_want_char(int who, unsigned char character, unsigned char color) { (void)who; (void)character; (void)color; }
+void so_pf_want_stage(unsigned short stage) { (void)stage; }
+
+void so_patch_check_codes(void) {}	/* (Patch.c on the Wii) */

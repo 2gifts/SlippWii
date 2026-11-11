@@ -19,9 +19,17 @@
 #   0x2C u32 'S' << 24 | ended << 16 | retraces stalled
 #   0x30 4 x u32 saved link registers up the main thread's stack
 #   0x40 8 x u32 saved link registers up the interrupted stack
+#
+# And what the player sees, every 300 retraces of an online game: 0x28 as above,
+#   0x2C u32 'D' << 24
+#   0x30 u32 retraces   0x34 u32 of them with no new frame to show (the screen repeats)
+#   0x38 u32 frames shown 2 or more logic frames after the last shown (the picture jumps)
+# (At this entry a frame ready to show is HSD_VI_XFB_NEXT; HSD_VIPreRetraceCB flips to it.)
 
 	.set FRAME, 0x120
 	.set MAIN_THREAD, 0x804A83C8
+	.set XFB_NEXT, 6		# HSD_VIXFBDrawDispStatus
+	.set VI_XFB0_STATUS, 0x5C	# HSD_VIData.xfb[0].status, each 0x60 on
 
 	mflr	r0
 	stw	r0, 4(r1)
@@ -33,6 +41,10 @@ state:
 	.long	0			# 0: logic counter last seen
 	.long	0			# 4: retraces it has not moved
 	.long	0			# 8: reports sent in this stall
+	.long	0			# 12: retraces counted, for the report on what is shown
+	.long	0			# 16: of them with no new frame
+	.long	0			# 20: frames that jumped
+	.long	0			# 24: the logic counter at the last frame shown
 state_end:
 	mflr	r30
 
@@ -162,6 +174,78 @@ walk_store:
 	b	walk_loop
 
 done:
+	lis	r8, 0x8048
+	lwz	r0, -0x62D0(r8)
+	rlwinm	r0, r0, 8, 16, 31
+	cmplwi	r0, 0x0208
+	beq	shown_check
+	li	r0, 0			# not in a game
+	stw	r0, 12(r30)
+	stw	r0, 16(r30)
+	stw	r0, 20(r30)
+	b	restore
+
+shown_check:
+	lis	r8, 0x804C
+	addi	r8, r8, 0x1D80		# HSD_VIData
+	lwz	r0, VI_XFB0_STATUS(r8)
+	cmpwi	r0, XFB_NEXT
+	beq	shown
+	lwz	r0, VI_XFB0_STATUS + 0x60(r8)
+	cmpwi	r0, XFB_NEXT
+	beq	shown
+	lwz	r0, VI_XFB0_STATUS + 0xC0(r8)
+	cmpwi	r0, XFB_NEXT
+	beq	shown
+	lwz	r6, 16(r30)		# nothing new: the screen repeats
+	addi	r6, r6, 1
+	stw	r6, 16(r30)
+	b	shown_count
+shown:
+	lis	r9, 0x8048
+	lwz	r5, -0x62A8(r9)		# logic frames run
+	lwz	r6, 24(r30)
+	stw	r5, 24(r30)
+	sub	r6, r5, r6
+	cmpwi	r6, 2
+	blt	shown_count
+	lwz	r6, 20(r30)
+	addi	r6, r6, 1
+	stw	r6, 20(r30)
+shown_count:
+	lwz	r6, 12(r30)
+	addi	r6, r6, 1
+	stw	r6, 12(r30)
+	cmpwi	r6, 300
+	blt	restore
+	addi	r31, r1, 0x9F
+	rlwinm	r31, r31, 0, 0, 26	# 32-byte aligned buffer at 0x80..0x11F
+	li	r0, 0xDE
+	rlwinm	r0, r0, 24, 0, 7
+	stw	r0, 0x00(r31)
+	lis	r9, 0x8048
+	lwz	r0, -0x62A8(r9)
+	stw	r0, 0x28(r31)
+	lis	r0, 0x4400		# 'D'
+	stw	r0, 0x2C(r31)
+	stw	r6, 0x30(r31)
+	lwz	r0, 16(r30)
+	stw	r0, 0x34(r31)
+	lwz	r0, 20(r30)
+	stw	r0, 0x38(r31)
+	li	r0, 0
+	stw	r0, 12(r30)
+	stw	r0, 16(r30)
+	stw	r0, 20(r30)
+	mr	r3, r31
+	li	r4, 0x60
+	li	r5, 1			# write
+	lis	r12, 0x8000
+	ori	r12, r12, 0x55F0	# FN_EXITransferBuffer
+	mtctr	r12
+	bctrl
+
+restore:
 	lmw	r3, 0x08(r1)
 	addi	r1, r1, FRAME
 	lwz	r0, 4(r1)

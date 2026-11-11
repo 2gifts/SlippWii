@@ -17,7 +17,7 @@ build() {
 		"$main" "$HERE/so_platform_win32.c" "$HERE/so_socket_win32.c" \
 		"$SRC/so_util.c" "$SRC/so_alloc.c" "$SRC/so_json.c" "$SRC/so_config.c" "$SRC/so_pads.c" \
 		"$SRC/so_mm_msg.c" "$SRC/so_mm.c" "$SRC/so_netplay.c" "$SRC/so_client.c" "$SRC/so_selftest.c" \
-		"$SRC/so_diag.c" "$SRC/so_exi.c" "$SRC/so_text.c" "$SRC/so_files.c" \
+		"$SRC/so_diag.c" "$SRC/so_exi.c" "$SRC/so_text.c" "$SRC/so_files.c" "$SRC/so_logfile.c" \
 		"$SRC"/enet/*.c \
 		-lws2_32 -lwinmm -o "$exe"
 	echo "$exe"

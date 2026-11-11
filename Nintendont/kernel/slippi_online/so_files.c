@@ -4,6 +4,7 @@
 #define SO_FILE_ID "files"
 #include "so_files.h"
 #include "so_alloc.h"
+#include "so_client.h"
 #include "so_platform.h"
 #include "so_util.h"
 #include "string.h"
@@ -11,6 +12,14 @@
 #define MAX_FILES 32
 #define MAX_NAME 32	/* Melee's file names are short ("GameSetup_gui.dat") */
 #define MAX_GCT 0x10000	/* the bootloader reads it in one DMA */
+#define MAX_OPTIONAL 0x400	/* Slippi Dolphin's optional codes, all on, with the Screen setting's: 728 bytes */
+
+static u32 optional_bytes;
+
+u32 so_files_optional(void)
+{
+	return optional_bytes;
+}
 #define BOUNCE_SIZE 0x8000
 
 #define ATTEMPTS 3	/* the SD card occasionally fails a request (seen on hardware) */
@@ -190,6 +199,50 @@ int so_files_init(void)
 		gct_len = so_gct_drop(gct_data, before, dolphin_only, sizeof(dolphin_only) / sizeof(dolphin_only[0]));
 		if (gct_len != before)
 			so_log("files: dropped Dolphin-only Normal Lag Reduction (%u bytes)", (unsigned)(before - gct_len));
+		if (so_client_config()->test_lag_reduction) {
+			/* tests (tools/latency_probe): an offline game's pad and frame timing with another
+			 * of Slippi's lag reduction codes, as Slippi Nintendont offers them: 1 none (Melee's
+			 * own), 2 the polling drift fix alone. Not for online play: its code needs the fix's
+			 * one poll a frame, at the retrace (see above). */
+			static const u32 pd_vb[] = {	/* Polling Drift Fix + VB [tauKhan] */
+				0x801A4C24, 0x8001985C, 0x80019860, 0x80376200, 0x801A5018, 0x80218D68,
+			};
+			static const u8 pd[] = {	/* Polling Drift Fix (slippi-ssbm-asm Binary/LagReduction/PD.bin) */
+				0xC2, 0x1A, 0x4D, 0xA0, 0x00, 0x00, 0x00, 0x03, 0x90, 0x1C, 0x00, 0x00, 0x3D, 0x80, 0x80, 0x01,
+				0x61, 0x8C, 0x95, 0xFC, 0x7D, 0x89, 0x03, 0xA6, 0x4E, 0x80, 0x04, 0x21, 0x00, 0x00, 0x00, 0x00,
+				0x04, 0x1A, 0x4D, 0xB4, 0x60, 0x00, 0x00, 0x00, 0x04, 0x01, 0x98, 0x60, 0x4B, 0xFF, 0xFD, 0x9D,
+			};
+			before = gct_len;
+			gct_len = so_gct_drop(gct_data, before, pd_vb, sizeof(pd_vb) / sizeof(pd_vb[0]));
+			if (so_client_config()->test_lag_reduction == 2 && gct_len + sizeof(pd) <= MAX_GCT) {
+				/* (before the list's last 8 bytes, its end, which move up first) */
+				memcpy(gct_data + gct_len - 8 + sizeof(pd), gct_data + gct_len - 8, 8);
+				memcpy(gct_data + gct_len - 8, pd, sizeof(pd));
+				gct_len += sizeof(pd);
+			}
+			so_log("files: TESTS: lag reduction %u (1 none, 2 the polling drift fix alone; %u bytes of PD+VB "
+				"dropped): offline games only", (unsigned)so_client_config()->test_lag_reduction,
+				(unsigned)(before + (so_client_config()->test_lag_reduction == 2 ? sizeof(pd) : 0) - gct_len));
+		}
+		if (so_client_config()->test_old_capture_check)
+			so_log("files: tests: Slippi's capture check as it was");
+		else if (!so_gct_fix_capture_check(gct_data, gct_len))
+			so_log("files: Slippi's capture check not found: a late rollback can freeze this game");
+		{
+			/* Slippi Dolphin's optional codes, as the loader's Slippi page has them, and its
+			 * Screen setting's (so_optional_codes). Every mode of this boot runs this codeset,
+			 * the offline ones too. They change what is drawn, not the game. */
+			u8 *extra = (u8 *)so_malloc(MAX_OPTIONAL);
+			u32 n = extra ? so_optional_codes(extra, MAX_OPTIONAL) : 0;
+			if (n) {
+				u32 with = so_gct_append(gct_data, gct_len, MAX_GCT, extra, n);
+				so_log(with != gct_len ? "files: %u bytes of optional codes (the Slippi settings) added to the codeset" :
+					"files: no room in the codeset for %u bytes of optional codes: left out", (unsigned)n);
+				optional_bytes = with - gct_len;
+				gct_len = with;
+			}
+			so_free(extra);
+		}
 	} else {
 		if (res >= 0)
 			so_log("files: %s is not a usable codeset (%d bytes)", SO_GCT_PATH, res);
@@ -257,6 +310,33 @@ static u32 code_size(const u8 *gct, u32 off)
 	return 8;
 }
 
+/* StartEngineLoop's CAPTURE_CHECK, as assembled. The offsets are ODB_'s: another
+ * version of Slippi's codes simply does not match. */
+static int is_capture_check(const u8 *code)
+{
+	return so_get_u32(code) == 0x887E038C &&	/* lbz r3, ODB_SAVESTATE_IS_PREDICTING(r30) */
+		so_get_u32(code + 4) == 0x2C030000 &&	/* cmpwi r3, 0 */
+		(so_get_u32(code + 8) & 0xFFFF0000) == 0x41820000 &&	/* beq CAPTURE_END */
+		so_get_u32(code + 12) == 0x807E0AC9 &&	/* lwz r3, ODB_STABLE_FINALIZED_FRAME(r30) */
+		so_get_u32(code + 16) == 0x7C1F1800 &&	/* cmpw r31, r3: the frame, the finalized one */
+		(so_get_u32(code + 20) & 0xFFFF0000) == 0x40810000;	/* ble CAPTURE_END */
+}
+
+int so_gct_fix_capture_check(u8 *gct, u32 len)
+{
+	u32 at, found = 0;
+	for (at = 8; at + 24 <= len; at += 4)
+		if (is_capture_check(gct + at)) {
+			if (found)
+				return 0;
+			found = at;
+		}
+	if (!found)
+		return 0;
+	so_put_u32(gct + found + 20, 0x41800000 | (so_get_u32(gct + found + 20) & 0xFFFF));	/* blt CAPTURE_END */
+	return 1;
+}
+
 u32 so_gct_drop(u8 *gct, u32 len, const u32 *addresses, int count)
 {
 	u32 in = 8, out = 8;
@@ -280,6 +360,27 @@ u32 so_gct_drop(u8 *gct, u32 len, const u32 *addresses, int count)
 		in += size;
 	}
 	return len;	/* malformed: leave it as it was */
+}
+
+u32 so_gct_append(u8 *gct, u32 len, u32 max, const u8 *codes, u32 n)
+{
+	u32 at = 8;
+	while (at + 8 <= len) {
+		u32 word = so_get_u32(gct + at), size = code_size(gct, at);
+		if (size > len - at)
+			break;
+		if ((word & 0xF0FFFFFF) == 0xF0000000 && so_get_u32(gct + at + 4) == 0) {
+			u8 end[8];
+			if (at + n + 8 > max)
+				break;
+			memcpy(end, gct + at, 8);
+			memcpy(gct + at, codes, n);
+			memcpy(gct + at + n, end, 8);
+			return at + n + 8;
+		}
+		at += size;
+	}
+	return len;
 }
 
 int so_gct_link(u8 *gct, u32 len, u32 load_address)

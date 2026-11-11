@@ -44,6 +44,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "slippi_online/so_client.h"
 #include "slippi_online/so_platform.h"
 #include "slippi_online/so_diag.h"
+#include "slippi_online/so_exi.h"
 #include "net.h"
 
 #include "../common/include/KernelBoot.h"
@@ -546,7 +547,9 @@ int _main( int argc, char *argv[] )
 			GetCurrentTime();
 		}
 
-		udelay(so_main_loop_sleep_us); //wait for other threads (Slippi Online: longer while online)
+		if (!so_exi_file_busy())	/* (Slippi Online: a file loading in a game, the game waiting for each step) */
+			udelay(so_main_loop_quick || so_exi_poll_due() ? 20 : so_main_loop_sleep_us); //wait for other threads (Slippi Online: longer while online)
+		so_main_loop_quick = 0;
 
 		if( WaitForRealDisc == 1 )
 		{
@@ -593,6 +596,7 @@ int _main( int argc, char *argv[] )
 		_ahbMemFlush(1);
 		DIUpdateRegisters();
 
+		SlippiOnlineReplayData();
 		EXIUpdateRegistersNEW();
 		GCAMUpdateRegisters();
 		BTUpdateRegisters();
@@ -677,21 +681,28 @@ int _main( int argc, char *argv[] )
 		cc_ahbMemFlush(1);
 	}
 
+	if (so_client_online_game())
+		so_client_stop();
+	so_log("exit: devices");
 	HIDClose();
 	IOS_Close(DI_Handle); //close game
 	thread_cancel(DI_Thread, 0);
 	DIUnregister();
 
+	so_log("exit: memory card");
 	if( ConfigGetConfig(NIN_CFG_MEMCARDEMU) )
 		EXIShutdown();
 
+	so_log("exit: Slippi network, file writer");
 	SlippiNetworkShutdown();
 	SlippiFileWriterShutdown();
 
 	if (ConfigGetConfig(NIN_CFG_LOG))
 		sdhc_log_destroy();
 
+	so_log("exit: Bluetooth");
 	BTE_Shutdown();
+	so_log("exit: SD/USB");
 
 	// unmount SD card
 	if (shouldBootSd)
@@ -717,6 +728,11 @@ int _main( int argc, char *argv[] )
 	// make sure we set that back to the original
 	write32(HW_PPCSPEED, ori_ppcspeed);
 
+	so_log("exit: done, the PPC may reload IOS");
+	if (so_client_online_game())
+		so_client_flush_logs();
+	write32(SO_EXIT_STEP, 0);
+	sync_after_write((void*)SO_EXIT_STEP, 4);
 WaitForExit:
 	// Allow all IOS IRQs again
 	write32(HW_IPC_ARMCTRL, 0x36);
@@ -724,6 +740,11 @@ WaitForExit:
 	dbgprintf("Kernel done, waiting for IOS Reload\n");
 	write32(RESET_STATUS, 0);
 	sync_after_write((void*)RESET_STATUS, 0x20);
+	so_diag_exit_watch();	/* then the network goes: the steps are logged first */
+	if (so_client_online_game()) {
+		so_diag_launch_loader();
+		so_client_close();
+	}
 	while(1) mdelay(100);
 	return 0;
 }

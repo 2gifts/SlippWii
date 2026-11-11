@@ -181,3 +181,40 @@ s32 so_time_sync_sample(u64 arrived_us, u32 ping_us, s32 remote_frame, s32 local
 	s64 frame_diff_us = (s64)SO_FRAME_US * ((s64)local_frame - (s64)remote_frame);
 	return (s32)(remote_sent_us - (s64)local_sent_us + frame_diff_us);
 }
+
+/* ---- frames a refresh sooner: the ping's part ----------------------------- */
+
+u32 so_direct_mode(u32 ping_us, s32 limit_ms, s32 try_ms, u32 was)
+{
+	s32 ping_ms = (s32)(ping_us / 1000);
+	if (limit_ms > 0 && ping_ms < limit_ms + (was == 1 ? 5 : 0))
+		return 1;
+	if (try_ms > 0 && limit_ms + try_ms > 0 && ping_ms < limit_ms + try_ms + (was == 3 ? 5 : 0))
+		return 3;
+	return 0;
+}
+
+/* ---- an opponent's games ------------------------------------------------- */
+
+void so_peer_connected(SoPeerGames *g, const char *connect_code)
+{
+	u32 h = 2166136261u;	/* (FNV-1a) */
+	for (; *connect_code; connect_code++)
+		h = (h ^ (u8)*connect_code) * 16777619u;
+	g->connected = h;
+}
+
+void so_peer_game_started(SoPeerGames *g)
+{
+	if (g->played != g->connected) {
+		g->played = g->connected;
+		g->games = 0;
+	}
+	if (g->games < 0xFFFFFFFFu)
+		g->games++;
+}
+
+int so_peer_first_game(const SoPeerGames *g)
+{
+	return g->played != g->connected || g->games < 2;
+}

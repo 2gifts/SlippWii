@@ -30,6 +30,28 @@ extern volatile u32 so_kernel_loops;
 
 void so_diag_start(const SoConfig *config);
 
+/* Tests (test_control=1): a word the PPC reads (0xD30034E0), "ARMD" from the
+ * start, "EXIT" once the PC asks: the boot codes' test exit
+ * (tools/ppc/test_exit.s) and crash reporter then go back to the Homebrew
+ * Channel, as Nintendont's own exit combo does. */
+#define SO_TEST_EXIT_WORD 0x130034E0	/* its own cache line: the kernel re-reads 0x13003420's constantly */
+#define SO_TEST_ARMED 0x41524D44	/* "ARMD" */
+#define SO_TEST_EXIT 0x45584954	/* "EXIT" */
+#define SO_TEST_HANG 0x48414E47	/* "HANG": tests of what follows a hung PowerPC */
+#define SO_TEST_RETRACES (SO_TEST_EXIT_WORD + 4)	/* counted by test_exit.s, logged */
+
+/* The exit's steps on the PPC, after the kernel's own: 1 let go, 2 into the
+ * reload stub (tools/ppc/exit_to_loader.inc), 3 to 7 the stub's
+ * (resetstub/main.c): 5 into the Homebrew Channel's stub, 6 and 7 IOS. */
+#define SO_EXIT_STEP (SO_TEST_EXIT_WORD + 8)
+
+/* The kernel's exit is done (main.c): logs the PPC's steps for 10 s. */
+void so_diag_exit_watch(void);
+
+/* Tests (test_control): the PPC did not reload IOS (the kernel still runs
+ * after the watch): the kernel launches the Homebrew Channel itself. */
+void so_diag_launch_loader(void);
+
 /* The next beacon text (NUL-terminated, at most 31 characters). Lock-free:
  * called from the broadcast thread. */
 const char *so_diag_beacon(void);

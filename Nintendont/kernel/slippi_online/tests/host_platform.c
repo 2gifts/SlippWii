@@ -2,10 +2,29 @@
  * with a clock the tests set by hand. */
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "so_platform.h"
 #include "so_util.h"
 #include "string.h"
 #include "host_platform.h"
+
+const u8 *host_optional_codes;	/* tests: what so_optional_codes gives */
+u32 host_optional_len;
+
+u32 so_optional_codes(u8 *out, u32 room)
+{
+	u32 n = host_optional_len <= room ? host_optional_len : 0;
+	if (n)
+		memcpy(out, host_optional_codes, n);
+	return n;
+}
+#include "so_client.h"
+
+const SoConfig *so_client_config(void)
+{
+	static SoConfig config;
+	return &config;
+}
 
 static u64 now_us;
 static u32 random_state = 0x2545F491;
@@ -62,6 +81,80 @@ void so_log(const char *fmt, ...)
 }
 
 const char *test_last_log(void) { return last_log; }
+
+void so_log_private(const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	so_vsnprintf(last_log, sizeof(last_log), fmt, ap);
+	va_end(ap);
+}
+
+/* The log's folder, in memory */
+#define LOG_FILES 24
+#define LOG_FILE_MOST 0x12000
+static struct {
+	char path[64];
+	char *data;
+	u32 len;
+} log_files[LOG_FILES];
+int host_diag_log, host_log_files_fail;
+
+static int log_path(const char *path) { return !strncmp(path, "/slippwii/logs", 14); }
+
+static int log_file_at(const char *path, int make)
+{
+	int i;
+	for (i = 0; i < LOG_FILES; i++)
+		if (log_files[i].data && !strcmp(log_files[i].path, path))
+			return i;
+	for (i = 0; make && i < LOG_FILES; i++)
+		if (!log_files[i].data) {
+			snprintf(log_files[i].path, sizeof(log_files[i].path), "%s", path);
+			log_files[i].data = (char *)malloc(LOG_FILE_MOST);
+			log_files[i].len = 0;
+			return i;
+		}
+	return -1;
+}
+
+const char *test_log_file(const char *path, u32 *len)
+{
+	int i = log_file_at(path, 0);
+	if (i < 0)
+		return NULL;
+	if (len)
+		*len = log_files[i].len;
+	log_files[i].data[log_files[i].len] = 0;
+	return log_files[i].data;
+}
+
+void test_log_files_reset(void)
+{
+	int i;
+	for (i = 0; i < LOG_FILES; i++) {
+		free(log_files[i].data);
+		log_files[i].data = NULL;
+	}
+}
+
+int so_append_file(const char *path, const void *buf, u32 size, int create)
+{
+	int i;
+	if (host_log_files_fail || !log_path(path) || (i = log_file_at(path, 1)) < 0)
+		return -1;
+	if (create)
+		log_files[i].len = 0;
+	if (log_files[i].len + size >= LOG_FILE_MOST)
+		return -2;
+	memcpy(log_files[i].data + log_files[i].len, buf, size);
+	log_files[i].len += size;
+	return 0;
+}
+
+void so_make_dir(const char *path) { (void)path; }
+int so_platform_info(char *out, int size) { return so_snprintf(out, size, "a test's console\n"); }
+int so_diag_log_setting(void) { return host_diag_log; }
 
 int so_log_take(char *out, int size) { (void)out; (void)size; return 0; }
 
@@ -121,7 +214,10 @@ int so_read_file_bounced(const char *path, u8 *out, u32 size, u8 *bounce, u32 bo
 
 int so_write_file(const char *path, const void *buf, u32 size)
 {
-	FILE *f = fopen(path, "wb");
+	FILE *f;
+	if (log_path(path))
+		return so_append_file(path, buf, size, 1);
+	f = fopen(path, "wb");
 	int ok;
 	if (!f)
 		return -1;
@@ -132,8 +228,19 @@ int so_write_file(const char *path, const void *buf, u32 size)
 
 int so_read_file(const char *path, void *buf, u32 size)
 {
-	FILE *f = fopen(path, "rb");
+	FILE *f;
 	int n;
+	if (log_path(path)) {
+		u32 len = 0;
+		const char *data = test_log_file(path, &len);
+		if (!data)
+			return -1;
+		if (len > size)
+			len = size;
+		memcpy(buf, data, len);
+		return (int)len;
+	}
+	f = fopen(path, "rb");
 	if (!f)
 		return -1;
 	n = (int)fread(buf, 1, size, f);

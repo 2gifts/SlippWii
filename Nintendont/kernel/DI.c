@@ -25,6 +25,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "global.h"
 #include "DI.h"
 #include "slippi_online/so_platform.h"
+#include "slippi_online/so_exi.h"
 #include "RealDI.h"
 #include "wdvd.h"
 #include "string.h"
@@ -905,6 +906,7 @@ u32 DIReadThread(void *arg)
 					ReadSpeed_Setup(di_offset, di_length);
 				}
 				sync_after_write( di_dest, di_length );
+				so_exi_disc_read((u32)di_dest, di_length, di_offset);	// Slippi Online: tests' log
 				mqueue_ack( di_msg, 0 );
 				break;
 

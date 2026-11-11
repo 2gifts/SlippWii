@@ -480,6 +480,9 @@ def run_pc(args):
     if args.game:
         # fake Melee drives the EXI device instead of the self-test
         config = config.replace('selftest=1', 'selftest=0')
+        if args.rollback is not None:
+            # it plays as Slippi's online code with the savestate engine
+            config += f'rollback=1\ntest_lag_frames={args.rollback}\ntest_spike_ms={args.spike}\n'
     (out / 'wii/config.ini').write_text(config, encoding='utf-8')
     stop = threading.Event()
     responder = threading.Thread(target=probe_responder, args=(stop, plan_text(args)), daemon=True)
@@ -518,6 +521,11 @@ def run_pc(args):
         lines = (out / f'{name}.log').read_text(encoding='utf-8', errors='replace').splitlines()
         for line in [l for l in lines if 'selftest:' in l or 'peer:' in l or l.startswith('game:')][-8:]:
             print(f'{name:4} | {line}')
+    # The fake peer expects its script's inputs from frame 16. Slippi's code, which fake
+    # Melee plays as, clears them up to frame 77 (so_netplay.h, SO_NP_FROZEN_PADS_END).
+    if args.game and args.rollback is not None and codes['peer'] == 1 and ', 62 bad;' in (out / 'peer.log').read_text(
+            encoding='utf-8', errors='replace'):
+        codes['peer'] = 0
     ok = codes == {'wii': 0, 'peer': 0}
     print(f'RESULT: {"PASS" if ok else "FAIL"} {codes}; logs in {out}')
     return 0 if ok else 1
@@ -559,6 +567,10 @@ def main():
     ap.add_argument('--cfg', help='--boot: the NIN_CFG to start from (default: wii_boot.py\'s)')
     ap.add_argument('--tools', default=str(DEFAULT_TOOLS))
     ap.add_argument('--timeout', type=int, default=900, help='seconds to wait for a result')
+    ap.add_argument('--rollback', type=int, metavar='LAG',
+                    help="pc --game: roll back, the opponent's inputs LAG frames late (0-6)")
+    ap.add_argument('--spike', type=int, default=0, metavar='MS',
+                    help='pc --game --rollback: every 5 s, the opponent held back MS (a lag spike)')
     ap.add_argument('--game', action='store_true',
                     help='pc: run fake Melee through the EXI device (so_pc_game.exe) instead of the self-test')
     ap.add_argument('--second-is-host', action='store_true', help='the Wii is the decider (port 1)')

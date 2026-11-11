@@ -66,6 +66,9 @@ s32 so_thread_start(u32 (*entry)(void *), void *arg, void *stack_top, u32 stack_
  * them to the debug host when one is configured). Thread-safe; never blocks
  * on I/O. */
 void so_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+/* A line with a name in it (the player's, an opponent's): to the PC's log as any
+ * other, never to a file on the card (so_logfile.c) */
+void so_log_private(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 /* Copies the oldest pending line into `out` (NUL-terminated); returns its
  * length, or 0 when the ring is empty. */
 int so_log_take(char *out, int size);
@@ -137,6 +140,16 @@ int so_read_file(const char *path, void *buf, u32 size);
 /* Writes a whole file on the boot drive (replacing it). Returns 0, or < 0.
  * Takes the FatFS lock: fine from any kernel thread. */
 int so_write_file(const char *path, const void *buf, u32 size);
+/* Adds to a file on the boot drive (create: a new one, in the place of any
+ * there). Returns 0, or < 0. Takes the FatFS lock. */
+int so_append_file(const char *path, const void *buf, u32 size, int create);
+/* Makes a directory on the boot drive, if it is not there. */
+void so_make_dir(const char *path);
+/* A line or two about the console and the loader's settings, each ended by a
+ * newline, for a log file's head (so_logfile.c). Returns the characters. */
+int so_platform_info(char *out, int size);
+/* The loader's Diagnostic Log switch */
+int so_diag_log_setting(void);
 /* Reads up to `size` bytes of a file into `out` through `bounce` (32-byte
  * aligned, `bounce_size` bytes), a piece at a time: for destinations the SD
  * and USB drivers must not write to directly, such as the game's memory.
@@ -171,6 +184,30 @@ void so_exi_debug(u32 out[9]);
 /* Memory for keeping files in RAM (so_files): Pokemon Stadium's
  * transformations and Slippi's menu files. On the Wii the top of the disc
  * cache's MEM2 region, which ISO.c leaves out in online mode. */
+/* MEM2 for the PPC, just below the file cache (0x11570000-0x12570000): the
+ * rollback engine's page table and savestates (tools/rollback, RB_SCRATCH).
+ * The disc cache below keeps what is left (Melee reads little in a game). */
+#define SO_PPC_SCRATCH_SIZE 0x1000000
+/* 1 when the disc cache left the scratch free (ISO.c; not with a big
+ * memory card): the rollback engine may use it */
+extern int so_ppc_scratch_free;
+
+/* Slippi Dolphin's optional codes that the loader's settings have on, and the Screen setting's, as
+ * Gecko codes one after the other (Patch.c, SlippWiiOptionalCodes); off the Wii, none unless a test
+ * sets some. Returns the bytes written, at most `room`. */
+u32 so_optional_codes(u8 *out, u32 room);
+
+/* A word of MEM2 the PowerPC reads or writes too (so_diag.h's test exit word
+ * and exit steps), past the ARM's cache; off the Wii, plain memory. */
+u32 so_ppc_word(u32 addr);
+void so_set_ppc_word(u32 addr, u32 value);
+/* A block the PowerPC wrote, to be read; a block for it to read */
+void so_ppc_will_read(u32 addr, u32 len);
+void so_ppc_set_block(u32 addr, const void *data, u32 len);
+
+/* Asks IOS's ES to launch a title (the console reboots into it, the PPC
+ * too); returns only when that failed: ES's error. Off the Wii, -1. */
+int so_launch_title(u64 title_id);
 #define SO_FILE_CACHE_SIZE 0x600000	/* 5.45 MB used: 1.1 MB of Stadium transformations, 4.4 MB of menus */
 
 /* Reads bytes of the game disc (the image Nintendont runs); 0, or < 0 with
@@ -183,4 +220,11 @@ void *so_platform_arena(u32 *size);
 
 int so_platform_init(void);
 
+
+/* The game's disc reads (ISO.c's counters): logs "<what>: reads, KB, ms
+ * reading, cache hits", clearing them when `reset`; and the newest runs of
+ * the disc read (consecutive reads merged), the n-th line of 4 of them: 0
+ * when no runs are left. Nothing off the Wii. */
+void so_drive_log(const char *what, int reset);
+int so_drive_runs_line(int n, const char *what);
 #endif

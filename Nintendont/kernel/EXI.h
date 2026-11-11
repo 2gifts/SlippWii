@@ -74,6 +74,7 @@ void EXISaveCard(void);
 
 void EXIShutdown(void);
 void EXIUpdateRegistersNEW( void );
+void SlippiOnlineReplayData( void );
 void EXIReadFontFile(u8* Data, u32 Length);
 void EXIPrepareTRIGameStart();
 

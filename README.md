@@ -98,6 +98,20 @@ post your SD card's files online.
 To change Nintendont's own settings, press **B** on the game list (**L**/**R** change pages). They
 are saved when you leave the settings or start a game.
 
+On the *Slippi Settings* page (SlippWii Rollback beta 3 and later):
+
+| Setting | What it does |
+|---|---|
+| **L-Cancel Red Flash** | A character flashes red when it misses an L-cancel. |
+| **No Screen Shake** | The screen does not shake. |
+| **Center 2P HUD** | With two players, the percents sit in the middle of the screen. |
+| **Freeze FD** | Final Destination's background stands still. |
+| **Screen** (under *MELEE CODES*) | Widescreen, now online too. |
+| **Diagnostic Log** | Saves SlippWii's log on the SD card for a problem report (see *Reporting problems*). Leave it off otherwise. |
+
+The first four are Slippi's own optional codes, the ones you can turn on in Slippi Dolphin. They
+work online and offline, change only what your console draws, and your opponent does not need them.
+
 SlippWii has its own app folder, settings file and data folder, so **Slippi Nintendont stays
 installed and works as before**. Use it for offline play and console mirroring as usual.
 
@@ -109,6 +123,7 @@ On the SD card:
 | `slippwii/user.json` | Your Slippi account (keep it private) |
 | `slippwii/netplay.gct`, `slippwii/files/`, `slippwii/patches/` | Slippi's online code, menu files and patches |
 | `slippwii/config.ini` | Settings (optional) |
+| `slippwii/logs/` | Crash reports, and the diagnostic log when it is on (beta 3 and later) |
 | `slippwii_nincfg.bin` | SlippWii's loader settings (Slippi Nintendont uses `slippi_nincfg.bin`) |
 
 If your games are on a USB drive, SlippWii copies what it needs to `slippwii/` on that drive by itself.
@@ -136,6 +151,21 @@ Still stuck? Ask in #help on the [SlippWii Discord](https://discord.gg/ytSjxmknH
 Open an [issue](https://github.com/2gifts/SlippWii/issues/new/choose) and say what you did, what
 happened (a photo of any SlippWii message on the TV helps), your SlippWii version (shown at the top of the SlippWii screen), the mode, and your
 opponent's setup. A Slippi replay (`.slp`) from the opponent's side helps with desyncs.
+
+**Send the log (SlippWii Rollback beta 3 and later).** It tells us far more than a description can.
+
+1. If the game **crashed**, there is nothing to turn on: SlippWii saved a crash report by itself.
+2. For anything else (stutter, a freeze, a black screen, a disconnect), press **B** on the game list,
+   go to the *Slippi Settings* page and set **Diagnostic Log** to **Yes**. Then play until the problem
+   happens again. If the console hangs, wait ten seconds before you switch it off.
+3. Put the SD card (or the USB drive your game is on) in a computer and attach the whole
+   `slippwii/logs` folder to your report, zipped.
+4. Set **Diagnostic Log** back to **No**: while it is on, a match can hitch now and then when the
+   log is written.
+
+The log is plain text, so you can read it first. It has your SlippWii version, console type, settings
+and what the game and the network did. IP addresses and connect codes are masked, and names and your
+Slippi play key are never written.
 
 ## How it works
 

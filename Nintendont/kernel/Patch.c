@@ -105,6 +105,7 @@ extern int dbgprintf( const char *fmt, ...);
 #endif
 
 extern u32 UseReadLimit;
+void ReadSpeed_Quicker(u32 pace, u32 seek_ms);
 extern u32 RealDiscCMD;
 extern u32 drcAddress;
 extern u32 drcAddressAligned;
@@ -124,8 +125,69 @@ u32 IsN64Emu = 0;
 #include "slippi_online/so_client.h"
 #include "slippi_online/so_platform.h"
 #include "gecko/g_crash_output.h"
+#include "gecko/g_opt_lcancel.h"	// Slippi Dolphin's optional codes (SlippWiiOptionalCodes)
+#include "gecko/g_opt_shake.h"
+#include "gecko/g_opt_centerhud.h"
+#include "gecko/g_opt_freezefd.h"
 
 // Boundaries of the tournament mode region in NTSC-U v1.02
+/* tests: a game that never reached its first retrace (so_diag.c). Are its boot codes as they were
+ * written, and is the way to them there? */
+static u32 so_codes_at, so_codes_base_word;
+
+/* Slippi Dolphin's optional codes that the loader's Slippi page has on (CommonConfig.h, NIN_CFG_SW_*),
+ * one after the other into `out`, as far as `room` goes; with `screen`, the Screen setting's code too
+ * (its widescreen code is Dolphin's "Widescreen 16:9", byte for byte). Returns the bytes written.
+ *
+ * The codes are slippi-ssbm-asm's (Output/Netplay/GALE01r2.ini, gecko/g_opt_*.bin): what a player
+ * turns on in Slippi Dolphin's Gecko codes. They change what is drawn, not the game, so two players
+ * need not agree on them. An online boot has them in its codeset (slippi_online/so_files.c), which
+ * every mode of that boot runs, the offline ones too; a boot without the online codeset (no account,
+ * or Slippi on port A) has them after its other codes, below. */
+u32 SlippWiiOptionalCodes(u8 *out, u32 room, int screen)
+{
+	static const struct { u32 bit; const u8 *code; u32 len; } codes[] = {
+		{ NIN_CFG_SW_LCANCEL_FLASH, g_opt_lcancel, g_opt_lcancel_size },
+		{ NIN_CFG_SW_NO_SHAKE, g_opt_shake, g_opt_shake_size },
+		{ NIN_CFG_SW_CENTER_HUD, g_opt_centerhud, g_opt_centerhud_size },
+		{ NIN_CFG_SW_FREEZE_FD, g_opt_freezefd, g_opt_freezefd_size },
+	};
+	u32 i, n = 0;
+	for (i = 0; i < sizeof(codes) / sizeof(codes[0]); i++) {
+		if (!ConfigGetConfig(codes[i].bit) || n + codes[i].len > room)
+			continue;
+		memcpy(out + n, codes[i].code, codes[i].len);
+		n += codes[i].len;
+	}
+	if (screen) {
+		const MeleeCodeLineItem *item = GetMeleeCodeConfig()->items[MELEE_CODES_SCREEN_OPTION_ID];
+		u32 value = ConfigGetMeleeCodeValue(item->identifier);
+		for (i = 0; i < (u32)item->optionCount; i++) {
+			const MeleeCodeOption *option = item->options[i];
+			if (option->value != value || !option->codeLen || n + option->codeLen > room)
+				continue;
+			memcpy(out + n, option->code, option->codeLen);
+			n += option->codeLen;
+		}
+	}
+	return n;
+}
+void so_patch_check_codes(void)
+{
+	u32 i, bad = 0, first = 0, base = 0x80000000u | (so_codes_at + 8);
+	for (i = 0; i + 4 <= g_online_boot_size; i += 4) {
+		u32 want = (u32)g_online_boot[i] << 24 | (u32)g_online_boot[i + 1] << 16 | (u32)g_online_boot[i + 2] << 8 | g_online_boot[i + 3];
+		if (so_game_word(base + i) != want && !bad++)
+			first = i;
+	}
+	so_log("diag: boot codes at %08x: %u of %u words differ, the first at +%x", (unsigned)base, (unsigned)bad,
+		(unsigned)(g_online_boot_size / 4), (unsigned)first);
+	so_log("diag: __init_user %08x; list pointer %08x at %08x; handler %08x %08x %08x; 80003100 %08x %08x",
+		(unsigned)so_game_word(0x8034CAD8), (unsigned)so_game_word(0x80000000u | so_codes_base_word),
+		(unsigned)so_codes_base_word, (unsigned)so_game_word(0x80001000), (unsigned)so_game_word(0x800010A0),
+		(unsigned)so_game_word(0x80001100), (unsigned)so_game_word(0x80003100), (unsigned)so_game_word(0x80003104));
+}
+
 #define CODELIST_TOURNAMENT_BASE	0x001910E0
 #define CODELIST_TOURNAMENT_END		0x0019AF4C
 
@@ -3348,6 +3410,8 @@ void DoPatches( char *Buffer, u32 Length, u32 DiscOffset )
 			dbgprintf("Codelist at 0x%08x\r\n", (gct_cursor | 0x80000000));
 			memset((void*)gct_cursor, 0, max_gct_size);
 			write32(gct_base_addr, (gct_cursor | 0x80000000));
+			so_codes_at = gct_cursor;
+			so_codes_base_word = gct_base_addr;
 		}
 		if (onlineGame)
 			so_log("patch: Slippi Online codes at %08x (%u of %u bytes)", (unsigned)(gct_cursor | 0x80000000),
@@ -3437,6 +3501,15 @@ void DoPatches( char *Buffer, u32 Length, u32 DiscOffset )
 			memcpy((void*)gct_cursor, selectedOption->code, selectedOption->codeLen);
 			sync_after_write((void*)gct_cursor, selectedOption->codeLen);
 			gct_cursor += selectedOption->codeLen;
+		}
+
+		// SlippWii: Slippi Dolphin's optional codes, as the Slippi page has them (an online boot has
+		// them in its codeset; the Screen setting's code is one of the toggleables above)
+		if (!onlineGame) {
+			u32 added = SlippWiiOptionalCodes((u8*)gct_cursor, 0x200, 0);
+			dbgprintf("Patch:Applying %u bytes of optional codes at 0x%08x\r\n", added, gct_cursor);
+			sync_after_write((void*)gct_cursor, added);
+			gct_cursor += added;
 		}
 
 		dbgprintf("Patch:Apply GCT footer 0x%08x\r\n", gct_cursor);
@@ -3954,6 +4027,8 @@ void DoPatches( char *Buffer, u32 Length, u32 DiscOffset )
 	// Triforce titles, and the N64 Emu work better without read speed
 	if((RealDiscCMD != 0 && !Datel) || TRIGame != TRI_NONE || IsN64Emu)
 		UseReadLimit = 0;
+	if (MeleeVersion && so_client_online_game())
+		ReadSpeed_Quicker(so_client_config()->test_read_pace, so_client_config()->test_read_seek_ms);
 }
 
 void PatchInit()

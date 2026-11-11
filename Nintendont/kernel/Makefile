@@ -65,6 +65,10 @@ OBJECTS += ubj/ubjr.o ubj/ubjrw.o ubj/ubjw.o
 # Common configs
 OBJECTS += ../common/config/MeleeCodes_arm.o
 
+# SlippWii: the kernel's code region (kernel.ld: 384 KB, with the online boot codes in it) is full.
+# The Triforce arcade boards' code, which Melee never runs, is built for size, not speed.
+GCAM.o JVSIO.o JVSIOMessage.o TRI.o: CFLAGS += -Os
+
 # When make is invoked with `make SLIPPI_DEBUG=1`: compile SlippiDebug.o and
 # let GCC define SLIPPI_PROFILE as a macro. Use this for some profiling code.
 

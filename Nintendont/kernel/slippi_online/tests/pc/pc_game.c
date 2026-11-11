@@ -2,8 +2,16 @@
  * online codeset sends, at the console's 59.94 Hz, against the local test
  * tools: it logs in (0xB9), locks in and searches Slippi Direct (0xB5, 0xB4),
  * waits on the CSS (0xB3 every frame) until both players are ready, then
- * plays a lockstep game through 0xB0 and checks every opponent pad, then
- * leaves (0xBA). The opponent code is selftest_code in DIR's config.ini.
+ * plays a game through 0xB0 and checks every opponent pad, then leaves
+ * (0xBA). The opponent code is selftest_code in DIR's config.ini.
+ *
+ * With rollback=1 in config.ini (online_selftest.py pc --game --rollback LAG)
+ * it plays as Slippi's online code does with the console savestate engine:
+ * the engine's handshake (0xD9), then prediction, at most 7 frames ahead of
+ * the opponent's inputs, and a rollback whenever a real input differs from
+ * the prediction. It checks the kernel's side of that: the inputs it gives
+ * for each frame, and that no rollback ever needs a frame older than the 7
+ * Slippi keeps savestates for.
  *
  *   so_pc_game DIR FRAMES [TIMEOUT_S] [--any-pads]
  *
@@ -41,6 +49,12 @@ static u64 next_vi_us;
 static u32 vi_us = SO_FRAME_US;
 static const char *data_dir;
 static int check_pads = 1;
+/* SO_PC_LOAD_MS=N: its load takes this much longer than the opponent's */
+static u32 load_ms;
+
+/* SO_PC_SLOW_EVERY=N: every Nth frame's work takes 1.3 refreshes, and a
+ * refresh missed is lost, as on a console (Melee runs a frame a refresh) */
+static u32 slow_every;
 
 #define CHECK(cond, ...)                                  \
 	do {                                              \
@@ -57,6 +71,8 @@ static void wait_vi(void)
 	u64 now = so_time_us();
 	if (!next_vi_us || now > next_vi_us + 100000)
 		next_vi_us = now;
+	while (slow_every && next_vi_us < now)
+		next_vi_us += vi_us;	/* a missed refresh is gone */
 	if (next_vi_us > now)
 		so_sleep_us((u32)(next_vi_us - now));
 	next_vi_us += vi_us;
@@ -282,6 +298,50 @@ static void boot_and_files(void)
 	free(file);
 }
 
+/* One 0xBE (the name entry's suggestions): the typed characters (Shift-JIS),
+ * the shown suggestion's index, the scroll direction. Returns the answer's
+ * "found" byte; *index the answer's index. */
+static int suggest(const u8 *typed, int len, u32 *index, u8 dir, u8 *code_out)
+{
+	u8 req[32] = { 0xBE }, ans[30];
+	int i;
+	for (i = 0; i < len; i++) {
+		req[1 + 3 * i] = typed[2 * i];
+		req[2 + 3 * i] = typed[2 * i + 1];
+	}
+	req[0x19] = (u8)len;
+	so_put_u32(req + 0x1A, *index);
+	req[0x1E] = dir;
+	req[0x1F] = 2;	/* Direct */
+	command(req, sizeof(req), ans, sizeof(ans));
+	*index = so_get_u32(ans + 0x1A);
+	for (i = 0; i < 8; i++) {
+		code_out[2 * i] = ans[1 + 3 * i];
+		code_out[2 * i + 1] = ans[2 + 3 * i];
+	}
+	return ans[0];
+}
+
+/* The connect-code entry, as Slippi Dolphin answers it: the newest code shown
+ * at once, and kept when a scroll finds nothing (pressing the scroll button
+ * at either end once cleared it, and a sweep's autoplay then typed
+ * "AAAAAAAA"). The history holds selftest_code alone here. */
+static void name_entry(const char *code)
+{
+	u8 want[18], got[16], z[2] = { 0x82, 0x79 };	/* "Z" */
+	int n = so_encode_connect_code(code, want, sizeof(want));
+	u32 index = 0;
+	CHECK(suggest(NULL, 0, &index, 3, got) == 1 && index == 0 && memcmp(got, want, n) == 0,
+		"0xBE on opening: no suggestion of %s", code);
+	CHECK(suggest(NULL, 0, &index, 2, got) == 1 && index == 0 && memcmp(got, want, n) == 0,
+		"0xBE scrolling newer from the newest: the suggestion is gone");
+	CHECK(suggest(NULL, 0, &index, 1, got) == 1 && index == 0 && memcmp(got, want, n) == 0,
+		"0xBE scrolling older from the oldest: the suggestion is gone");
+	if (want[0] != z[0] || want[1] != z[1])
+		CHECK(suggest(z, 1, &index, 3, got) == 0 && got[0] == z[0] && got[1] == z[1],
+			"0xBE with a typed letter no code starts with: not the typed text back");
+}
+
 /* CSS lock-in and search (FN_LOCK_IN_AND_SEARCH: 0xB5 then 0xB4). */
 static int lock_in_and_search(const char *code)
 {
@@ -424,6 +484,155 @@ static int play(int frames, GameResult *g)
 	return 0;
 }
 
+/* ---- rollback (rollback=1) ------------------------------------------------ */
+
+#define RB_MAX 7	/* ROLLBACK_MAX_FRAMES: Slippi's savestates */
+#define RB_FRAMES 20000
+
+typedef struct {
+	u32 frames, skips, advances, predicted, rollbacks, deepest, wrong, too_deep;
+	u64 start_us, end_us;
+} RbResult;
+
+/* The savestate engine's handshake (tools/rollback, EXI 0xD9 [version,
+ * state]): starting, then ready. Sent before frame 1's poll, the order a slow
+ * stage load can make on a Wii. */
+static void engine_ready(void)
+{
+	u8 req[3] = { 0xD9, 1, 0 }, answer = 0;
+	command(req, 3, &answer, 1);
+	CHECK(answer == 1, "0xD9 0: the kernel does not want rollback (%u)", answer);
+	req[2] = 1;
+	command(req, 3, &answer, 1);
+}
+
+/* The game with prediction. used[f] is the opponent's input frame f ran
+ * with, known[f] the real one once the kernel gives it (0xB0: the newest
+ * frame it has, and up to 7 pads from there back, newest first). */
+static int play_rollback(int frames, RbResult *g)
+{
+	static u8 used[RB_FRAMES][8], known[RB_FRAMES][8], have[RB_FRAMES];
+	const u8 delay = msrb[9];
+	u8 local_np, remote_np, txb[26], last[8];
+	s32 frame = 1, confirmed = 0, f, k;
+	int advance = 0, rolled_back = 0;
+
+	if (frames >= RB_FRAMES)
+		frames = RB_FRAMES - 1;
+	so_client_lock();
+	local_np = so_np_local_player_idx();
+	remote_np = so_np_remote_player_idx(0);
+	so_client_unlock();
+	memset(g, 0, sizeof(*g));
+	memset(have, 0, sizeof(have));
+	memset(last, 0, sizeof(last));
+	if (load_ms) {
+		/* the opponent reaches its first frames: its pads, then ours ahead of the game */
+		s32 head = 0;
+		while (head < 1) {
+			so_sleep_us(1000);
+			so_client_lock();
+			head = so_np_remote_head_frame(0);
+			so_client_unlock();
+		}
+		so_sleep_us(load_ms * 1000);
+	}
+	engine_ready();
+	g->start_us = so_time_us();
+	while (frame <= frames) {
+		s32 head, earliest = 0;
+		if (!advance)
+			wait_vi();	/* (advance: this frame runs in the last one's refresh) */
+		advance = 0;
+		if (rolled_back && frame > 120) {
+			/* The engine, its retrace falling in the rollback: this frame's pad
+			 * goes ahead of its 0xB0 (rollback.c, rb_early_pad). */
+			memset(txb, 0, sizeof(txb));
+			txb[0] = 0xE0;
+			so_put_u32(txb + 1, (u32)frame);
+			txb[13] = delay;
+			so_test_pad(local_np, frame + delay, txb + 14);
+			command(txb, sizeof(txb), NULL, 0);
+		}
+		rolled_back = 0;
+		so_set_ppc_word(0x1159F500, (u32)frame - 1);	/* the engine's T_GAME_FRAMES */
+		memset(txb, 0, sizeof(txb));
+		txb[0] = 0xB0;
+		so_put_u32(txb + 1, (u32)frame);
+		so_put_u32(txb + 5, (u32)(confirmed < frame - 1 ? confirmed : frame - 1));	/* finalized */
+		so_put_u32(txb + 9, so_test_checksum(confirmed < frame - 1 ? confirmed : frame - 1));
+		txb[13] = delay;
+		if (frame + delay >= 78)	/* (below it, TriggerSendInput clears them) */
+			so_test_pad(local_np, frame + delay, txb + 14);
+		command(txb, sizeof(txb), rxb, RXB_SIZE);
+		if (rxb[0] == 3) {
+			printf("game: disconnected at frame %d\n", (int)frame);
+			return -1;
+		}
+		/* the opponent's inputs, newest first */
+		head = (s32)so_get_u32(rxb + 0x1A);
+		CHECK(head <= frame, "0xB0 frame %d: the opponent's frame %d is ahead", (int)frame, (int)head);
+		for (k = 0; k < RB_MAX; k++) {
+			f = head - k;
+			if (f < 1 || f >= RB_FRAMES || f <= confirmed || have[f])
+				continue;
+			memcpy(known[f], rxb + 0x2A + k * 12, 8);
+			have[f] = 1;
+			if (f < frame && memcmp(known[f], used[f], 8) != 0 && (!earliest || f < earliest))
+				earliest = f;
+		}
+		while (confirmed + 1 < RB_FRAMES && have[confirmed + 1])
+			confirmed++;
+		if (earliest) {
+			/* a misprediction: load frame `earliest` and run to here again */
+			u32 depth = (u32)(frame - earliest);
+			rolled_back = 1;
+			g->rollbacks++;
+			if (depth > g->deepest)
+				g->deepest = depth;
+			if (depth > RB_MAX && g->too_deep++ < 5)
+				printf("game: frame %d: a rollback to %d, beyond the %d savestates\n", (int)frame,
+					(int)earliest, RB_MAX);
+			for (f = earliest; f < frame; f++)
+				memcpy(used[f], have[f] ? known[f] : (f > 1 ? used[f - 1] : last), 8);
+		}
+		if (rxb[0] == 2) {
+			g->skips++;
+			continue;
+		}
+		CHECK(rxb[0] == 1 || rxb[0] == 4, "0xB0: result %u", rxb[0]);
+		CHECK(frame - confirmed <= RB_MAX + 1, "frame %d runs %d frames past the opponent's inputs",
+			(int)frame, (int)(frame - confirmed));
+		if (have[frame]) {
+			memcpy(used[frame], known[frame], 8);
+		} else {
+			/* predict: the newest real input */
+			memcpy(used[frame], head >= 1 && head < RB_FRAMES && have[head] ? known[head] : last, 8);
+			g->predicted++;
+		}
+		if (have[frame] || (head >= 1 && head < RB_FRAMES && have[head]))
+			memcpy(last, used[frame], 8);
+		if (rxb[0] == 4) {
+			g->advances++;
+			advance = 1;
+		}
+		if (slow_every && frame % slow_every == 0)
+			so_sleep_us(vi_us * 13 / 10);
+		g->frames++;
+		frame++;
+	}
+	g->end_us = so_time_us();
+	/* every frame the game confirmed ran with the opponent's real input */
+	for (f = 16; f <= confirmed && f < RB_FRAMES; f++) {
+		u8 want[8];
+		so_test_pad(remote_np, f, want);
+		if (check_pads && (memcmp(known[f], want, 8) != 0 || memcmp(used[f], want, 8) != 0) && g->wrong++ < 5)
+			printf("game: frame %d: the opponent's input is wrong\n", (int)f);
+	}
+	printf("game: rollback: %u frames confirmed of %u\n", (unsigned)confirmed, (unsigned)g->frames);
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	GameResult g;
@@ -447,6 +656,10 @@ int main(int argc, char **argv)
 	data_dir = argv[1];
 	if (getenv("SO_PC_VI_US"))
 		vi_us = (u32)atoi(getenv("SO_PC_VI_US"));
+	if (getenv("SO_PC_SLOW_EVERY"))
+		slow_every = (u32)atoi(getenv("SO_PC_SLOW_EVERY"));
+	if (getenv("SO_PC_LOAD_MS"))
+		load_ms = (u32)atoi(getenv("SO_PC_LOAD_MS"));
 	res = so_client_init();
 	if (res < 0) {
 		printf("so_client_init failed: %d\n", res);
@@ -478,6 +691,7 @@ int main(int argc, char **argv)
 		CHECK(msrb[0] == 0, "0xBA after the Ranked refusal: state %s", state_name(msrb[0]));
 	}
 
+	name_entry(so_client_config()->selftest_code);
 	if (lock_in_and_search(so_client_config()->selftest_code) < 0 || wait_ready(timeout_ms) < 0) {
 		simple(0xBA, NULL, 0);
 		return 1;
@@ -487,8 +701,36 @@ int main(int argc, char **argv)
 	match_state();
 	match_state();
 
-	res = play(frames, &g);
-	so_exi_stats(&stats);
+	if (so_client_config()->rollback) {
+		RbResult r;
+		res = play_rollback(frames, &r);
+		so_exi_stats(&stats);
+		secs = (double)((r.end_us ? r.end_us : so_time_us()) - r.start_us) / 1e6;
+		printf("game: %u frames in %.2f s (%.2f fps), %u predicted, %u rollbacks (deepest %u), %u skipped polls, "
+			"%u advances, %u wrong inputs\n", (unsigned)r.frames, secs, secs > 0 ? r.frames / secs : 0.0,
+			(unsigned)r.predicted, (unsigned)r.rollbacks, (unsigned)r.deepest, (unsigned)r.skips,
+			(unsigned)r.advances, (unsigned)r.wrong);
+		CHECK(res == 0, "the game did not finish");
+		CHECK(r.wrong == 0, "%u wrong inputs", (unsigned)r.wrong);
+		CHECK(r.too_deep == 0, "%u rollbacks beyond Slippi's savestates", (unsigned)r.too_deep);
+		CHECK(r.predicted > 0, "rollback=1, yet the game never predicted");
+		printf("game: %u pads sent ahead of their frames, %u wrong\n", (unsigned)stats.early_pads,
+			(unsigned)stats.early_wrong);
+		CHECK(stats.early_pads > 0, "no pad went ahead though the game rolled back");
+		CHECK(stats.early_wrong == 0, "%u pads sent ahead were wrong", (unsigned)stats.early_wrong);
+		if (slow_every) {
+			/* the refreshes its slow frames missed made up: in step with the
+			 * clock, but for the polls it waited at the opponent's word and
+			 * the first 2 s (no catching up yet, as in Dolphin) */
+			u32 due = (u32)(secs * 1e6 / vi_us) - 120 / slow_every;
+			printf("game: slow frames: %u frames run and %u waited of %u refreshes\n", (unsigned)r.frames,
+				(unsigned)r.skips, (unsigned)due);
+			CHECK(r.frames + r.skips + 6 >= due, "fell %d frames behind the clock",
+				(int)(due - r.frames - r.skips));
+		}
+	} else {
+		res = play(frames, &g);
+		so_exi_stats(&stats);
 	secs = (double)((g.end_us ? g.end_us : so_time_us()) - g.start_us) / 1e6;
 	printf("game: %u frames in %.2f s (%.2f fps), %u skipped polls (longest run %u), %u wrong pads\n",
 		(unsigned)g.frames, secs, secs > 0 ? g.frames / secs : 0.0, (unsigned)g.skips,
@@ -496,8 +738,9 @@ int main(int argc, char **argv)
 	printf("game: exi: %u commands, %u reads, %u B0 polls, %u savestate requests, %u unknown\n",
 		(unsigned)stats.commands, (unsigned)stats.reads, (unsigned)stats.b0_polls,
 		(unsigned)stats.savestate_requests, (unsigned)stats.unknown);
-	CHECK(res == 0, "the game did not finish");
-	CHECK(g.mismatches == 0, "%u wrong pads", (unsigned)g.mismatches);
+		CHECK(res == 0, "the game did not finish");
+		CHECK(g.mismatches == 0, "%u wrong pads", (unsigned)g.mismatches);
+	}
 	CHECK(stats.savestate_requests == 0 && stats.unknown == 0, "unexpected commands");
 
 	/* Results screen, then back to the CSS: the opponent stays. */

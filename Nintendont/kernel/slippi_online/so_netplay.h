@@ -106,6 +106,19 @@ u32 so_np_disconnect_reason(void);
 /* Resets per-game state before a game starts (StartSlippiGame). */
 void so_np_start_game(void);
 
+/* The first pads Slippi's TriggerSendInput clears, whatever the controller says:
+ * those for frames under START_SYNC_FRAME. The game is frozen until a few frames
+ * later ("Clear all inputs during freeze time"). */
+#define SO_NP_FROZEN_PADS_END 78
+/* Whether the frozen frames' pads may go out ahead of the game (see so_netplay.c) */
+void so_np_allow_frozen_pads(int allow);
+/* The game has reached the pad for this frame: no more go out ahead of it. Returns
+ * the newest that did, which the game need not send (0: none). */
+s32 so_np_frozen_pads_sent(s32 frame);
+/* The time sync's newest reading of the opponent, in us: negative when we are behind.
+ * (One opponent: a game of more does not send pads ahead.) */
+s32 so_np_newest_offset_us(void);
+
 /* Queues our pad (NULL: resend what is not yet acked) and sends every
  * un-acked pad to each opponent (SendSlippiPad). */
 void so_np_send_pad(const SoLocalPad *pad);
@@ -113,6 +126,11 @@ void so_np_send_pad(const SoLocalPad *pad);
 /* Lockstep access to an opponent's pads. */
 int so_np_remote_pad(int remote, s32 frame, u8 *out);
 s32 so_np_remote_head_frame(int remote);
+/* 1 in the first game against this opponent (so_pads.h, so_peer_first_game). */
+int so_np_first_game(void);
+/* These PowerPC words (head_word 0: none) follow opponent 0's newest input frame, and the
+ * newest frame whose input is not the one before it. */
+void so_np_publish_head(u32 head_word, u32 changed_word);
 void so_np_remote_checksum(int remote, s32 *frame, u32 *checksum);
 
 /* How far we run ahead of the slowest opponent (CalcTimeOffsetUs). */

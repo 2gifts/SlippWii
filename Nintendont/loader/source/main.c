@@ -519,6 +519,12 @@ int main(int argc, char **argv)
 
 	memset((void*)ncfg, 0, sizeof(NIN_CFG));
 	bool argsboot = false;
+	if(argc > 1 && strncmp(argv[1], "slippwii-menu-test=", 19) == 0)
+	{
+		// tests (menu.h, SlippWiiMenuTest): no settings in the arguments, so the loader's own are read
+		SlippWiiMenuTest = atoi(argv[1] + 19) + 1;
+		argc = 1;
+	}
 	if(argc > 1) //every 0x00 gets counted as one arg so just make sure its more than the path and copy
 	{
 		memcpy(ncfg, argv[1], sizeof(NIN_CFG));

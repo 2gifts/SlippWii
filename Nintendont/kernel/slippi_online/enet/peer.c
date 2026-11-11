@@ -6,6 +6,9 @@
 #define ENET_BUILDING_LIB 1
 #include "enet/enet.h"
 
+/* SlippWii (so_netplay.c) */
+extern enet_uint16 so_enet_next_unsequenced_group (ENetPeer * peer);
+
 /** @defgroup peer ENet peer functions 
     @{
 */
@@ -639,7 +642,9 @@ enet_peer_setup_outgoing_command (ENetPeer * peer, ENetOutgoingCommand * outgoin
     else
     if (outgoingCommand -> command.header.command & ENET_PROTOCOL_COMMAND_FLAG_UNSEQUENCED)
     {
-       ++ peer -> outgoingUnsequencedGroup;
+       /* SlippWii: through so_netplay.c, which sends acks from another thread too */
+       outgoingCommand -> command.sendUnsequenced.unsequencedGroup =
+         ENET_HOST_TO_NET_16 (so_enet_next_unsequenced_group (peer));
 
        outgoingCommand -> reliableSequenceNumber = 0;
        outgoingCommand -> unreliableSequenceNumber = 0;
@@ -666,8 +671,7 @@ enet_peer_setup_outgoing_command (ENetPeer * peer, ENetOutgoingCommand * outgoin
         break;
 
     case ENET_PROTOCOL_COMMAND_SEND_UNSEQUENCED:
-        outgoingCommand -> command.sendUnsequenced.unsequencedGroup = ENET_HOST_TO_NET_16 (peer -> outgoingUnsequencedGroup);
-        break;
+        break;	/* (set above) */
     
     default:
         break;
