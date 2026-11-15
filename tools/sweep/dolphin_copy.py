@@ -70,13 +70,14 @@ def set_ini(path, section, values):
     path.write_text('\n'.join(out) + '\n', encoding='utf-8')
 
 
-def make(name, code, opponent=None, autoplay=None, mm_host='127.0.0.1', lan_ip=None, port=None):
+def make(name, code, opponent=None, autoplay=None, mm_host='127.0.0.1', lan_ip=None, port=None, teams_code=None):
     """mm_host: where the fake matchmaking server is. Use this PC's LAN
     address when the opponent is another machine (the Wii): Dolphin reports
     the address it reaches the server from as its own, and 127.0.0.1 would
     send the Wii to itself. lan_ip, port: the LAN address Dolphin gives
     matchmaking and the port it plays from (net_relay.py: its opponent then
-    reaches it through the relay)."""
+    reaches it through the relay). teams_code: a lobby code for its Teams
+    history (teams-codes.json), as opponent is for Direct's."""
     if len(mm_host) >= len(MM_NAME):
         sys.exit(f'{mm_host}: at most {len(MM_NAME) - 1} characters (it replaces mm.slippi.gg in place)')
     dest = OUT / name
@@ -94,6 +95,9 @@ def make(name, code, opponent=None, autoplay=None, mm_host='127.0.0.1', lan_ip=N
         'displayName': f'Test {code.split("#")[0].title()}', 'latestVersion': '3.6.4'}), encoding='utf-8')
     history = [{'connectCode': full_width(opponent), 'lastPlayed': int(time.time())}] if opponent else []
     (user / 'Slippi/direct-codes.json').write_text(json.dumps(history, ensure_ascii=False), encoding='utf-8')
+    if teams_code:
+        teams = [{'connectCode': full_width(teams_code), 'lastPlayed': int(time.time())}]
+        (user / 'Slippi/teams-codes.json').write_text(json.dumps(teams, ensure_ascii=False), encoding='utf-8')
     replays = dest / 'replays'
     replays.mkdir(exist_ok=True)
     gc = user / 'GC'

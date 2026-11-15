@@ -44,6 +44,56 @@ game holds until it does (*lockstep*; releases up to 1.3.1 played this way). The
 Dolphin still predicts and rolls back as usual. Either way both sides run the exact same inputs, so
 the games stay in sync. Desync detection (Slippi's per-frame checksums) works as on PC.
 
+### Four players
+
+Teams and Party are games of four: three opponents, each on a connection of its own. Four things
+are different from one opponent.
+
+- **No rollback.** A rollback loads a savestate and runs the frames since again, all within one
+  refresh. With two characters the Wii fits that; with four it does not: a frame with nothing to
+  run again takes 11 ms of the 16.7, one with a single frame to run again 20, and with three
+  opponents some input changes on nearly every frame. Measured with every input shown one frame
+  late: the game correct (its replay the same as Dolphin's), but 6 refreshes in 10 without a new
+  picture and the game at 86% of its speed, its opponents waiting for it. So with more than one
+  opponent the game waits for every input, the *lockstep* of the paragraph above, and its opponents
+  roll back as against anyone.
+- **Delay by the ping.** A game that waits needs each input before its frame, and what gives an
+  input the time to arrive is the delay: it leaves its player that many frames early. Slippi's 2
+  frames cover about 27 ms of ping here, so the Wii takes a frame more for each 33 ms past that, up
+  to 6 (the lobby's slowest connection counts; a setting that is higher stays). Slippi's time sync
+  goes by the frames' numbers, so the opponents simply run that much ahead of the Wii: they see its
+  inputs no later, and play at their own delay.
+- **Level with the others.** With one opponent the rollback engine keeps the Wii level with it to
+  a millisecond or two. A game that waits has no engine, and Dolphin corrects in one direction only
+  (it runs faster the moment it is behind, slower only from about 8 ms ahead), so left alone the
+  three PCs sat 25 to 30 ms ahead of the Wii and saw its inputs that late. The kernel now runs a
+  frame early (two in one refresh) when it reads itself 11 ms behind on average.
+- **One datagram an opponent a frame.** The Wii's system software (IOS) sends one datagram at a
+  time and takes 2 to 3.5 ms for each. A pad and an acknowledgement apart, to each of three
+  opponents, are six a frame: more than a frame's worth. So an acknowledgement waits for the next
+  pad to the same opponent and travels with it.
+
+What three PC players get from a Wii in their lobby, against a fourth PC in its place (Slippi's
+match quality rule's measure, the frames each ran ahead of that player's inputs on average; three
+games of Teams a row through `tools/sweep/lobby.py`, 2026-11-14):
+
+| Ping | A fourth PC | The Wii | The Wii's delay |
+|---|---|---|---|
+| LAN | 0.00 | 0.21 | 2 |
+| 33 ms | 0.01 | 0.23 | 3 |
+| 63 ms | 0.11 | 1.11 | 4 |
+| 95 ms | 1.09 | 1.97 | 5 |
+| 128 ms | 2.28 | 2.35 | 6 |
+
+The Wii's inputs leave it 7 to 12 ms after a PC's own for the same frame (its three datagrams go
+one after the other, and the PCs take its acknowledgements, up to a frame late, for the line's
+time): half a frame of rollback on average, a whole one at a ping that sits just under a frame's
+edge, as 63 and 95 ms do. A player who leaves in the middle of a game is taken out of it on the
+same frame on every console, by Slippi's own rule.
+
+What was tried on the way, what was dropped and why, what is not tested, and what to do next:
+[FOUR_PLAYERS.md](FOUR_PLAYERS.md).
+
 ### Things a console needs that Dolphin doesn't
 
 - **Music:** Dolphin plays the music itself and the codeset mutes the game's. On a Wii those hooks
@@ -51,11 +101,29 @@ the games stay in sync. Desync detection (Slippi's per-frame checksums) works as
   that mute it back (`MuteMusic.asm`, `PreventMusicAlarm.asm`), with nobody to play it instead:
   silence, as a player who turns the music off wants.
 - **"Normal Lag Reduction"** writes frames to a display buffer that only exists in Dolphin; on a
-  console the GPU's write hangs the bus, so that code is dropped. The polling fix ("PD+VB") stays.
+  console the GPU's write hangs the bus, so that code is dropped. "Polling Drift Fix + VB" [tauKhan]
+  stays. Its first half reads the controller once a refresh, at the retrace. Its second half (a
+  frame left undrawn after one that waited for a buffer, so the next goes up a refresh sooner) is
+  the rollback engine's to use online, and is left off offline, where SlippWii keeps the timing of
+  Slippi Nintendont's default, the polling drift fix (docs/ROLLBACK.md, "Offline").
 - **Stage files loaded mid-game** (Pokémon Stadium's transformations) are kept in RAM, as Dolphin
   does. Reading them from the disc during a game stalled Melee long enough to drop inputs.
+- **A way out.** A PC player closes a window. A game under Slippi Nintendont could only be left
+  by turning the console off (Nintendont's own exit buttons are part of its controller code, which
+  Slippi Nintendont does not use: the game reads the controller ports itself). The Online Play
+  menu has an option Slippi no longer shows, *Log-out*, with a place in the list, an "Are you
+  sure?" box and a command to the EXI device. SlippWii shows it as **Exit**
+  (`tools/ppc/online_menu.s`): the kernel takes the command as "leave" and sets a word the game
+  reads at every retrace (`tools/ppc/exit.s`). The game stops there; the kernel closes the devices
+  and the memory card and has IOS start the Homebrew Channel, which restarts the console into it
+  (about 7 seconds). Nintendont's own way back, through a reload stub on the game's side, never
+  got back on a console here. The option's name and the line under the menu are the only things
+  changed in Slippi's menu files; the loader puts them in after making the files
+  (`tools/menu_edits.py`). Slippi's *Update* option leaves the same way.
 - **Wired only:** an IOS `sendto` over Wi-Fi takes 13-18 ms, too slow for 60 inputs a second each
-  way. Over the USB LAN adapter it takes well under 1 ms.
+  way. Over the USB LAN adapter it takes well under 1 ms. A search is refused on Wi-Fi: the kernel
+  asks IOS which of the Wii's connections is in use (the one chosen in the Wii's settings, and the
+  link's state) and the game shows "Online needs a wired LAN adapter (no Wi-Fi)".
 - **Input delay** is set on the character select screen (`tools/css_delay/`), since there's no
   Dolphin settings window. As on Dolphin it can change while connected: Slippi's code reads it at the
   start of each game.
@@ -69,6 +137,28 @@ the games stay in sync. Desync detection (Slippi's per-frame checksums) works as
   same measurement: the round trip of the last pad acknowledged.
 
 The research and measurements that led here are in [research/FEASIBILITY.md](research/FEASIBILITY.md).
+
+### Being a guest on Slippi's servers
+
+SlippWii is not Slippi's own client, and plays against people who are on it. Three rules follow.
+
+- **One Slippi version, and Slippi's say on it.** A build speaks one Slippi Dolphin version
+  (3.6.4) and reports it to matchmaking. That number is compiled in; `config.ini` cannot change it
+  against Slippi's server. When Slippi's server turns the version away (it names its latest when
+  it does), SlippWii keeps that on the card and tells the game "update required", the answer Slippi
+  Dolphin gives itself: the main menu locks the online modes, and no search goes out again until a
+  SlippWii for the new version is installed. What the menu then offers, *Update* and *Exit*, both
+  go back to the Homebrew Channel: a console is updated from SlippWii's start menu. So after a Slippi update an old SlippWii stops
+  queueing by itself, where Slippi's own check would stop an old Dolphin.
+- **A name of its own, when Slippi says where.** Slippi's matchmaking messages have no field for a
+  client's name. Two forms are built and off (`SO_CLIENT_NAME_MODE` in `so_config.h`); which one is
+  the Slippi team's call.
+- **The same judgement of a game.** Slippi's development source ends a Ranked match by a "match
+  quality" debt: every 2.5 seconds the worst of the game's speed, its average rollback depth and
+  its freezes adds to it or takes from it, and 30 ends the match. SlippWii counts the same debt in
+  every game (`so_mq.c`) and writes into its log how Slippi would have judged it. Nothing is ended
+  by it: SlippWii does not play Ranked. `tools/sweep/match_quality.py` gives the PC opponent's
+  score of the same games.
 
 ### Updates
 

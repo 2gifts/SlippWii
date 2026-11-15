@@ -15,6 +15,12 @@
 #define MAX_CONNECTIONS 16
 #define PREP_QUEUE 8
 #define CHAT_DISABLED 0x10	/* SlippiPremadeText::CHAT_MSG_CHAT_DISABLED */
+/* More than one opponent: an ack waits for the next pad to its opponent and goes in that datagram
+ * (ENet puts what is queued for a peer in one). IOS takes 2 to 3.5 ms for each datagram, one at a
+ * time: a pad and an ack apart to each of three opponents are six a frame, more than a frame's worth
+ * (the first Teams game, 2026-11-14: 285 a second, every pad 46 ms in the queue). A pad goes out
+ * every frame, so the ack is at most a frame late; without one for this long, it goes by itself. */
+#define HELD_ACK_US 20000
 
 enum {
 	MSG_PAD = 0x80,
@@ -51,6 +57,13 @@ typedef struct {
 	s32 ack_frame;
 	ENetPeer *ack_peer;
 	u64 ack_due_us;
+	u16 lobby_rtt_ms[SO_REMOTE_MAX];	/* (so_np_slowest_ping_ms) ENet's shortest round trip to each so far */
+	u32 ping_smooth_us[SO_REMOTE_MAX];	/* each opponent's pads' round trip, a sixteenth of the way a pad */
+	struct {	/* (HELD_ACK_US) per opponent: its newest pad's ack, for the next datagram to it */
+		u8 pending;
+		s32 frame;
+		u64 due_us;
+	} held_ack[SO_REMOTE_MAX];
 	u32 started_ms;
 
 	ENetPeer *server[SO_REMOTE_MAX];	/* the connection used per opponent */
@@ -412,6 +425,17 @@ static void ack_pad(ENetPeer *peer, s32 frame, u64 now_us)
 {
 	if (fa.on && peer == fa.peer && fa_already(frame))
 		return;	/* (the receive thread did) */
+	if (np->remote_count > 1) {
+		int i;
+		for (i = 0; i < np->remote_count; i++)
+			if (np->server[i] == peer) {
+				if (!np->held_ack[i].pending)
+					np->held_ack[i].due_us = now_us + HELD_ACK_US;
+				np->held_ack[i].pending = 1;
+				np->held_ack[i].frame = frame;
+				return;
+			}
+	}
 	if (!np->ack_delay_us) {
 		send_ack(peer, frame);
 		flush();
@@ -438,6 +462,10 @@ static void send_all(const u8 *data, u32 len)
 		c = find_connection(np->server[i]);
 		if (c && c->disconnected)
 			continue;
+		if (data[0] == MSG_PAD && np->held_ack[i].pending) {
+			np->held_ack[i].pending = 0;
+			send_ack(np->server[i], np->held_ack[i].frame);	/* (in this pad's datagram) */
+		}
 		send_to_peer(np->server[i], data, len, unreliable ? 1 : 0,
 			unreliable ? ENET_PACKET_FLAG_UNSEQUENCED : ENET_PACKET_FLAG_RELIABLE);
 	}
@@ -665,6 +693,9 @@ static void on_ack(Reader *r, u64 now_us)
 		np->ping_us[remote] = (u32)rtt;
 		np->ping_sum_us += (u64)rtt;
 		np->ping_count++;
+		/* (so_np_slowest_ping_ms: one pad's round trip can be anything, a game's last ones most of all) */
+		np->ping_smooth_us[remote] = np->ping_smooth_us[remote] ?
+			(u32)((s32)np->ping_smooth_us[remote] + ((s32)rtt - (s32)np->ping_smooth_us[remote]) / 16) : (u32)rtt;
 	}
 }
 
@@ -1030,6 +1061,18 @@ void so_np_poll(void)
 
 	if (np->ack_pending && so_time_us() >= np->ack_due_us)
 		flush();
+	if (np->remote_count > 1) {
+		u64 now = so_time_us();
+		int late = 0;
+		for (i = 0; i < np->remote_count; i++)
+			if (np->held_ack[i].pending && now >= np->held_ack[i].due_us && np->server[i]) {
+				np->held_ack[i].pending = 0;
+				send_ack(np->server[i], np->held_ack[i].frame);
+				late = 1;
+			}
+		if (late)
+			enet_host_flush(np->host);
+	}
 
 	if (np->status == SO_NP_CONNECTING) {
 		all = 1;
@@ -1061,6 +1104,7 @@ void so_np_stop(void)
 	enet_host_destroy(np->host);
 	np->host = NULL;
 	np->ack_pending = 0;
+	memset(np->held_ack, 0, sizeof(np->held_ack));
 	if (np->status == SO_NP_CONNECTING || np->status == SO_NP_CONNECTED)
 		np->status = SO_NP_DISCONNECTED;
 }
@@ -1082,13 +1126,21 @@ u8 so_np_local_player_idx(void)
 
 u32 so_np_wait_hint_us(u32 idle_us)
 {
-	u64 now, left;
-	if (!np || !np->ack_pending)
+	u64 now, left, due = 0;
+	int i;
+	if (!np)
+		return idle_us;
+	if (np->ack_pending)
+		due = np->ack_due_us;
+	for (i = 0; i < np->remote_count; i++)
+		if (np->held_ack[i].pending && (!due || np->held_ack[i].due_us < due))
+			due = np->held_ack[i].due_us;
+	if (!due)
 		return idle_us;
 	now = so_time_us();
-	if (np->ack_due_us <= now)
+	if (due <= now)
 		return 0;
-	left = np->ack_due_us - now;
+	left = due - now;
 	return left < idle_us ? (u32)left : idle_us;
 }
 
@@ -1239,6 +1291,29 @@ u32 so_np_ping_us(int remote)
 	return remote >= 0 && remote < np->remote_count ? np->ping_us[remote] : 0;
 }
 
+/* The slowest opponent's round trip, ms: the last game's pads' own (smoothed), or, in a lobby that
+ * has not played yet, ENet's: the shortest of its acknowledgements' round trips so far (one for each
+ * of its pings, every half second from the connection on, and for each message of the lobby's). Not
+ * ENet's mean: it starts at 500 ms and comes down an eighth of the way a sample, so a lobby of 5 s
+ * still read 170 ms over (the first game of one took a delay of 6 frames at 60 ms of ping). Called
+ * with each of the lobby's match state answers, which is what keeps the shortest. */
+u32 so_np_slowest_ping_ms(void)
+{
+	u32 most = 0;
+	int i;
+	if (!np)
+		return 0;
+	for (i = 0; i < np->remote_count; i++) {
+		u32 sample = np->server[i] ? np->server[i]->sampleRoundTripTime : 0, ms;
+		if (sample && (!np->lobby_rtt_ms[i] || sample < np->lobby_rtt_ms[i]))
+			np->lobby_rtt_ms[i] = (u16)(sample > 0xFFFF ? 0xFFFF : sample);
+		ms = np->ping_smooth_us[i] ? np->ping_smooth_us[i] / 1000 : np->lobby_rtt_ms[i];
+		if (ms > most)
+			most = ms;
+	}
+	return most;
+}
+
 u32 so_np_take_avg_ping_us(void)
 {
 	u32 avg = np->ping_count ? (u32)(np->ping_sum_us / np->ping_count) : 0;
@@ -1360,6 +1435,29 @@ void so_np_send_synced_state(const SoSyncedState *s)
 const SoSyncedState *so_np_remote_synced_state(int remote)
 {
 	return &np->synced[remote];
+}
+
+/* ForceDisconnectPlayer: one opponent of several taken for gone (no input from it for 7 s). Its
+ * connections close and the game goes on with the others; the last one gone ends it. */
+void so_np_drop_player(int remote)
+{
+	u8 idx;
+	int i, left = 0;
+	if (!np || remote < 0 || remote >= np->remote_count)
+		return;
+	idx = so_np_remote_player_idx(remote);
+	np->player_active[idx] = 0;
+	for (i = 0; i < MAX_CONNECTIONS; i++) {
+		Connection *c = &np->conns[i];
+		if (c->peer && !c->disconnected && c->player_idx == idx) {
+			enet_peer_disconnect(c->peer, 0);
+			c->disconnected = 1;
+		}
+	}
+	for (i = 0; i < np->remote_count; i++)
+		left += np->player_active[so_np_remote_player_idx(i)];
+	if (!left && np->status == SO_NP_CONNECTED)
+		set_disconnected();
 }
 
 void so_np_force_disconnect(u32 reason)

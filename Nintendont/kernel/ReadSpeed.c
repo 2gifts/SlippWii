@@ -155,3 +155,10 @@ u32 ReadSpeed_End()
 	}
 	return 1;
 }
+
+/* (diagnostics, so_diag.c: a read's wait still to go, in timer ticks; 0 when none is paced) */
+u32 ReadSpeed_Left(u32 *elapsed)
+{
+	*elapsed = TimerDiffTicks(CMDStartTime);
+	return CMDTicks;
+}

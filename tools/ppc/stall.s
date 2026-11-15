@@ -25,6 +25,9 @@
 #   0x30 u32 retraces   0x34 u32 of them with no new frame to show (the screen repeats)
 #   0x38 u32 frames shown 2 or more logic frames after the last shown (the picture jumps)
 # (At this entry a frame ready to show is HSD_VI_XFB_NEXT; HSD_VIPreRetraceCB flips to it.)
+#
+# With ALL_SCENES (build_online_boot.py --stall-all): in every scene, for a game that stops in a
+# menu or while one loads, from 90 retraces without a logic frame on (a load takes under a second).
 
 	.set FRAME, 0x120
 	.set MAIN_THREAD, 0x804A83C8
@@ -48,12 +51,14 @@ state:
 state_end:
 	mflr	r30
 
+.if ALL_SCENES == 0
 	# Online games only (scene minor 0x02, major 0x08)
 	lis	r8, 0x8048
 	lwz	r0, -0x62D0(r8)		# 0x80479D30
 	rlwinm	r0, r0, 8, 16, 31
 	cmplwi	r0, 0x0208
 	bne	reset
+.endif
 
 	lis	r8, 0x8048
 	lwz	r29, -0x62A8(r8)	# 0x80479D58: logic frames run
@@ -63,7 +68,11 @@ state_end:
 	lwz	r6, 4(r30)		# no logic frame since the last retrace
 	addi	r6, r6, 1
 	stw	r6, 4(r30)
+.if ALL_SCENES == 0
 	cmpwi	r6, 2
+.else
+	cmpwi	r6, 90
+.endif
 	blt	done
 	lwz	r7, 8(r30)
 	cmpwi	r7, 12
@@ -79,7 +88,11 @@ moved:
 	li	r0, 0
 	stw	r0, 4(r30)
 	stw	r0, 8(r30)
+.if ALL_SCENES == 0
 	cmpwi	r6, 2
+.else
+	cmpwi	r6, 90
+.endif
 	blt	done
 	li	r28, 1			# the stall ended after r6 retraces
 	b	report
@@ -135,6 +148,24 @@ report:
 	li	r10, 0x30
 	li	r11, 4
 	bl	walk
+.if ALL_SCENES
+	# in place of the interrupted stack's last 6 callers: what could keep an interrupt from the game
+	lis	r8, 0xCC00
+	lwz	r0, 0x3000(r8)		# PI: interrupts pending
+	stw	r0, 0x48(r31)
+	lwz	r0, 0x3004(r8)		# PI: interrupts let through
+	stw	r0, 0x4C(r31)
+	lis	r8, 0x8000
+	lwz	r0, 0xC4(r8)		# the OS's interrupt masks
+	stw	r0, 0x50(r31)
+	lwz	r0, 0xC8(r8)
+	stw	r0, 0x54(r31)
+	lis	r8, 0xD302
+	lwz	r0, 0x6520(r8)		# Nintendont's DI_INT (a disc command is done)
+	stw	r0, 0x58(r31)
+	lwz	r0, 0x6000(r8)		# its DI_STATUS
+	stw	r0, 0x5C(r31)
+.endif
 
 	mr	r3, r31
 	li	r4, 0x60

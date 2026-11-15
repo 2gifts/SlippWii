@@ -533,8 +533,8 @@ Each is a 1-byte write from the online submenu (`OnMenuPrep.asm:336-357,373-379,
 | Cmd | Dolphin | Console answer |
 |---|---|---|
 | B6 | `handleLogInRequest`: `AttemptLogin()` re-reads `user.json`; on failure opens the browser login page and listens (:2979-2988) | Re-read `/slippi-online/user.json`. The option only shows when B9 reports `app_state` 0. |
-| B7 | `LogOut()`: the Rust side deletes `user.json` (:2990-2993) | Do **not** delete the SD file. Forget the in-memory account, so B9 returns 0, or ignore. |
-| B8 | `user->UpdateApp()`: runs the updater (:3501-3503) | Ignore. Never return `app_state` 2, so the option never shows. |
+| B7 | `LogOut()`: the Rust side deletes `user.json` (:2990-2993) | SlippWii: back to the Homebrew Channel. The option, which Slippi's code locks in every state, is shown in every state under the name *Exit* (`tools/ppc/online_menu.s`); the command comes after *Yes* in Slippi's box. The SD file is not touched. |
+| B8 | `user->UpdateApp()`: runs the updater (:3501-3503) | SlippWii: back to the Homebrew Channel too (a console is updated from the loader's *Check for Updates*). The option shows with `app_state` 2, which the kernel returns once Slippi's server has named a newer version (kernel README, *Slippi's version*). |
 
 ---
 

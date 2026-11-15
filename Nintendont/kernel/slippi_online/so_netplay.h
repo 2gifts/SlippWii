@@ -94,6 +94,7 @@ void so_np_stop(void);
 
 SoNpStatus so_np_status(void);
 u8 so_np_remote_count(void);
+u32 so_np_slowest_ping_ms(void);	/* the lobby's slowest opponent: its round trip */
 u8 so_np_local_player_idx(void);
 int so_np_is_decider(void);
 /* Remote index (0..count-1) <-> player index (0..3). */
@@ -159,6 +160,7 @@ const SoSyncedState *so_np_remote_synced_state(int remote);
 
 /* Disconnects every opponent and tells them why. */
 void so_np_force_disconnect(u32 reason);
+void so_np_drop_player(int remote);	/* one opponent of several: the game goes on with the others */
 
 void so_np_stats(SoNpStats *out);
 

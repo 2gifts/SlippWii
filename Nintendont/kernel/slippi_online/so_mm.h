@@ -23,6 +23,7 @@ enum {
 	SO_MODE_UNRANKED = 1,
 	SO_MODE_DIRECT = 2,
 	SO_MODE_TEAMS = 3,
+	SO_MODE_PARTY = 4,
 };
 
 #define SO_MAX_PLAYERS 4
@@ -85,6 +86,9 @@ SoMmState so_mm_state(void);
 /* The error text shown to the player (the server's own text when it sent
  * one), valid in SO_MM_ERROR. */
 const char *so_mm_error(void);
+/* The latest version the server named with its error ("" when it named
+ * none): the server turns a version it no longer supports away with one. */
+const char *so_mm_latest_version(void);
 /* NULL before the first search. */
 const SoMatchResult *so_mm_result(void);
 u16 so_mm_port(void);
@@ -98,7 +102,8 @@ int so_mm_build_ticket(char *out, int size, const SoConfig *config, const SoUser
 
 /* Checks a create-ticket-resp. Returns 0 when the ticket was accepted, or
  * < 0 with `error` set to the text for the player. */
-int so_mm_parse_ticket_reply(const char *text, u32 len, char *error, int error_size);
+int so_mm_parse_ticket_reply(const char *text, u32 len, char *error, int error_size, char *latest_version,
+	int latest_version_size);
 
 /* Parses a get-ticket-resp into `result`. Returns 0, or < 0 with `error`
  * set (the server's text when it sent one; `latest_version` then receives

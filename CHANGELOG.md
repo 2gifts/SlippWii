@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.6.0
+
+- **Teams and Party work.** A Teams game used to go out of step at once: the Wii set up a
+  free-for-all while its three opponents set up teams, and it could not send to three opponents fast
+  enough. Now both modes play as on Slippi Dolphin, with a Wii in any of the four places and with a
+  player leaving in the middle of a game. With more than one opponent the Wii's game does not roll
+  back: four characters are more than a Wii can run again each frame (measured: a game at 86% of its
+  speed). It waits for every input instead, as SlippWii did before 1.4.0, and gives the inputs the
+  time to arrive by a higher input delay: 2 frames under about 27 ms of ping, 3 under 60 ms, 4 under
+  93 ms, 5 under 127 ms, 6 beyond, or your own setting if that is higher. Only the Wii's player
+  feels that delay. One-on-one play is as it was: rollback, at the delay you set.
+- A game no longer freezes for good at a loading screen after the console was kept from its disc
+  for over 10 seconds (Melee's disc library then gave the drive up; seen only in tests, under four
+  players' network traffic with a replay stream on top).
+- **Exit**, at the bottom of the Online Play menu: back to the Homebrew Channel without turning
+  the Wii off. Pick it and answer *Yes*. (The first start after this update takes a little longer
+  once: the menu files are made again.)
+- **Wired only, enforced.** SlippWii no longer searches for an opponent when the Wii is set to use
+  a wireless connection: the game says "Online needs a wired LAN adapter (no Wi-Fi)". Wi-Fi was
+  never supported, and an opponent of a Wii on Wi-Fi got every input late.
+- **Slippi updates are respected.** SlippWii reports the Slippi version it speaks, and that can no
+  longer be changed in `config.ini`. When Slippi's server stops taking that version, the game locks
+  its online modes ("update required", as Slippi Dolphin does) until a SlippWii for the new
+  version is installed. The menu then offers *Update* and *Exit*: both go back to the Homebrew
+  Channel, where *Check for Updates* is.
+- The diagnostic log says how Slippi's own match quality rule would have judged each game (the
+  rule Slippi's development version ends a Ranked match by). Nothing is ended by it.
+
 ## 1.5.1
 
 - Fixed: with the Wii in **480p** (a component cable, or *Force Progressive*), online games ran in

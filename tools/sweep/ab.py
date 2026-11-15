@@ -23,6 +23,7 @@ RUNS = ROOT / 'build/sweep/runs'
 UNFREEZE_FRAME = 84  # (Slippi's UNFREEZE_INPUTS_FRAME) up to here the players cannot move
 sys.path.insert(0, str(HERE))
 import slp_rollbacks  # noqa: E402
+import match_quality  # noqa: E402
 
 
 def sweep(wii_ip, rounds, net, extra):
@@ -60,7 +61,11 @@ def felt(run_dir):
     verdict = re.search(r'(\d+) games compared: (\d+) match, (\d+) desync', report)
     late = re.search(r"left later than the PC player's by (-?[\d.]+) ms", report)
     games = max(rb['games'], 1)
+    # Slippi's own match quality rule (match_quality.py), as the PC player's Dolphin would have scored the games
+    scored = match_quality.score_run(run_dir)
+    mq = match_quality.total(scored['pc']) if scored else None
     return {
+        'mq': mq,
         'games': rb['games'], 'match': int(verdict.group(2)) if verdict else 0,
         'desync': int(verdict.group(3)) if verdict else 0,
         'rb_min': rb['rollbacks'] * 3600 / max(rb['frames'], 1),
@@ -78,8 +83,11 @@ def felt(run_dir):
 def row(net, who, f, code):
     late = f'{f["late"]:.1f} ms' if f['late'] is not None else '-'
     crash = '' if code == 0 else ' **FAILED**'
+    q = f['mq']
+    quality = (f"{q['avg_depth']:.2f} | {q['unhealthy']} of {q['intervals']} | {q['max_debt']} | {q['ended']} of {q['games']}"
+               if q and q['games'] else '- | - | - | -')
     return (f'| {net} | {who} | {f["match"]}/{f["games"]}{crash} | {f["rb_min"]:.0f} | {f["depth"]:.2f} (deepest {f["deepest"]}) | '
-            f'{f["halts_play"]:.1f} | {f["sync_play"]:.1f} | {f["advance_play"]:.1f} | {f["start_frames"]:.0f} | {f["too_small"]} | {f["speed"]} | {late} |')
+            f'{f["halts_play"]:.1f} | {f["sync_play"]:.1f} | {f["advance_play"]:.1f} | {f["start_frames"]:.0f} | {f["too_small"]} | {f["speed"]} | {late} | {quality} |')
 
 
 def main():
@@ -97,8 +105,9 @@ def main():
     lines = ['# The PC player, against a PC and against the Wii', '',
              f'{args.rounds} games a run. Connection: one-way delay, jitter (ms), loss (%), both ways.', '',
              '| Connection | Opponent | Replays match | Rollbacks a minute | Frames a rollback | Halts a game, in play | '
-             'Time sync frames a game, in play | Time sync advances a game, in play | Frames waited while frozen | Too-small packets | Dolphin speed | Opponent\'s input later by |',
-             '|---|---|---|---|---|---|---|---|---|---|---|---|']
+             'Time sync frames a game, in play | Time sync advances a game, in play | Frames waited while frozen | Too-small packets | Dolphin speed | Opponent\'s input later by | '
+             "Slippi's rule: average depth | Unhealthy intervals | Highest debt (30 ends a Ranked match) | Ranked matches ended |",
+             '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
     seed = ['--seed', str(args.seed)]
     pc, wii = ('PC', ['--baseline', *seed]), ('Wii', ['--rollback', '0', *seed, *(['--no-mirror'] if args.no_mirror else [])])
     for net, who, extra in [(n, *o) for n in args.nets for o in (pc, wii)] + [(n, *pc) for n in args.pc_nets]:

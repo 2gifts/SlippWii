@@ -10,6 +10,7 @@
 #include "so_client.h"
 #include "so_files.h"
 #include "so_logfile.h"
+#include "so_mq.h"
 #include "so_netplay.h"
 #include "so_prefetch.h"
 #include "so_socket.h"
@@ -212,9 +213,11 @@ static struct {
 
 	SoSelections local_sel;	/* local_selections */
 	u8 mode;	/* last_search.mode */
+	u8 forced_error;	/* the lobby ended over the local player's character (Dolphin's forcedError) */
 	u8 match_block[MATCH_BLOCK_SIZE];
 	u8 local_idx, remote_idx;	/* m_local_player_idx / m_remote_player_idx */
 	int have_client;	/* Dolphin holds slippi_netplay */
+	u8 said_outdated;	/* (the log has said the game was told "update required") */
 	u16 allowed[MAX_STAGES];
 	int allowed_count;
 	u16 pool[MAX_STAGES];
@@ -265,11 +268,14 @@ static struct {
 		 * = 8 or more; docs/research/ROLLBACK.md). */
 		u32 depth[9];
 		s32 depth_frame;
+		SoMq mq;	/* Slippi's match quality rule, for the log (so_mq.h) */
+		u8 mq_logs;
 		/* Rollback (the engine said ready): Dolphin's time sync, the
 		 * frames answered with predictions, the stalls at the rollback
 		 * limit, the time sync's skipped and advanced frames. */
 		int rb;
 		s32 seen[3];	/* the opponents' latest frame the game was given */
+		u64 short_since_us[3];	/* more than one opponent: since when each one's inputs have held the game */
 		u64 spike_until_us;	/* tests: test_spike_ms */
 		s32 spike_frame, spike_head[3];
 		int to_skip, skipping, to_advance, advancing;
@@ -415,6 +421,7 @@ static void cleanup(void)
 	reset_selections(&x.local_sel);
 	x.pool_count = 0;
 	x.have_client = 0;
+	x.forced_error = 0;
 	x.sent_chat = 0;
 	x.last_frame = 0;	/* the next frame 1 starts a game */
 }
@@ -447,13 +454,52 @@ static void answer_ping_display(u8 request)
 
 /* The opponent's answer block: frame numbers, checksums and up to 7 pads per
  * remote, newest first (prepareOpponentInputs). The client lock is held. */
+/* An opponent of several that has left (prepareOpponentInputs, Slippi Dolphin 3.6.4): the game is
+ * told it has inputs as far as the newest of those still here, so nobody waits for it; its checksum
+ * is that one's; its pads are the last it sent, as Dolphin's queue holds them (from the finalized
+ * frame on, the newest always, 7 at most), read from where the newest opponent's frame is against
+ * the game's: past them, no input; and the game takes its character out (the byte after the pads)
+ * from the first frame that is a multiple of 30 and 16 frames (twice the rollback limit and 2) past
+ * its last input, the same frame on every console that had the same last input from it. */
+#define GAME_FIRST_FRAME (-123)
+static void fill_gone(u8 *r, int i, s32 frame, s32 finalized, s32 head, s32 newest, s32 cf, u32 cs, s32 *num)
+{
+	s32 lo = finalized < head ? finalized : head, top = head < lo + ROLLBACK_MAX_FRAMES - 1 ? head : lo + ROLLBACK_MAX_FRAMES - 1;
+	s32 despawn = (top + 2 * ROLLBACK_MAX_FRAMES + 2 + 29) / 30 * 30, off = newest > frame ? newest - frame : 0;
+	u8 *pads = r + 0x2A + i * ROLLBACK_MAX_FRAMES * PAD_FULL_SIZE;
+	int k;
+	so_put_u32(r + 0x02 + i * 8, (u32)cf);
+	so_put_u32(r + 0x06 + i * 8, cs);
+	*num = newest < frame ? newest : frame;
+	for (k = 0; k < ROLLBACK_MAX_FRAMES && off + k <= top - lo; k++)
+		so_np_remote_pad(i, top - off - k, pads + k * PAD_FULL_SIZE);
+	r[0x2A + 3 * ROLLBACK_MAX_FRAMES * PAD_FULL_SIZE + i] = frame >= despawn;
+}
+
 static void fill_remote_inputs(u8 *r, s32 frame, s32 finalized, const s32 *heads, int remotes)
 {
-	s32 nums[3], smallest;
+	s32 nums[3], smallest, newest = GAME_FIRST_FRAME - 1, newest_cf = 0;
+	u32 newest_cs = 0;
+	u8 gone[3] = { 0, 0, 0 };
 	int i, k;
 	r[1] = (u8)remotes;
+	for (i = 0; remotes > 1 && i < remotes; i++) {
+		s32 head = heads[i];
+		gone[i] = !so_np_player_active(so_np_remote_player_idx(i));
+		if (x.game.rb && head > finalized + ROLLBACK_MAX_FRAMES - 1)
+			head = finalized + ROLLBACK_MAX_FRAMES - 1;
+		if (!gone[i] && head > newest) {
+			newest = head;
+			so_np_remote_checksum(i, &newest_cf, &newest_cs);
+		}
+	}
 	for (i = 0; i < 3; i++) {
 		nums[i] = frame;
+		if (i < remotes && gone[i]) {
+			fill_gone(r, i, frame, finalized, heads[i], newest, newest_cf, newest_cs, &nums[i]);
+			so_put_u32(r + 0x1A + i * 4, (u32)nums[i]);
+			continue;
+		}
 		if (i < remotes) {
 			s32 head = heads[i], cf;
 			u32 cs;
@@ -476,6 +522,8 @@ static void fill_remote_inputs(u8 *r, s32 frame, s32 finalized, const s32 *heads
 	so_put_u32(r + 0x26, (u32)smallest);
 	for (i = 0; i < remotes; i++) {
 		u8 *pads = r + 0x2A + i * ROLLBACK_MAX_FRAMES * PAD_FULL_SIZE;
+		if (gone[i])
+			continue;	/* (fill_gone) */
 		for (k = 0; k < ROLLBACK_MAX_FRAMES; k++)
 			if (!x.game.rb || k == 0 || nums[i] - k >= finalized)	/* Dolphin's holds no older ones */
 				so_np_remote_pad(i, nums[i] - k, pads + k * PAD_FULL_SIZE);	/* 8 bytes; the rest stays 0 */
@@ -492,8 +540,75 @@ static struct {
 	u32 sum;
 } *sums;
 
+/* More than one opponent: the game waits for every input (rollback_wanted), so the inputs have to be
+ * here before their frame, and the delay is what gives them the time: an input for frame N leaves its
+ * player delay frames before N and is a one-way trip on the way. Slippi's 2 frames cover 33 ms one way
+ * less what the Wii takes to have it in hand; past that the game waits a refresh at a time and stays
+ * behind (at 60 ms of ping: 23 frames waited a game at 2, none at 4, 2026-11-14). So: the player's own
+ * setting, or more by the lobby's slowest ping: the one-way time and multi_delay_room_ms, in frames,
+ * up. The room is for the line's jitter, IOS's receive and the frame the level-keeping below may run
+ * early: 20 ms. At 63 ms of ping with a room of 10 (3 frames) the game waited 1 to 6 frames a game
+ * and ran early 5 times in three games, with 16 none and twice; at 95 ms 4 frames waited 6 in a game,
+ * 5 frames 0 to 2. So: under 27 ms of ping 2 frames, under 60 ms 3, under 93 ms 4, under 127 ms 5,
+ * else 6. Only the Wii's player feels it: its opponents see its inputs no later (Slippi's time sync
+ * goes by the frames' numbers, so they run that much ahead), and play at their own delay. One
+ * opponent: the setting, as ever. */
+#define MULTI_DELAY_MOST 6
+static u8 lobby_delay(int remotes)
+{
+	u8 delay = so_client_config()->delay;
+	u32 want;
+	if (remotes <= 1 || so_client_config()->test_multi_rollback)
+		return delay;
+	want = (so_np_slowest_ping_ms() / 2 + so_client_config()->multi_delay_room_ms) * 1000 / FRAME_US + 1;
+	if (want > MULTI_DELAY_MOST)
+		want = MULTI_DELAY_MOST;
+	return want > delay ? (u8)want : delay;
+}
+
+/* More than one opponent, waiting for inputs: what keeps the Wii level with them. Dolphin runs faster
+ * as soon as it reads itself behind, but slower only from some 8 ms ahead, and it takes half its ping
+ * to the Wii for the one-way time, a ping that holds the Wii's ack, up to a frame after the pad
+ * (HELD_ACK_US). Left alone it sits 25 to 30 ms ahead of the Wii for the whole game, and the Wii's
+ * inputs are that late for everyone: at 60 ms of ping each PC ran 2.0 frames ahead of the Wii's inputs
+ * on average and 0.1 to 0.5 ahead of another PC's (lobby.py --net 30,3, 2026-11-14). With one opponent
+ * the rollback engine keeps the Wii level (fine_sync); here the game runs a frame early (two in a
+ * refresh) when it reads itself behind by MULTI_BEHIND_US on average over MULTI_SAMPLES readings, and
+ * the next frame's inputs are all here: it is then about a third of a frame ahead, where Dolphin
+ * follows it. */
+#define MULTI_BEHIND_US 11000
+#define MULTI_SAMPLES 4
+static int multi_level(s32 frame, const s32 *heads, int remotes)
+{
+	int i;
+	if (frame <= 120 || frame % TIME_SYNC_INTERVAL != 0)
+		return 0;
+	x.game.fine_sum += so_np_time_offset_us();
+	if (++x.game.fine_n < MULTI_SAMPLES)
+		return 0;
+	i = x.game.fine_sum / MULTI_SAMPLES < -MULTI_BEHIND_US;
+	x.game.fine_sum = x.game.fine_n = 0;
+	if (!i)
+		return 0;
+	for (i = 0; i < remotes; i++)
+		if (heads[i] < frame + 1)
+			return 0;	/* (it would only wait for them) */
+	x.game.fine_advances++;
+	return 1;
+}
+
+/* One opponent: the game rolls back. More (Teams, Party): it waits for inputs, as it did for
+ * everyone before 1.4.0, and its opponents roll back as against anyone. Four characters do not
+ * fit: their frame is 11 ms of the 16.7 where two characters' is 6 to 8, a rollback of one frame
+ * makes it 20 (a load of 360 pages alone is 5 ms), and nearly every frame has one, some opponent's
+ * input changing. Measured 2026-11-14 on a LAN with every input shown a frame late
+ * (lobby.py --lag 1): the replays the same as Dolphin's, but 6 refreshes in 10 with no new frame
+ * and the game at 86% of its speed, its opponents waiting for it. Waiting, the same games ran
+ * with no refresh lost. test_multi_rollback: that measurement again. */
 static int rollback_wanted(void)
 {
+	if (so_np_remote_count() > 1 && !so_client_config()->test_multi_rollback)
+		return 0;
 	return so_client_config()->rollback && x.have_client && so_ppc_scratch_free;
 }
 
@@ -595,6 +710,17 @@ static void log_game(int keep)
 		for (i = 0; i < 9; i++)
 			len += so_snprintf(line + len, sizeof(line) - len, " %u", (unsigned)x.game.depth[i]);
 		so_log("%s", line);
+	}
+	if (x.game.mq.intervals) {	/* (two lines: a log line holds 150 characters) */
+		const SoMq *q = &x.game.mq;
+		u32 n = q->game_depth_samples ? q->game_depth_samples : 1, d = (u32)((u64)q->game_depth_sum * 100 / n);
+		so_log("game quality (Slippi's rule): %u intervals, delay %u, debt at most %d of %d, %d at the end, depth %u.%02u; Ranked: %s (frame %d)",
+			(unsigned)q->intervals, (unsigned)q->delay, (int)q->max_debt, SO_MQ_TERMINATE_DEBT, (int)q->debt,
+			(unsigned)(d / 100), (unsigned)(d % 100), q->verdict ? "ended" : "not ended", (int)q->verdict_frame);
+		so_log("game quality, unhealthy intervals: time %u/%u/%u, depth %u/%u/%u (mild/bad/severe), stalls %u short, %u with an event (%u events)",
+			(unsigned)q->tiers[SO_MQ_TIME][1], (unsigned)q->tiers[SO_MQ_TIME][2], (unsigned)q->tiers[SO_MQ_TIME][3],
+			(unsigned)q->tiers[SO_MQ_DEPTH][1], (unsigned)q->tiers[SO_MQ_DEPTH][2], (unsigned)q->tiers[SO_MQ_DEPTH][3],
+			(unsigned)q->tiers[SO_MQ_STALLS][1], (unsigned)q->tiers[SO_MQ_STALLS][2], (unsigned)q->stall_events);
 	}
 	if (x.game.waits_logged) {
 		char line[150];
@@ -750,6 +876,10 @@ static u32 direct_wanted(void)
 	const SoConfig *c = so_client_config();
 	static u8 was;
 	u32 ping;
+	/* (more than one opponent, which only a test rolls back against: never. It goes by one
+	 * opponent's ping and inputs.) */
+	if (so_np_remote_count() > 1)
+		return 0;
 	if (c->rollback_direct != 1)
 		return c->rollback_direct > 1 ? c->rollback_direct - 1 : 0;
 	ping = so_np_ping_us(0);
@@ -928,10 +1058,16 @@ static s32 visible_head(int i, s32 frame, u64 now)
 /* Dolphin's test (shouldSkipOnlineFrame), rolling back: the latest frame of the
  * 7 it would send from the finalized one on (fill_remote_inputs), at most 7
  * behind */
+/* More than one opponent (tests only: rollback_wanted): the game waits from this many frames
+ * ahead of an opponent's inputs. A capture of four characters' game is 310 to 390 pages against
+ * two characters' 225, and the engine's copies (rollback.c, STORES) then hold 5 or 6 frames, not
+ * 8: at Slippi's 7 it asked for a frame the engine had let go ("rb MISS", 2026-11-14). One
+ * opponent: Slippi's 7, as ever. */
+#define MULTI_ROLLBACK_FRAMES 5
 static int within_rollback_limit(s32 frame, s32 finalized, s32 head)
 {
 	s32 latest = head < finalized + ROLLBACK_MAX_FRAMES - 1 ? head : finalized + ROLLBACK_MAX_FRAMES - 1;
-	return latest >= frame - ROLLBACK_MAX_FRAMES;
+	return latest >= frame - (so_np_remote_count() > 1 ? MULTI_ROLLBACK_FRAMES : ROLLBACK_MAX_FRAMES);
 }
 
 /* 0xE0: the frame's pad, to the opponent now, if its 0xB0 will not have to wait
@@ -971,8 +1107,9 @@ static void on_early_pad(const u8 *p)
 #define LAST_POLLS 32
 typedef struct {
 	s32 frame, finalized, head;
+	s16 more[2];	/* the second and third opponents' newest inputs, from the first's */
 	u32 ms;
-	u8 answer;
+	u8 answer, remotes;
 } LastPoll;
 static LastPoll last_polls[LAST_POLLS];
 static u32 last_poll_n;
@@ -1142,8 +1279,12 @@ void so_exi_report_last(void)
 	so_log("last polls, frame/finalized/head/answer@ms:");
 	for (i = last_poll_n > LAST_POLLS ? last_poll_n - LAST_POLLS : 0; i < last_poll_n; i++) {
 		const LastPoll *l = &last_polls[i % LAST_POLLS];
-		len += so_snprintf(line + len, sizeof(line) - len, "%d/%d/%d/%x@%u ", (int)l->frame, (int)l->finalized,
-			(int)l->head, (unsigned)l->answer, (unsigned)(l->ms % 100000));
+		if (l->remotes > 1)	/* (the other opponents' heads after the first's, as differences from it) */
+			len += so_snprintf(line + len, sizeof(line) - len, "%d/%d/%d,%d,%d/%x@%u ", (int)l->frame, (int)l->finalized,
+				(int)l->head, (int)l->more[0], (int)l->more[1], (unsigned)l->answer, (unsigned)(l->ms % 100000));
+		else
+			len += so_snprintf(line + len, sizeof(line) - len, "%d/%d/%d/%x@%u ", (int)l->frame, (int)l->finalized,
+				(int)l->head, (unsigned)l->answer, (unsigned)(l->ms % 100000));
 		if (len > (int)sizeof(line) - 32) {
 			so_log("%s", line);
 			len = 0;
@@ -1449,6 +1590,22 @@ static void after_load_note(s32 frame, u32 gap)
 	}
 }
 
+/* Slippi's match quality rule (so_mq.h) said of an interval: the log gets the
+ * unhealthy ones (a game's first 10) and the one that reaches the limit. */
+static void mq_note(s32 frame, int judged)
+{
+	const SoMq *q = &x.game.mq;
+	if (judged == 2)
+		so_log("quality: frame %d: Slippi's rule would end a Ranked match here", (int)frame);
+	else if (judged != 1 || q->change <= 0 || x.game.mq_logs >= 10)
+		return;
+	x.game.mq_logs++;
+	so_log("quality: frame %d: debt +%d to %d (time %u%%: %d, depth %u.%02u: %d, stalls %u in %u events: %d)", (int)frame,
+		(int)q->change, (int)q->debt, (unsigned)q->time_pct, (int)q->signal[SO_MQ_TIME], (unsigned)(q->depth_x100 / 100),
+		(unsigned)(q->depth_x100 % 100), (int)q->signal[SO_MQ_DEPTH], (unsigned)q->last_stalled_passes,
+		(unsigned)q->last_stall_events, (int)q->signal[SO_MQ_STALLS]);
+}
+
 static void on_online_inputs(const u8 *p)
 {
 	s32 frame = (s32)so_get_u32(p + 1), finalized = (s32)so_get_u32(p + 5);
@@ -1520,6 +1677,7 @@ static void on_online_inputs(const u8 *p)
 		x.dummies_sent = 0;
 		x.stall_since_us = 0;
 		x.game.start_us = so_time_us();
+		so_mq_start(&x.game.mq, delay);
 	}
 	x.last_frame = frame;
 	if (x.drive_runs && frame > 2 && !so_drive_runs_line(x.drive_runs - 1, "exi: drive runs"))
@@ -1554,8 +1712,8 @@ static void on_online_inputs(const u8 *p)
 			so_client_config()->rollback_wait_ms * 1000u : 0);
 		so_client_unlock();
 	} else if (frame == 2 && x.game.depth_frame != 2 && !rollback_wanted()) {
-		so_log("exi: this game waits for inputs (rollback %u, scratch %u)",
-			(unsigned)so_client_config()->rollback, (unsigned)so_ppc_scratch_free);
+		so_log("exi: this game waits for inputs (rollback %u, scratch %u, %u opponents)",
+			(unsigned)so_client_config()->rollback, (unsigned)so_ppc_scratch_free, (unsigned)so_np_remote_count());
 	}
 	/* (a new connection's ping is first measured from this game's own acks, often after the write
 	 * above: the engine's word follows it through the countdown, where the engine reads it for its
@@ -1615,6 +1773,26 @@ static void on_online_inputs(const u8 *p)
 			heads[i] = frame;
 		}
 		x.game.seen[i] = heads[i];
+		if (remotes > 1) {
+			/* As Dolphin (shouldSkipOnlineFrame): an opponent that has left is not waited for,
+			 * the game goes on with the others (fill_remote_inputs); one whose inputs hold the
+			 * game for 7 s is given up, alone. */
+			int late = x.game.rb ? !within_rollback_limit(frame, finalized, heads[i]) : heads[i] < frame;
+			if (!so_np_player_active(so_np_remote_player_idx(i)) || !late) {
+				x.game.short_since_us[i] = 0;
+				continue;
+			}
+			ready = 0;
+			if (!x.game.short_since_us[i]) {
+				x.game.short_since_us[i] = t_in;
+			} else if (t_in - x.game.short_since_us[i] > STALL_LIMIT_US) {
+				so_log("exi: no input from player %u for 7 s: the game goes on without it",
+					(unsigned)so_np_remote_player_idx(i) + 1);
+				so_np_drop_player(i);
+				x.game.short_since_us[i] = 0;
+			}
+			continue;
+		}
 		if (x.game.rb ? !within_rollback_limit(frame, finalized, heads[i]) : heads[i] < frame)
 			ready = 0;
 	}
@@ -1630,6 +1808,12 @@ static void on_online_inputs(const u8 *p)
 	if (ready && x.game.rb && !sent_early && time_sync_skip(frame)) {
 		skip = 1;
 		x.game.sync_skips++;
+	}
+	/* (as Dolphin: every pass, halted or not, by the first opponent's newest input of the 7 it
+	 * would hand the game from the finalized frame on: GetSlippiRemotePad's latest_frame) */
+	if (remotes) {
+		s32 cap = finalized + ROLLBACK_MAX_FRAMES - 1;
+		mq_note(frame, so_mq_frame(&x.game.mq, frame, t_in, !ready, heads[0] < cap ? heads[0] : cap));
 	}
 	if (frame > 1 && frame != x.game.depth_frame) {
 		s32 behind = 0, b;
@@ -1668,7 +1852,7 @@ static void on_online_inputs(const u8 *p)
 			x.game.longest = x.game.run;
 		if (!x.stall_since_us) {
 			x.stall_since_us = now;
-		} else if (now - x.stall_since_us > STALL_LIMIT_US) {
+		} else if (now - x.stall_since_us > STALL_LIMIT_US && remotes <= 1) {	/* (more: each by itself, above) */
 			so_log("exi: no input from the opponent for 7 s; disconnecting");
 			so_np_force_disconnect(0);
 			r[0] = RESP_DISCONNECTED;
@@ -1719,6 +1903,8 @@ static void on_online_inputs(const u8 *p)
 				r[0] = RESP_ADVANCE;
 			}
 			x.game.extra_poll = r[0] == RESP_ADVANCE;
+		} else if (remotes > 1 && multi_level(frame, heads, remotes)) {
+			r[0] = RESP_ADVANCE;	/* (more than one opponent, waiting for inputs: level with them) */
 		}
 		x.stats.b0_frames++;
 		x.game.frames++;
@@ -1738,6 +1924,9 @@ static void on_online_inputs(const u8 *p)
 		l->frame = frame;
 		l->finalized = finalized;
 		l->head = heads[0];
+		l->more[0] = remotes > 1 ? (s16)(heads[1] - heads[0]) : 0;
+		l->more[1] = remotes > 2 ? (s16)(heads[2] - heads[0]) : 0;
+		l->remotes = (u8)remotes;
 		l->answer = r[0];
 		l->ms = (u32)(t_in / 1000);
 	}
@@ -1777,6 +1966,8 @@ static void utf8_append(char *dst, int size, const char *src, int chars)
 
 static u8 mm_state(void)
 {
+	if (x.forced_error)
+		return MM_ERROR;
 	switch (so_client_state()) {
 	case SO_CLIENT_SEARCHING: return MM_MATCHMAKING;
 	case SO_CLIENT_CONNECTING: return MM_OPPONENT_CONNECTING;
@@ -1787,10 +1978,48 @@ static u8 mm_state(void)
 	}
 }
 
-static u16 shade_key(const u8 *b, int slot)
+/* (Teams: by team, the colour being the team's) */
+static u16 shade_key(const u8 *b, int slot, int teams)
 {
 	u8 c = b[0x60 + slot * 0x24];
-	return (u16)(((c == 0x13 ? 0x12 : c) << 8) | b[0x63 + slot * 0x24]);
+	return (u16)(((c == 0x13 ? 0x12 : c) << 8) | b[(teams ? 0x69 : 0x63) + slot * 0x24]);
+}
+
+/* Fixed-rules modes (Unranked, Ranked, Party) and Teams take the 26 characters
+ * only, and the fixed-rules ones only the stages their match allows: as Dolphin,
+ * someone who chose otherwise ends the lobby (prepareOnlineMatchState). 0: fine;
+ * 1: end the lobby; 2: and say why (the local player's character). The client
+ * lock is held. */
+static int rules_broken(int remotes)
+{
+	const SoSelections *lps = so_np_local_selections();
+	int fixed = x.mode == SO_MODE_UNRANKED || x.mode == SO_MODE_RANKED || x.mode == SO_MODE_PARTY;
+	u16 stage = 0x1F;
+	int i, k, found = 0;
+	if (!fixed && x.mode != SO_MODE_TEAMS)
+		return 0;
+	if (lps->character_id >= 26)
+		return 2;
+	for (i = 0; i < remotes; i++)
+		if (so_np_remote_selections(i)->character_id >= 26)
+			return 1;
+	if (!fixed)
+		return 0;
+	/* the stage the game would get: the first chosen one, in port order */
+	for (k = 0; k <= remotes && !found; k++) {
+		const SoSelections *s = lps->player_idx == k ? lps : NULL;
+		for (i = 0; i < remotes && !s; i++)
+			if (so_np_remote_selections(i)->player_idx == k)
+				s = so_np_remote_selections(i);
+		if (s && s->is_stage_selected) {
+			stage = s->stage_id;
+			found = 1;
+		}
+	}
+	for (i = 0; i < x.allowed_count; i++)
+		if (x.allowed[i] == stage)
+			return 0;
+	return 1;
 }
 
 /* Writes the per-game fields into the match block once both players have
@@ -1799,10 +2028,15 @@ static u32 build_game(int remotes, u8 *alt_out)
 {
 	const SoSelections *by_port[SO_REMOTE_MAX + 1] = { NULL };
 	const SoSelections *lps = so_np_local_selections();
+	/* Dolphin's draws for a Teams lobby whose players all chose one team (by the
+	 * random seed: the same on every side) */
+	static const u8 team_draws[6][4] = {
+		{ 0, 0, 1, 1 }, { 1, 1, 0, 0 }, { 0, 1, 1, 0 }, { 1, 0, 0, 1 }, { 0, 1, 0, 1 }, { 1, 0, 1, 0 },
+	};
 	u16 stage = 0x1F;
 	u8 alt = 0, *b = x.match_block;
 	u32 rng;
-	int i, j;
+	int i, j, teams = x.mode == SO_MODE_TEAMS, one_team = 1;
 
 	if (lps->player_idx <= SO_REMOTE_MAX)
 		by_port[lps->player_idx] = lps;
@@ -1820,14 +2054,17 @@ static u32 build_game(int remotes, u8 *alt_out)
 	}
 	rng = so_np_is_decider() ? lps->rng_offset : so_np_remote_selections(0)->rng_offset;
 
+	for (i = 0; i <= remotes; i++)
+		if (by_port[i] && by_port[0] && by_port[i]->team_id != by_port[0]->team_id)
+			one_team = 0;
 	for (i = 0; i <= remotes; i++) {
 		const SoSelections *s = by_port[i];
 		if (!s || !s->is_character_selected)
 			continue;
 		b[0x60 + i * 0x24] = s->character_id;
-		b[0x63 + i * 0x24] = s->character_color;
+		b[0x63 + i * 0x24] = s->character_color;	/* (Teams: the game puts the team's colour here) */
 		b[0x67 + i * 0x24] = 0;
-		b[0x69 + i * 0x24] = 0;	/* team: Teams only */
+		b[0x69 + i * 0x24] = !teams ? 0 : one_team ? team_draws[rng % 6][i & 3] : s->team_id;
 	}
 	/* Shades: each human slot gets the number of earlier slots with the same
 	 * character (Sheik counting as Zelda) and colour. */
@@ -1836,11 +2073,11 @@ static u32 build_game(int remotes, u8 *alt_out)
 		if (b[0x61 + i * 0x24] != 0)
 			continue;
 		for (j = 0; j < i; j++)
-			if (b[0x61 + j * 0x24] == 0 && shade_key(b, j) == shade_key(b, i))
+			if (b[0x61 + j * 0x24] == 0 && shade_key(b, j, teams) == shade_key(b, i, teams))
 				shade++;
 		b[0x67 + i * 0x24] = shade;
 	}
-	b[0x08] = 0;	/* not Teams */
+	b[0x08] = (u8)teams;
 	b[0x61 + 2 * 0x24] = remotes >= 2 ? 0 : 3;
 	b[0x61 + 3 * 0x24] = remotes >= 3 ? 0 : 3;
 	so_put_u16(b + 0x0E, stage);
@@ -1863,6 +2100,7 @@ static void on_get_match_state(void)
 	const SoUser *user = so_client_user();
 	const SoMatchResult *m;
 	u8 *r, state, local_ready, remote_ready = 0, chat_id = 0, chat_player = 0, sent = 0, alt = 0;
+	u8 game_delay = so_client_config()->delay;
 	u32 rng = 0;
 	int remotes = 0, i;
 	char error[128];
@@ -1927,11 +2165,27 @@ static void on_get_match_state(void)
 				so_np_send_chat(SO_CHAT_DISABLED);
 				chat_id = 0;
 			}
+			/* (more than one opponent: by its sender's port, and "chat disabled" is not shown) */
+			chat_player = chat_id ? from : 0;
+			if (chat_id == SO_CHAT_DISABLED && remotes != 1)
+				chat_id = chat_player = 0;
+		} else {
+			chat_player = x.local_idx;
 		}
 		if (remotes == 1)
 			chat_player = sent ? x.local_idx : x.remote_idx;
-		if (local_ready && remote_ready)
+		if (local_ready && remote_ready) {
+			int broken = rules_broken(remotes);
+			if (broken) {
+				so_client_unlock();
+				so_log("exi: a selection this mode does not allow: the lobby ends");
+				cleanup();
+				x.forced_error = (u8)(broken == 2);
+				continue;
+			}
 			rng = build_game(remotes, &alt);
+		}
+		game_delay = lobby_delay(remotes);	/* (with the lock: it reads the connections) */
 		so_client_unlock();
 		break;
 	}
@@ -1943,9 +2197,16 @@ static void on_get_match_state(void)
 	r[0x004] = x.remote_idx;
 
 	/* Always: mode, timer and items. */
-	x.match_block[0x00] = 0x32;	/* stock mode, timer counting down */
-	x.match_block[0x03] = 0x4C;	/* score UI hidden */
-	so_put_u32(x.match_block + 0x10, 8 * 60);
+	if (x.mode == SO_MODE_PARTY) {
+		/* (as Slippi Dolphin 3.6.4's games of it: a replay of four of them, 2026-11-14) */
+		x.match_block[0x00] = 0x12;	/* time mode */
+		x.match_block[0x03] = 0xCC;	/* score UI shown */
+		so_put_u32(x.match_block + 0x10, 5 * 60);
+	} else {
+		x.match_block[0x00] = 0x32;	/* stock mode, timer counting down */
+		x.match_block[0x03] = 0x4C;	/* score UI hidden */
+		so_put_u32(x.match_block + 0x10, 8 * 60);
+	}
 	m = current_match();
 	x.match_block[0x0B] = 0xFF;	/* items off */
 	{
@@ -1962,7 +2223,7 @@ static void on_get_match_state(void)
 	}
 
 	so_put_u32(r + 0x005, rng);
-	r[0x009] = so_client_config()->delay;
+	r[0x009] = game_delay;
 	r[0x00A] = sent;
 	r[0x00B] = chat_id;
 	r[0x00C] = chat_player;
@@ -1981,9 +2242,14 @@ static void on_get_match_state(void)
 		{
 			const char *names[4];
 			int n = 0, each;
-			for (i = 0; i < 4 && i < m->player_count; i++)
-				if (i != x.local_idx && x.match_block[0x61 + i * 0x24] == 0 && m->players[i].display_name[0])
-					names[n++] = m->players[i].display_name;
+			for (i = 0; i < 4 && i < m->player_count; i++) {
+				if (i == x.local_idx || x.match_block[0x61 + i * 0x24] != 0 || !m->players[i].display_name[0])
+					continue;
+				/* (Teams: not the teammate) */
+				if (x.mode == SO_MODE_TEAMS && x.match_block[0x69 + i * 0x24] == x.match_block[0x69 + x.local_idx * 0x24])
+					continue;
+				names[n++] = m->players[i].display_name;
+			}
 			each = n ? (15 - (n - 1)) / n : 0;
 			for (i = 0; i < n; i++) {
 				if (i)
@@ -1995,7 +2261,9 @@ static void on_get_match_state(void)
 		strlcpy((char *)r + 0x38E, m->match_id, 51);
 	}
 	error[0] = '\0';
-	if (client_up())
+	if (x.forced_error)
+		strlcpy(error, "The character you selected is not allowed in this mode", sizeof(error));
+	else if (client_up())
 		so_client_error(error, sizeof(error));
 	so_game_string(error, 120, r + 0x165);
 	memcpy(r + 0x256, x.match_block, MATCH_BLOCK_SIZE);
@@ -2004,9 +2272,7 @@ static void on_get_match_state(void)
 
 /* ---- the other commands --------------------------------------------------- */
 
-static void remember_code(const u8 *code, int len);
-static void load_history(void);
-static volatile int history_loaded;
+static void remember_code(int teams, const u8 *code, int len);
 
 /* startFindMatch */
 static void on_find_opponent(const u8 *p)
@@ -2021,11 +2287,8 @@ static void on_find_opponent(const u8 *p)
 		len = sizeof(search.connect_code);
 	memcpy(search.connect_code, p + 2, len);
 	search.connect_code_len = (u8)len;
-	if (search.mode == 2) {	/* ONLINE_MODE_DIRECT */
-		if (!history_loaded)
-			load_history();
-		remember_code(search.connect_code, len);
-	}
+	if (search.mode == SO_MODE_DIRECT || search.mode == SO_MODE_TEAMS)
+		remember_code(search.mode == SO_MODE_TEAMS, search.connect_code, len);
 	x.mode = search.mode;
 	x.have_client = 0;
 	x.last_frame = 0;
@@ -2072,7 +2335,13 @@ static void on_online_status(void)
 	u8 *r = answer(OSB_SIZE);
 	if (so_client_state() == SO_CLIENT_OFF)
 		return;	/* not logged in: the online modes stay locked */
-	r[0] = 1;
+	/* 2: "update required", as Slippi Dolphin answers once Slippi's server has
+	 * named a version over its own: the game locks the online modes */
+	r[0] = so_client_outdated() ? 2 : 1;
+	if (r[0] == 2 && !x.said_outdated) {
+		x.said_outdated = 1;
+		so_log("exi: the game is told an update is required: its online modes are locked");
+	}
 	so_game_string(user->display_name, 15, r + 0x01);
 	so_game_connect_code(user->connect_code, r + 0x20);
 }
@@ -2089,112 +2358,122 @@ static void on_send_chat(const u8 *p)
 	so_client_unlock();
 }
 
-/* The direct-code history behind connect-code autocomplete (0xBE), most
- * recent first: the codes searched in Direct this session (raw Shift-JIS, 2
- * bytes a character, as 0xB4 sends them), then selftest_code. Slippi Dolphin
- * keeps it in direct-codes.json; this one lasts until the console is off. */
+/* The code histories behind connect-code autocomplete (0xBE), most recent
+ * first: the codes searched in Direct, and the lobby codes of Teams (raw
+ * Shift-JIS, 2 bytes a character, as 0xB4 sends them), then selftest_code.
+ * Slippi Dolphin keeps them in direct-codes.json and teams-codes.json. */
 #define HISTORY_MAX 8
-static struct {
-	u8 code[16];
-	u8 len;	/* bytes */
-} history[HISTORY_MAX + 1];
-static int history_count;
-static volatile int history_dirty, history_loaded;
+typedef struct {
+	struct {
+		u8 code[16];
+		u8 len;	/* bytes */
+	} e[HISTORY_MAX + 1];
+	int count;
+	u8 dirty, loaded;
+} History;
+static History histories[2];	/* Direct's, Teams' */
 
-/* SO_DIRECT_CODES_PATH: "SLDC", a count, then per code its length in bytes
- * and 16 bytes of Shift-JIS, most recent first. */
-#define SO_DIRECT_CODES_PATH "/slippwii/direct-codes.bin"
+/* The files: "SLDC", a count, then per code its length in bytes and 16 bytes
+ * of Shift-JIS, most recent first. */
+static const char *const history_paths[2] = { "/slippwii/direct-codes.bin", "/slippwii/teams-codes.bin" };
 #define HISTORY_FILE_SIZE (5 + HISTORY_MAX * 17)
 
-static void load_history(void)
+static void load_history(History *h)
 {
 	u8 buf[HISTORY_FILE_SIZE];
 	int n, i;
 	const SoConfig *c = so_client_config();
-	history_loaded = 1;
+	h->loaded = 1;
 	if (c && c->test_control)
 		return;	/* tests keep it to the session: not the player's codes */
-	n = so_read_file(SO_DIRECT_CODES_PATH, buf, sizeof(buf));
+	n = so_read_file(history_paths[h - histories], buf, sizeof(buf));
 	if (n < 5 || memcmp(buf, "SLDC", 4) != 0)
 		return;
 	for (i = 0; i < buf[4] && i < HISTORY_MAX && 5 + (i + 1) * 17 <= n; i++) {
 		const u8 *e = buf + 5 + i * 17;
 		if (e[0] == 0 || e[0] > 16 || e[0] % 2)
 			break;
-		history[i].len = e[0];
-		memcpy(history[i].code, e + 1, 16);
-		history_count = i + 1;
+		h->e[i].len = e[0];
+		memcpy(h->e[i].code, e + 1, 16);
+		h->count = i + 1;
 	}
-	so_log("exi: %d direct codes remembered", history_count);
+	so_log("exi: %d %s codes remembered", h->count, h == histories ? "direct" : "teams");
 }
 
 void so_exi_save_history(void)
 {
 	u8 buf[HISTORY_FILE_SIZE];
-	int i, count;
+	int i, k, count;
 	const SoConfig *c = so_client_config();
-	if (!history_dirty)
-		return;
-	history_dirty = 0;
-	if (c && c->test_control)
-		return;
-	count = history_count;
-	memset(buf, 0, sizeof(buf));
-	memcpy(buf, "SLDC", 4);
-	buf[4] = (u8)count;
-	for (i = 0; i < count; i++) {
-		buf[5 + i * 17] = history[i].len;
-		memcpy(buf + 6 + i * 17, history[i].code, 16);
+	for (k = 0; k < 2; k++) {
+		History *h = &histories[k];
+		if (!h->dirty)
+			continue;
+		h->dirty = 0;
+		if (c && c->test_control)
+			continue;
+		count = h->count;
+		memset(buf, 0, sizeof(buf));
+		memcpy(buf, "SLDC", 4);
+		buf[4] = (u8)count;
+		for (i = 0; i < count; i++) {
+			buf[5 + i * 17] = h->e[i].len;
+			memcpy(buf + 6 + i * 17, h->e[i].code, 16);
+		}
+		if (so_write_file(history_paths[k], buf, 5 + count * 17) < 0)
+			so_log("exi: could not save the %s codes", k ? "teams" : "direct");
 	}
-	if (so_write_file(SO_DIRECT_CODES_PATH, buf, 5 + count * 17) < 0)
-		so_log("exi: could not save the direct codes");
 }
 
-static void remember_code(const u8 *code, int len)
+static void remember_code(int teams, const u8 *code, int len)
 {
+	History *h = &histories[teams ? 1 : 0];
 	int i, j;
 	if (len <= 0 || len > 16 || len % 2)
 		return;
-	for (i = 0; i < history_count; i++)
-		if (history[i].len == len && memcmp(history[i].code, code, len) == 0)
+	if (!h->loaded)
+		load_history(h);
+	for (i = 0; i < h->count; i++)
+		if (h->e[i].len == len && memcmp(h->e[i].code, code, len) == 0)
 			break;
-	if (i == history_count && history_count < HISTORY_MAX)
-		history_count++;
-	if (i == history_count)
-		i = history_count - 1;	/* full: drop the oldest */
+	if (i == h->count && h->count < HISTORY_MAX)
+		h->count++;
+	if (i == h->count)
+		i = h->count - 1;	/* full: drop the oldest */
 	for (j = i; j > 0; j--)
-		history[j] = history[j - 1];
-	memset(history[0].code, 0, sizeof(history[0].code));
-	memcpy(history[0].code, code, len);
-	history[0].len = (u8)len;
-	history_dirty = 1;
+		h->e[j] = h->e[j - 1];
+	memset(h->e[0].code, 0, sizeof(h->e[0].code));
+	memcpy(h->e[0].code, code, len);
+	h->e[0].len = (u8)len;
+	h->dirty = 1;
 }
 
 /* The history with selftest_code last (unless already in it); returns the count. */
-static int code_list(void)
+static int code_list(History *h)
 {
-	if (!history_loaded)
-		load_history();
 	const SoConfig *c = so_client_config();
 	u8 code[16];
-	int n = c && c->selftest_code[0] ? so_encode_connect_code(c->selftest_code, code, sizeof(code)) : -1, i;
-	for (i = 0; n > 0 && i < history_count; i++)
-		if (history[i].len == n && memcmp(history[i].code, code, n) == 0)
+	int n, i;
+	if (!h->loaded)
+		load_history(h);
+	n = c && c->selftest_code[0] ? so_encode_connect_code(c->selftest_code, code, sizeof(code)) : -1;
+	for (i = 0; n > 0 && i < h->count; i++)
+		if (h->e[i].len == n && memcmp(h->e[i].code, code, n) == 0)
 			n = -1;
 	if (n > 0) {
-		memcpy(history[history_count].code, code, n);
-		history[history_count].len = (u8)n;
-		return history_count + 1;
+		memcpy(h->e[h->count].code, code, n);
+		h->e[h->count].len = (u8)n;
+		return h->count + 1;
 	}
-	return history_count;
+	return h->count;
 }
 
 /* Does this code start with the typed characters? */
-static int code_matches(int index, const u8 *p, u8 len)
+static int code_matches(const History *h, int index, const u8 *p, u8 len)
 {
-	int k, ok = history[index].len / 2 >= len;
+	int k, ok = h->e[index].len / 2 >= len;
 	for (k = 0; ok && k < len; k++)
-		ok = history[index].code[2 * k] == p[1 + 3 * k] && history[index].code[2 * k + 1] == p[2 + 3 * k];
+		ok = h->e[index].code[2 * k] == p[1 + 3 * k] && h->e[index].code[2 * k + 1] == p[2 + 3 * k];
 	return ok;
 }
 
@@ -2202,13 +2481,15 @@ static int code_matches(int index, const u8 *p, u8 len)
  * older (1), newer (2, never past the newest) or back to the newest
  * (3), the first code that starts with the typed characters, walking the
  * same way. None found: the shown one stays if it still matches (else
- * scrolling past the end would clear it), or the typed text is echoed. */
+ * scrolling past the end would clear it), or the typed text is echoed.
+ * The mode's history: Teams has its own. */
 static void on_code_suggestion(const u8 *p)
 {
 	u8 *r = answer(30);
 	u8 len = p[0x19], dir = p[0x1E];
 	u32 shown = so_get_u32(p + 0x1A), index = shown;
-	int count = code_list(), found = -1, i;
+	History *h = &histories[p[0x1F] == SO_MODE_TEAMS ? 1 : 0];
+	int count = code_list(h), found = -1, i;
 	if (len > 8)
 		len = 8;
 	if (dir == 1)
@@ -2218,12 +2499,12 @@ static void on_code_suggestion(const u8 *p)
 	else if (dir == 3)
 		index = 0;
 	while (found < 0 && index < (u32)count) {
-		if (code_matches((int)index, p, len))
+		if (code_matches(h, (int)index, p, len))
 			found = (int)index;
 		else
 			index += dir == 2 ? (u32)-1 : 1;	/* unsigned: below 0 ends the walk */
 	}
-	if (found < 0 && shown < (u32)count && code_matches((int)shown, p, len))
+	if (found < 0 && shown < (u32)count && code_matches(h, (int)shown, p, len))
 		found = (int)shown;
 	if (found < 0) {
 		/* not found: the typed text, echoed */
@@ -2233,11 +2514,11 @@ static void on_code_suggestion(const u8 *p)
 		return;
 	}
 	r[0] = 1;
-	for (i = 0; i < history[found].len / 2 && i < 8; i++) {
-		r[1 + 3 * i] = history[found].code[2 * i];
-		r[2 + 3 * i] = history[found].code[2 * i + 1];
+	for (i = 0; i < h->e[found].len / 2 && i < 8; i++) {
+		r[1 + 3 * i] = h->e[found].code[2 * i];
+		r[2 + 3 * i] = h->e[found].code[2 * i + 1];
 	}
-	r[0x19] = (u8)(history[found].len / 2);
+	r[0x19] = (u8)(h->e[found].len / 2);
 	so_put_u32(r + 0x1A, (u32)found);
 }
 
@@ -2604,6 +2885,8 @@ void so_exi_write(const u8 *request, u32 dma_len)
 			 * game's end line, "rb WALK 0") */
 			if (!memcmp(a, "rb WALK ", 8) && a[8] != '0')
 				so_exi_report_last();
+			if (!memcmp(a, "rb MISS", 7))	/* (Slippi asked the engine for a frame it had not saved) */
+				so_exi_report_last();
 			if (!memcmp(a, "rb odb", 6)) {	/* (rb_load_check, its last line) */
 				so_exi_report_last();
 				so_np_force_disconnect(0);
@@ -2662,10 +2945,11 @@ void so_exi_write(const u8 *request, u32 dma_len)
 				(unsigned)so_get_u32(p + 0x04), (unsigned)so_get_u32(p + 0x28), (tag >> 16 & 0xFF) ? "ended after" : "for",
 				(unsigned)(tag & 0xFFFF), (unsigned)so_get_u32(p + 0x18), (unsigned)(so_get_u32(p + 0x1C) >> 16),
 				(unsigned)main_pc, (unsigned)so_get_u32(p + 0x24));
-			so_log("STALL   at %08x lr %08x < %08x %08x %08x %08x %08x %08x %08x %08x", (unsigned)so_get_u32(p + 0x08),
+			so_log("STALL   at %08x lr %08x < %08x %08x %08x %08x %08x %08x %08x %08x; scene %08x", (unsigned)so_get_u32(p + 0x08),
 				(unsigned)so_get_u32(p + 0x0C), (unsigned)so_get_u32(p + 0x40), (unsigned)so_get_u32(p + 0x44),
 				(unsigned)so_get_u32(p + 0x48), (unsigned)so_get_u32(p + 0x4C), (unsigned)so_get_u32(p + 0x50),
-				(unsigned)so_get_u32(p + 0x54), (unsigned)so_get_u32(p + 0x58), (unsigned)so_get_u32(p + 0x5C));
+				(unsigned)so_get_u32(p + 0x54), (unsigned)so_get_u32(p + 0x58), (unsigned)so_get_u32(p + 0x5C),
+				(unsigned)so_get_u32(p + 0x14));
 			break;
 		}
 		x.stats.heartbeats++;
@@ -2763,9 +3047,17 @@ void so_exi_write(const u8 *request, u32 dma_len)
 		if (!x.pf_engine)
 			so_pf_open();
 		break;
-	case CMD_OPEN_LOGIN:
 	case CMD_LOGOUT:
 	case CMD_UPDATE:
+		/* The Online Play menu's Exit: Slippi's "Log-out" option under
+		 * SlippWii's name (tools/ppc/online_menu.s, tools/menu_edits.py),
+		 * sent once the player has said yes in Slippi's own box. And
+		 * Slippi's "Update", the one option of a version Slippi has moved on
+		 * from: a console is updated from SlippWii's start menu. Both leave
+		 * for the Homebrew Channel (tools/ppc/exit.s). */
+		so_diag_request_exit(cmd == CMD_UPDATE ? "the menu's Update" : "the menu's Exit");
+		break;
+	case CMD_OPEN_LOGIN:
 	case CMD_OVERWRITE_SELECTIONS:
 	case CMD_GP_COMPLETE_STEP:
 	case CMD_REPORT_SET_COMPLETE:

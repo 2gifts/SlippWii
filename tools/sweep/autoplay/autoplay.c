@@ -63,7 +63,7 @@ typedef struct {
 	u8 over_limit[2];	/* 0xBB per port: over the ledge grab limit, near the end of these rounds */
 	u8 no_text_fix_rounds;	/* 0xBD tools/text_args/ taken out of Melee, to show what it prevents */
 	u8 person;		/* 0xBE the stick moves as a person's does (next_frame) */
-	u8 pad_bf;		/* 0xBF */
+	u8 mode;		/* 0xBF the Online Play option to choose: 3 Teams, 4 Party (0: Direct, 2) */
 	s32 played;		/* 0xC0 the game's frames in_game has made inputs for */
 	s8 jx, jy;		/* 0xC4 the stick's unsteadiness this frame */
 } Bot;
@@ -87,6 +87,7 @@ void flush_code(u32 address, u32 bytes);
 
 static u32 rd32(u32 a) { return *(volatile u32 *)a; }
 static u8 rd8(u32 a) { return *(volatile u8 *)a; }
+static u16 rd16(u32 a) { return *(volatile u16 *)a; }
 static float rdf(u32 a) { return *(volatile float *)a; }
 
 static int valid_ptr(u32 p)
@@ -152,10 +153,44 @@ static void main_menu(Bot *b, Pad *o)
 		return;
 	}
 	if (b->seed == 0xED && rd8(0x804A04F0) == 8)
-		return;	/* test mode (tools/ppc/hide_ranked.s): stay on the Online Play menu */
+		return;	/* test mode (tools/ppc/online_menu.s): stay on the Online Play menu */
+	if ((b->seed == 0xEB || b->seed == 0xEA) && rd8(0x804A04F0) == 8) {
+		/* test mode (tools/ppc/online_menu.s, exit.s; run_sweep.py --menu-exit): on the Online
+		 * Play menu, the stick down until the cursor is on Exit; A (Slippi's "Are you sure?"
+		 * opens, on No); B (it closes); A again, the stick left (Yes), A: the Wii goes back to
+		 * the Homebrew Channel by itself. Seconds apart, so a recording shows each step.
+		 * Seed 0xEA (--menu-exit update): down to Update (shown when Slippi's server has named
+		 * a newer version) and A, which leaves the same way, with no box. */
+		u32 t = b->scan_t++;
+		u32 want = b->seed == 0xEA ? 7 : 6;
+		if (b->step == 0) {
+			if (t < 240)
+				return;	/* the menu as it opens */
+			if (rd16(0x804A04F2) == want) {
+				b->step = 1;
+				b->scan_t = 0;
+			} else if (t % 40 < 4) {
+				o->sy = -100;
+			}
+			return;
+		}
+		if (t >= 240 && t < 244)
+			o->button = B_A;
+		else if (want == 7)
+			;	/* Update: that A was all */
+		else if (t >= 420 && t < 424)
+			o->button = B_B;
+		else if (t >= 540 && t < 544)
+			o->button = B_A;
+		else if (t >= 700 && t < 704)
+			o->sx = -100;
+		else if (t >= 880 && t < 884)
+			o->button = B_A;
+		return;
+	}
 	if (rd8(0x804A04F0) == 8) {	/* Slippi's Online Play submenu */
 		if (b->scene_polls % 30 == 0)
-			*(volatile u16 *)0x804A04F2 = 2;	/* Direct */
+			*(volatile u16 *)0x804A04F2 = b->mode ? b->mode : 2;	/* Direct, unless the plan names another */
 		if (pulse(b, 30, 15))
 			o->button = B_A;
 	} else if (pulse(b, 40, 20)) {

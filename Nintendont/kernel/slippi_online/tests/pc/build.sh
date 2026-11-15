@@ -3,6 +3,8 @@
 #   sh build.sh   -> $OUT/so_pc_selftest.exe (the self-test)
 #                    $OUT/so_pc_game.exe     (fake Melee driving the EXI device)
 #                    $OUT/so_pc_opponent.exe (an opponent to play the Wii by hand)
+#                    $OUT/so_pc_fake_mm.exe  (a matchmaking server that turns a version away: test_online_gates.py)
+#                    $OUT/so_pc_lobby_mm.exe (a matchmaking server for Teams and Party lobbies: tools/sweep/lobby.py)
 # (default OUT: a build dir under TMPDIR)
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -17,7 +19,7 @@ build() {
 		"$main" "$HERE/so_platform_win32.c" "$HERE/so_socket_win32.c" \
 		"$SRC/so_util.c" "$SRC/so_alloc.c" "$SRC/so_json.c" "$SRC/so_config.c" "$SRC/so_pads.c" \
 		"$SRC/so_mm_msg.c" "$SRC/so_mm.c" "$SRC/so_netplay.c" "$SRC/so_client.c" "$SRC/so_selftest.c" \
-		"$SRC/so_diag.c" "$SRC/so_exi.c" "$SRC/so_text.c" "$SRC/so_files.c" "$SRC/so_logfile.c" \
+		"$SRC/so_diag.c" "$SRC/so_exi.c" "$SRC/so_text.c" "$SRC/so_files.c" "$SRC/so_logfile.c" "$SRC/so_mq.c" \
 		"$SRC"/enet/*.c \
 		-lws2_32 -lwinmm -o "$exe"
 	echo "$exe"
@@ -25,3 +27,5 @@ build() {
 build "$HERE/pc_main.c" "$OUT/so_pc_selftest.exe"
 build "$HERE/pc_game.c" "$OUT/so_pc_game.exe"
 build "$HERE/pc_opponent.c" "$OUT/so_pc_opponent.exe"
+build "$HERE/pc_fake_mm.c" "$OUT/so_pc_fake_mm.exe"
+build "$HERE/pc_lobby_mm.c" "$OUT/so_pc_lobby_mm.exe"

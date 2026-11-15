@@ -21,6 +21,12 @@ only where the line is on the screen.
     python tools/sweep/run_sweep.py --latency --menu-latency 70 --no-delay-buttons --rounds 1
     python tools/sweep/run_sweep.py --latency --menu-latency 70 --no-delay-buttons --rounds 1 --kernel test_lag_reduction=1
     python tools/sweep/run_sweep.py --latency --menu-latency 70 --no-delay-buttons --rounds 1 --kernel test_lag_reduction=2
+    # the same with the game's own wait for a frame buffer (without tools/ppc/xfb_wait.s), as 1.3.1 had it
+    python tools/sweep/run_sweep.py --latency --menu-latency 70 --no-delay-buttons --rounds 1 --boot-arg=--no-xfb-wait
+
+On the main menu, from the reading to the retrace: Melee's own 41.7 ms; SlippWii as released and the
+polling drift fix alone 33.3-33.4 ms; the game's own buffer wait 16.7 ms, since without
+`tools/ppc/xfb_wait.s` the visual buffer fix's flag is live (docs/ROLLBACK.md, "Offline").
 
     # online games against the PC's bot, rollback, at a delay and a connection
     python tools/sweep/run_sweep.py --latency --rollback 0 --net 30,5 --kernel delay=2 --no-delay-buttons --no-mirror --rounds 2

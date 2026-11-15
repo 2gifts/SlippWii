@@ -848,6 +848,7 @@ enet_protocol_handle_acknowledge (ENetHost * host, ENetEvent * event, ENetPeer *
     roundTripTime = ENET_TIME_DIFFERENCE (host -> serviceTime, receivedSentTime);
 
     enet_peer_throttle (peer, roundTripTime);
+    peer -> sampleRoundTripTime = roundTripTime > 0 ? roundTripTime : 1;   /* Slippi Online (so_np_slowest_ping_ms) */
 
     peer -> roundTripTimeVariance -= peer -> roundTripTimeVariance / 4;
 

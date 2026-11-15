@@ -14,6 +14,11 @@ Order is kept in each direction (jitter delays, it does not reorder), as on
 most real paths. Stats every 10 s and at the end, on stdout, with how much
 later B's input for each frame reaches the relay than A's (Slippi's pad
 messages, read out of the ENet datagrams): B's lateness as A feels it.
+
+--passes FILE records every datagram that carries a pad, a line each: "S A 12.345678 1234"
+when A's (its newest pad's frame) reaches the relay, "D A ..." when one is handed to A.
+A player sends its pad once for each frame it runs, so this is each player's frames by the
+clock and the opponent's newest input it had at each: what match_quality.py scores.
 """
 import argparse
 import ctypes
@@ -82,6 +87,7 @@ def main():
     ap.add_argument('--loss', type=float, default=0, help='packets dropped, percent')
     ap.add_argument('--seed', type=int, default=1)
     ap.add_argument('--trace', help="each frame's input times, a line a frame: frame, from A, from B (seconds)")
+    ap.add_argument('--passes', help='every datagram with a pad, a line each: sent by or delivered to, time, newest frame')
     args = ap.parse_args()
     if hasattr(ctypes, 'windll'):  # Windows' timer ticks every 15.6 ms otherwise: delays would be late
         ctypes.windll.winmm.timeBeginPeriod(1)
@@ -102,6 +108,7 @@ def main():
     next_stats = time.perf_counter() + 10
     lateness, lateness_all = [], []
     trace = open(args.trace, 'w', buffering=1) if args.trace else None
+    passes = open(args.passes, 'w') if args.passes else None
 
     def stats(final=False):
         for d in (to_a, to_b):
@@ -147,10 +154,15 @@ def main():
                         print(f'relay: to {d.name}: send failed: {e}', flush=True)
                     continue
                 d.sent += 1
-                for f in slippi_frames(data):
+                frames = slippi_frames(data)
+                for f in frames:
                     d.handed.setdefault(f, time.perf_counter())
+                if passes and frames:
+                    passes.write(f'D {d.name[-1]} {time.perf_counter():.6f} {max(frames)}\n')
             if now >= next_stats:
                 stats()
+                if passes:
+                    passes.flush()
                 next_stats = now + 10
             wait = max(0.0, min(queue[0][0] - now if queue else 0.05, 0.05))
             # select's timeout is coarse on Windows: spin out the last 2 ms
@@ -161,8 +173,11 @@ def main():
                 except OSError:  # an ICMP port unreachable from an earlier send
                     continue
                 d = by_sock[s]
-                for f in slippi_frames(data):
+                frames = slippi_frames(data)
+                for f in frames:
                     d.first.setdefault(f, time.perf_counter())
+                if passes and frames:  # (recorded before the loss: the player did send it)
+                    passes.write(f"S {'B' if d is to_a else 'A'} {time.perf_counter():.6f} {max(frames)}\n")
                 other = to_b if d is to_a else to_a  # an ack that comes this way answers pads sent that way
                 for f in slippi_frames(data, SLIPPI_PAD_ACK):
                     if f in other.handed:
@@ -181,6 +196,8 @@ def main():
         pass
     finally:
         stats(final=True)
+        if passes:
+            passes.close()
 
 
 if __name__ == '__main__':

@@ -7,6 +7,7 @@
 #include "so_json.h"
 #include "so_util.h"
 #include "string.h"
+#include "../../common/include/Metadata.h"	/* SLIPPWII_VERSION */
 
 int so_mm_build_ticket(char *out, int size, const SoConfig *config, const SoUser *user,
 	const SoSearch *search, const char *lan_address)
@@ -17,7 +18,17 @@ int so_mm_build_ticket(char *out, int size, const SoConfig *config, const SoUser
 	so_jw_init(&w, out, size);
 	so_jw_object_begin(&w);
 	so_jw_key(&w, "appVersion");
-	so_jw_string(&w, config->app_version);
+	if (config->client_name_mode == 2) {
+		char version[sizeof(config->app_version) + 24];
+		so_snprintf(version, sizeof(version), "%s+slippwii." SLIPPWII_VERSION, config->app_version);
+		so_jw_string(&w, version);
+	} else {
+		so_jw_string(&w, config->app_version);
+	}
+	if (config->client_name_mode == 1) {
+		so_jw_key(&w, "client");
+		so_jw_string(&w, "SlippWii/" SLIPPWII_VERSION);
+	}
 	so_jw_key(&w, "ipAddressLan");
 	so_jw_string(&w, lan_address);
 	so_jw_key(&w, "search");
@@ -65,11 +76,16 @@ static int open_reply(const char *text, u32 len, const char *type, SoJson *doc, 
 	return error[0] ? -2 : 0;
 }
 
-int so_mm_parse_ticket_reply(const char *text, u32 len, char *error, int error_size)
+int so_mm_parse_ticket_reply(const char *text, u32 len, char *error, int error_size, char *latest_version,
+	int latest_version_size)
 {
 	SoJson doc;
-	return open_reply(text, len, "create-ticket-resp", &doc, error, error_size,
+	int res = open_reply(text, len, "create-ticket-resp", &doc, error, error_size,
 		"Invalid response when joining mm queue");
+	latest_version[0] = '\0';
+	if (res == -2)
+		so_json_get_string(&doc, "latestVersion", latest_version, latest_version_size, "");
+	return res;
 }
 
 /* "a.b.c.d:port" -> the part before the colon. */

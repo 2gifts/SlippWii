@@ -57,6 +57,7 @@ struct ipcmessage DI_CallbackMsg;
 u32 DI_MessageQueue = 0xFFFFFFFF;
 static u8 *DI_MessageHeap = NULL;
 bool DI_IRQ = false;
+static u32 di_started;	// Slippi Online: when the command in progress was taken (HW_TIMER)
 u32 DI_Thread = 0;
 s32 DI_Handle = -1;
 u64 ISOShift64 = 0;
@@ -351,6 +352,12 @@ void DIInterrupt()
 			//dbgprintf("Disc Interrupt\r\n");
 		}
 	}
+	// Slippi Online: Melee's disc library gives a command 10 s, then masks the disc's interrupt for
+	// good (its AlarmHandlerForTimeout): the next file never loads. A command that took a good part
+	// of that is worth a line.
+	if (DI_IRQ == true && TimerDiffTicks(di_started) > 1898437 / 2)
+		so_log("di: a command took %u ms (command %08x, %u bytes)", (unsigned)(TimerDiffTicks(di_started) / 1898),
+			(unsigned)read32(DI_CMD_0), (unsigned)read32(DI_CMD_0 + 8));
 	DI_IRQ = false;
 }
 
@@ -807,7 +814,10 @@ void DIUpdateRegisters( void )
 		if( DIOK )
 		{
 			if( DIOK == 2 )
+			{
 				DI_IRQ = true;
+				di_started = read32(HW_TIMER);	// Slippi Online: a command that takes long is logged (DIInterrupt)
+			}
 			else
 				write32(DI_CONTROL, 0);
 		}
@@ -916,6 +926,17 @@ u32 DIReadThread(void *arg)
 		}
 	}
 	return 0;
+}
+
+/* (diagnostics, so_diag.c: where a disc read stands, for a game that waits on one for good) */
+void DIDiag(void)
+{
+	u32 elapsed, left = ReadSpeed_Left(&elapsed);
+	sync_before_read((void *)DI_BASE, 0x40);
+	so_log("di: irq %d, async result %d, control %08x status %08x command %08x %08x %08x; paced wait %u ticks, %u gone",
+		(int)DI_IRQ, (int)DI_CallbackMsg.result, (unsigned)read32(DI_CONTROL), (unsigned)read32(DI_STATUS),
+		(unsigned)read32(DI_CMD_0), (unsigned)read32(DI_CMD_0 + 4), (unsigned)read32(DI_CMD_0 + 8),
+		(unsigned)left, (unsigned)elapsed);
 }
 
 void DIFinishAsync()

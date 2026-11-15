@@ -273,6 +273,13 @@ static u32 pf_thread(void *arg)
 	return 0;
 }
 
+void so_pf_diag(void)
+{
+	so_log("prefetch: state %d, %u files, %u KB of the region, wants %u planned %u, missed until %d ms from now",
+		(int)pf.state, (unsigned)pf.n, (unsigned)(pf.used >> 10), (unsigned)pf.wants, (unsigned)pf.planned,
+		(int)(pf.miss_until_ms - so_time_ms()));
+}
+
 void so_pf_init(void)
 {
 	static int started;

@@ -8,7 +8,8 @@ files to the game. On a Wii, SlippWii does the same from the SD card:
                               the music; on a Wii the game does, as normal)
     /slippwii/files/<name>    Slippi's menu files: the files Slippi Dolphin
                               ships, and its patches applied to your disc's
-                              menus
+                              menus; with SlippWii's own few changes to
+                              them (tools/menu_edits.py)
 
 Both come from the Slippi Dolphin release PC players run (pinned below,
 downloaded from Project Slippi's GitHub and checked by SHA-256), so the Wii
@@ -39,6 +40,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from vcdiff import decode  # noqa: E402
+import menu_edits  # noqa: E402
 
 # Downloads are kept in build/slippi-release.
 CACHE = HERE.parent / 'build/slippi-release'
@@ -325,6 +327,9 @@ def make_files(disc, root, log=print):
         (files_out / name).write_bytes(data)
         made += 1
     log(f'  {made} menu files')
+    # SlippWii's own changes to them, as its loader makes on a Wii (the Online Play menu's Exit)
+    changed = menu_edits.apply(files_out)
+    log(f"  SlippWii's changes to them (tools/menu_edits.py): {changed} places")
     return out
 
 

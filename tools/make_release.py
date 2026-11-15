@@ -42,6 +42,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import slippi_files  # noqa: E402
+import menu_edits  # noqa: E402
 import sign_update  # noqa: E402
 
 APP = ROOT / 'dist/sd/apps/SlippWii'
@@ -164,6 +165,9 @@ def main():
     meta = meta.replace('<release_date></release_date>',
                         f'<release_date>{datetime.date.today():%Y%m%d}000000</release_date>')
 
+    if menu_edits.HEADER.read_text() != menu_edits.header_text():
+        sys.exit(f'{menu_edits.HEADER} is not what tools/menu_edits.py writes: run it and build again')
+
     # Slippi's files, and what the patched ones must come out as.
     ini = slippi_files.fetch(slippi_files.CODESET[0], slippi_files.CODESET[1],
                              slippi_files.CACHE / 'GALE01r2-stable.ini', slippi_files.STABLE_RAW).decode('utf-8')
@@ -178,6 +182,11 @@ def main():
         if name.endswith('.diff'):
             target = name[:-5]
             made = slippi_files.decode(disc.file(target), data)
+            # (the loader changes a few places of these afterwards, tools/menu_edits.py: each only if it
+            # holds what Slippi's file has there today. The manifest is of Slippi's files, before that.)
+            for edit_name, offset, length, old_crc, _, what, _ in menu_edits.edits():
+                if edit_name == target and zlib.crc32(made[offset:offset + length]) != old_crc:
+                    sys.exit(f"{target}: Slippi's file is not what tools/menu_edits.py expects at its {what}")
             manifest.append(f'patch files/{target} {len(made)} {zlib.crc32(made):08x}')
             shipped[f'slippwii/patches/{name}'] = data
         else:

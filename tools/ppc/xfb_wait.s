@@ -22,6 +22,15 @@
 # never taken. (Slippi's "Normal Lag Reduction" skips this wait; SlippWii drops
 # it, so_files.c, as on a console it tears.)
 #
+# r29 never being -1 also leaves the visual buffer fix of Slippi's codes ("Polling
+# Drift Fix + VB" [tauKhan]: its instruction at 0x80376200 sets a flag for a frame
+# that waited, and the game's loop then leaves one frame undrawn) without its
+# trigger. That is on purpose. Online the flag is the rollback engine's
+# (direct_track sets it itself). Offline it keeps SlippWii's timing that of Slippi
+# Nintendont's default, the polling drift fix alone: 33.4 ms from the reading to
+# the retrace on the main menu, against 41.7 for Melee's own (with the flag live
+# it would be 16.7, faster than the console players know; measured 2026-11-12).
+#
 # Gecko C2 in place of the bl at 0x803761F8: r3-r12, r0 and lr are free, as
 # they are across that call.
 

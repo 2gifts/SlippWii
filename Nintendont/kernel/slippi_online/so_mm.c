@@ -87,6 +87,7 @@ int so_mm_start(const SoConfig *config, const SoUser *user, const SoSearch *sear
 	so_mm_stop();
 	memset(&mm.result, 0, sizeof(mm.result));
 	mm.error[0] = '\0';
+	mm.latest_version[0] = '\0';
 	mm.port = port;
 
 	bind_address.host = ENET_HOST_ANY;
@@ -139,7 +140,10 @@ static void on_message(const char *text, u32 len)
 {
 	char error[128];
 	if (mm.state == SO_MM_JOINING) {
-		if (so_mm_parse_ticket_reply(text, len, error, sizeof(error)) < 0) {
+		if (so_mm_parse_ticket_reply(text, len, error, sizeof(error), mm.latest_version,
+				sizeof(mm.latest_version)) < 0) {
+			if (mm.latest_version[0])
+				so_log("mm: server's latest version is %s", mm.latest_version);
 			fail(error);
 			return;
 		}
@@ -249,6 +253,11 @@ SoMmState so_mm_state(void)
 const char *so_mm_error(void)
 {
 	return mmp ? mm.error : "Failed to create mm client";
+}
+
+const char *so_mm_latest_version(void)
+{
+	return mmp ? mm.latest_version : "";
 }
 
 const SoMatchResult *so_mm_result(void)

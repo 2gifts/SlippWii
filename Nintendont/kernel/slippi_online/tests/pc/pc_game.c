@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "so_client.h"
+#include "so_diag.h"
 #include "so_exi.h"
 #include "so_platform.h"
 #include "so_selftest.h"
@@ -138,6 +139,18 @@ static int online_status(void)
 	so_game_string(so_client_user()->display_name, 15, want);
 	CHECK(osb[0] == 1, "0xB9: not logged in (%u)", osb[0]);
 	CHECK(memcmp(osb + 1, want, 31) == 0, "0xB9: display name");
+	/* The Online Play menu's Exit (Slippi's log-out command, 0xB7) and Update
+	 * (0xB8) send the game back to the Homebrew Channel: the word the PPC
+	 * reads at each retrace. Log-in (0xB6) does not. */
+	so_set_ppc_word(SO_TEST_EXIT_WORD, 0);
+	simple(0xB6, NULL, 0);
+	CHECK(so_ppc_word(SO_TEST_EXIT_WORD) == 0, "0xB6: the exit word is %08x", (unsigned)so_ppc_word(SO_TEST_EXIT_WORD));
+	simple(0xB7, NULL, 0);
+	CHECK(so_ppc_word(SO_TEST_EXIT_WORD) == SO_TEST_EXIT, "0xB7: the exit word is %08x", (unsigned)so_ppc_word(SO_TEST_EXIT_WORD));
+	so_set_ppc_word(SO_TEST_EXIT_WORD, 0);
+	simple(0xB8, NULL, 0);
+	CHECK(so_ppc_word(SO_TEST_EXIT_WORD) == SO_TEST_EXIT, "0xB8: the exit word is %08x", (unsigned)so_ppc_word(SO_TEST_EXIT_WORD));
+	so_set_ppc_word(SO_TEST_EXIT_WORD, 0);
 	/* The CSS's delay buttons (tools/css_delay/, 0xDC): read, +, - */
 	step[0] = 0xDC;
 	step[1] = 0;

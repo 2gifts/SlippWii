@@ -21,7 +21,7 @@ with and help improve the project.
 | **Rollback netcode** | Since 1.4.0. The Wii predicts and rolls back the way Slippi Dolphin does, running Slippi's own rollback code. In automated games against Slippi Dolphin through simulated connections, every frame matched the PC's replay. |
 | **Direct** (connect codes) | Works. Tested for many hours against Slippi Dolphin on PC, including automated runs of 75 games whose replays matched frame for frame on both sides. |
 | **Unranked** | Should work (same code path as Direct) but has had little testing. |
-| **Teams** | Untested. |
+| **Teams**, **Party** | Work: four players, as on Slippi Dolphin (Teams by a shared lobby code, Party by its queue). In automated lobbies against three copies of Slippi Dolphin every replay matched, a player leaving in the middle of a game included. With more than one opponent the Wii does not roll back (four characters are more than it can run again each frame): its game waits for every input, and takes more **input delay** the higher the lobby's ping, 2 frames on a very good connection, up to 6. Its opponents play as against anyone. |
 | **Ranked** | **Not available.** Ranked is Slippi's protected competitive mode, so SlippWii leaves it out: it isn't in the Online Play menu. |
 | Input delay | Set on the Wii: the **Delay Frames** − / + buttons on the online character select screen. You can change it while connected to your opponent: it applies from the next game. |
 | Rumble | On or off for online play: the **Rumble** switch on the online character select screen (remembered). |
@@ -47,7 +47,8 @@ longer freezes the game, and to your opponent the Wii plays like another PC.
 
 - A **Wii** with the [Homebrew Channel](https://wii.hacks.guide/). (Wii U's vWii is untested.)
 - A **USB LAN adapter**: a wired connection to your router. **Wi-Fi is not supported**: the Wii's
-  Wi-Fi is far too slow for online play. Set it up once in *Wii Settings > Internet*.
+  Wi-Fi is far too slow for online play, and SlippWii will not search for an opponent on it. Set
+  the wired connection up once in *Wii Settings > Internet*.
 - The Wii's **SD card** and a computer to copy files to it.
 - Your **Melee disc image**: NTSC 1.02 (`GALE01`, revision 2), the same `.iso` Slippi uses (`.ciso`,
   an extracted game or a real disc work too).
@@ -128,6 +129,8 @@ post your SD card's files online.
 
    (Melee's own *Options > Rumble* can't do this online: online, your character can be in another
    port than your controller, and Slippi sends its rumble to your controller.)
+5. When you are done, pick **Exit** at the bottom of the **Online Play** menu and answer **Yes**:
+   the Wii goes back to the Homebrew Channel. You don't have to turn the console off to leave.
 
 To change Nintendont's own settings, press **B** on the game list (**L**/**R** change pages). They
 are saved when you leave the settings or start a game.
@@ -176,9 +179,16 @@ SlippWii checks everything before Melee starts and explains any problem on the T
 - **Can't connect / stuck searching:** check the LAN adapter's connection test in Wii Settings,
   and that the opponent typed your connect code exactly. Direct needs both players searching for each
   other.
+- **"Online needs a wired LAN adapter (no Wi-Fi)":** the connection the Wii is set to use is a
+  wireless one. In *Wii Settings > Internet > Connection Settings*, pick the wired connection (or
+  set one up) and choose *Use this connection*.
+- **The online modes are locked, and only "Update" can be picked:** Slippi has moved to a version
+  this SlippWii does not speak yet, and Slippi's server no longer takes the old one. Update
+  SlippWii (**Check for Updates**, see *Updating*); if it says there is nothing newer, the SlippWii
+  for the new Slippi version is not out yet.
 - **Black screen after starting SlippWii:** power the Wii off fully (hold the power button), turn it
   on again and start SlippWii from the Homebrew Channel.
-- **Stutters during games:** use the wired adapter (not Wi-Fi) and play opponents in your region:
+- **Stutters during games:** play opponents in your region:
   *Show Ping* shows your ping in a game, and from about 90 ms the Wii has little room left. If it
   stutters at a low ping, send us a log (see *Reporting problems*).
 - **Worse than SlippWii 1.3 was for you?** Tell us, with a log. Until it is fixed you can add the
@@ -219,7 +229,8 @@ with a network client (matchmaking, ENet peer connection) and the same online co
 
 Rollback needs savestates, which Dolphin makes from outside the game. A Wii has no outside, so a
 small engine inside Melee makes them on the Wii's own CPU: it tracks what the game writes each frame
-and copies only that. See [`docs/ROLLBACK.md`](docs/ROLLBACK.md).
+and copies only that. See [`docs/ROLLBACK.md`](docs/ROLLBACK.md). Teams and Party, where the Wii
+waits for inputs instead: [`docs/FOUR_PLAYERS.md`](docs/FOUR_PLAYERS.md).
 
 Building from source: [`docs/BUILDING.md`](docs/BUILDING.md).
 

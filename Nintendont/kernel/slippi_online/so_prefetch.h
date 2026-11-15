@@ -28,6 +28,7 @@ void so_pf_close(void);
 void so_pf_open(void);
 /* A player's pick (who: 0 this console, 1 the opponent) and a stage */
 void so_pf_want_char(int who, u8 character, u8 color);
+void so_pf_diag(void);
 void so_pf_want_stage(u16 stage);
 /* ISO.c, with the FatFS lock held: the bytes at disc offset `offset` when
  * they are all here, else NULL (a miss also holds the thread back a bit,

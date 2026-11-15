@@ -10,7 +10,9 @@ Nintendont installs in Melee for Slippi Online (kernel/Patch.c).
      "- N +" under Slippi's User and Connect Code, buttons for the hand
      cursor (tools/css_delay/, EXI command 0xDC; Slippi Dolphin has it in its
      settings window, a console has none).
-  2c. No Ranked: the Online Play menu does not show it (tools/ppc/hide_ranked.s).
+  2c. The Online Play menu's options: no Ranked, and Exit, which goes back to the Homebrew
+     Channel (tools/ppc/online_menu.s; leaving: tools/ppc/exit.s, at every retrace, on the
+     kernel's word).
   2d. The ping in an online game's top left corner, as Slippi Dolphin shows it
      (tools/ping_display/, EXI command 0xEF; the online CSS has its switch).
   2e. A text format's "%s" never reads a wild address, as Slippi's ledge grab limit
@@ -30,8 +32,8 @@ Nintendont installs in Melee for Slippi Online (kernel/Patch.c).
      build since 1.4.0; --no-rollback leaves it out (tests, and --perf).
   4e. With --latency (diagnostics): how long a button press takes from the controller's
      reading to the screen (tools/latency_probe, EXI 0xDA kind 5, logged as LAT).
-  4d. With --test-exit (automated tests): back to the Homebrew Channel when
-     the PC asks (tools/ppc/test_exit.s, kernel test_control).
+  4d. With --test-exit (automated tests): tools/ppc/exit.s also counts retraces and can
+     hang on the kernel's word (kernel test_control, test_hang_frame).
   5. With --autoplay FILE (automated sweeps only, tools/sweep): the autoplay
      code tools/sweep/build_autoplay.py made, which plays port 1 by itself.
 
@@ -56,7 +58,13 @@ GCT_FOOTER = bytes.fromhex('F000000000000000')
 HEARTBEAT_HOOK_ADDRESS = 0x8034E964
 CRASH_HOOK = 0x80345870  # __OSUnhandledException entry (NTSC 1.02)
 PERF_HOOK = 0x8037E328  # HSD_PerfSetTotalTime entry (mflr r0)
-TEST_EXIT_HOOK = 0x8034E968  # __VIRetraceHandler + 4 (lis r3, 0xCC00)
+EXIT_HOOK = 0x8034E968  # __VIRetraceHandler + 4 (lis r3, 0xCC00)
+# The disc library's AlarmHandlerForTimeout (dvdlow.c): 10 s after a command that has not ended it masks
+# the disc's interrupt and reports a dead drive, and nothing unmasks it again, so the next file never
+# loads: a game frozen at its first loading screen after. The drive here is the kernel reading a card,
+# which never dies but can be kept waiting (seconds a read, with four players' network traffic and a
+# replay stream on top: 2026-11-14). With the handler a plain return the command just ends late.
+DVD_TIMEOUT_HANDLER = 0x80336E98
 ROLLBACK_HOOK = 0x8037E214  # HSD_PerfSetStartTime entry (mflr r0)
 HEAPS_RESET_HOOK = 0x80015900  # lbHeap_80015900 entry (mflr r0): a scene's heaps are about to go
 SYNC_LOADS_HOOK = 0x8001656C  # lbFile_800164A4 after its bl HSD_DevComRequest (lmw r24, 96(r1))
@@ -64,7 +72,7 @@ TRACE_HOOKS = ((HEARTBEAT_HOOK_ADDRESS, 0), (0x803761C0, 1), (0x803762C4, 2), (0
 #   HSD_VICopyXFBAsync, HSD_VIDrawDoneXFB, __AXOutAiCallback: entries (mflr r0), for --rollback-trace
 GX_COPY_DST_HOOK = 0x8033D5CC  # GXSetTexCopyDst entry (mflr r0)
 GX_COPY_TEX_HOOK = 0x8033DCBC  # GXCopyTex entry (clrlwi. r0, r4, 24)
-HIDE_RANKED_HOOK = 0x80229938  # MainMenu_CheckIfOptionIsUnlocked entry (mflr r0)
+ONLINE_MENU_HOOK = 0x80229938  # MainMenu_CheckIfOptionIsUnlocked entry (mflr r0)
 LATENCY_COPY_HOOK = 0x803762A8  # HSD_VICopyXFBAsync, the frame copied (stw r29, 5604(r30))
 LATENCY_PAD_HOOK = 0x8034DD94  # PADRead's end (mr r3, r20)
 LATENCY_RETRACE_HOOK = 0x803759E4  # HSD_VIPreRetraceCB entry (mflr r0)
@@ -103,6 +111,11 @@ def c2(address, code):
     return struct.pack('>II', 0xC2000000 | (address & 0x01FFFFFF), len(body) // 8) + body
 
 
+def poke(address, word):
+    """A Gecko 04 (32-bit write) code."""
+    return struct.pack('>II', 0x04000000 | (address & 0x01FFFFFF), word)
+
+
 def main():
     boot = BOOTLOADER.read_bytes()
     if boot[:8] != GCT_HEADER or boot[-8:] != GCT_FOOTER:
@@ -112,6 +125,9 @@ def main():
     ap.add_argument('--heartbeat', action='store_true', help='add the diagnostics heartbeat')
     ap.add_argument('--flight', action='store_true', help='add the interrupt flight recorder (slows the game)')
     ap.add_argument('--stall', action='store_true', help='add the game-loop stall profiler (not with --heartbeat)')
+    ap.add_argument('--stall-all', action='store_true',
+                    help='with --stall: in every scene, from 90 retraces without a logic frame (a game that '
+                         'stops in a menu or a load)')
     ap.add_argument('--autoplay', help='append this autoplay C2 code (tools/sweep; test builds only)')
     ap.add_argument('--perf', action='store_true', help='add the frame time and copy speed probe (tools/perf_probe)')
     ap.add_argument('--rollback', action='store_true',
@@ -146,7 +162,13 @@ def main():
                     help="tests: no ping in the game's corner (room for the latency probe beside the autoplay and "
                          "the player's engine)")
     ap.add_argument('--test-exit', action='store_true',
-                    help='tests: back to the Homebrew Channel when the PC asks (tools/ppc/test_exit.s)')
+                    help="tests: tools/ppc/exit.s also counts retraces and can hang on the kernel's word")
+    ap.add_argument('--show-ranked', action='store_true',
+                    help='tests: the Online Play menu shows Ranked (the list with six options; the kernel '
+                         'still refuses a Ranked search)')
+    ap.add_argument('--no-xfb-wait', action='store_true',
+                    help="tests: HSD's frame buffer wait as the game has it (without tools/ppc/xfb_wait.s), so the "
+                         "visual buffer fix of Slippi's codes sets its own flag: offline timing only")
     args = ap.parse_args()
     args.rollback = not args.no_rollback
     if args.perf and args.rollback:
@@ -160,8 +182,11 @@ def main():
     if not args.no_delay_buttons:
         css_delay, _ = pic_code.build(ROOT / 'tools/css_delay/glue.s', [ROOT / 'tools/css_delay/css_delay.c'])
         reporter += c2(CSS_DELAY_HOOK, bytes(css_delay))
-    reporter += c2(HIDE_RANKED_HOOK, assemble(ROOT / 'tools/ppc/hide_ranked.s'))
-    reporter += c2(XFB_WAIT_HOOK, assemble(ROOT / 'tools/ppc/xfb_wait.s'))
+    reporter += c2(ONLINE_MENU_HOOK, assemble(ROOT / 'tools/ppc/online_menu.s', SHOW_RANKED=int(args.show_ranked)))
+    reporter += c2(EXIT_HOOK, assemble(ROOT / 'tools/ppc/exit.s', TEST=int(args.test_exit)))
+    reporter += poke(DVD_TIMEOUT_HANDLER, 0x4E800020)  # blr
+    if not args.no_xfb_wait:
+        reporter += c2(XFB_WAIT_HOOK, assemble(ROOT / 'tools/ppc/xfb_wait.s'))
     if not args.no_ping_display:
         ping_display, _ = pic_code.build(ROOT / 'tools/ping_display/glue.s', [ROOT / 'tools/ping_display/ping_display.c'])
         reporter += c2(PING_DISPLAY_HOOK, bytes(ping_display))
@@ -173,7 +198,7 @@ def main():
         extra += c2(HEARTBEAT_HOOK, assemble(ROOT / 'tools/ppc/heartbeat.s'))
         extra += c2(ARCHIVE_PROBE_HOOK, assemble(ROOT / 'tools/ppc/probe_archive.s'))
     if args.stall:
-        extra += c2(HEARTBEAT_HOOK, assemble(ROOT / 'tools/ppc/stall.s'))
+        extra += c2(HEARTBEAT_HOOK, assemble(ROOT / 'tools/ppc/stall.s', ALL_SCENES=int(args.stall_all)))
     if args.perf:
         probe, _ = pic_code.build(ROOT / 'tools/perf_probe/glue.s', [ROOT / 'tools/perf_probe/perf_probe.c'])
         extra += c2(PERF_HOOK, bytes(probe))
@@ -207,8 +232,6 @@ def main():
         extra += c2(LATENCY_COPY_HOOK, bytes(probe))
         extra += c2(LATENCY_PAD_HOOK, assemble(ROOT / 'tools/latency_probe/pad_hook.s'))
         extra += c2(LATENCY_RETRACE_HOOK, assemble(ROOT / 'tools/latency_probe/retrace_hook.s'))
-    if args.test_exit:
-        extra += c2(TEST_EXIT_HOOK, assemble(ROOT / 'tools/ppc/test_exit.s'))
     if args.autoplay:
         extra += Path(args.autoplay).read_bytes()
     if args.flight:

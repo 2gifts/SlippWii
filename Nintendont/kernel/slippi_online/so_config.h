@@ -17,9 +17,24 @@
 #define SO_TEST_USER_PATH "/slippwii/test-user.json"	/* the dummy test account */
 #define SO_CONFIG_PATH "/slippwii/config.ini"
 
-/* The netplay version Slippi Dolphin (Ishiiruka) reports; the server only
- * pairs compatible versions. */
+/* The Slippi Dolphin version this build speaks (its netplay and its
+ * matchmaking), which it reports to the matchmaking server. Slippi's server
+ * turns away versions it no longer supports, and that is how a SlippWii
+ * that Slippi has moved on from stops queueing: so against Slippi's server
+ * this is the version, whatever config.ini says (so_config_finish), and it
+ * changes only with a release checked against that Slippi version. */
 #define SO_APP_VERSION_DEFAULT "3.6.4"
+/* The file the newest version Slippi's server has named is kept in
+ * (so_client.c): with one over SO_APP_VERSION_DEFAULT the game's online
+ * modes are locked ("update required"), as Slippi Dolphin locks its own. */
+#define SO_LATEST_VERSION_PATH "/slippwii/slippi-version.txt"
+/* How SlippWii names itself to matchmaking. Slippi's protocol has no field
+ * for a client's name (3.6.4's create-ticket; the development source's
+ * "join", 2026-11): where one goes is the Slippi team's to say, so none is
+ * sent (0) until they do. 1: a "client" key in create-ticket
+ * ("SlippWii/1.5.1"); 2: after the version, as semver build metadata
+ * ("3.6.4+slippwii.1.5.1"). */
+#define SO_CLIENT_NAME_MODE 0
 #define SO_MM_HOST_DEFAULT "mm.slippi.gg"
 #define SO_MM_PORT_DEFAULT 43113
 
@@ -37,6 +52,7 @@ typedef struct {
 	u16 mm_port;
 	u16 local_port;	/* 0: random in 41000-50999, as Dolphin picks */
 	char app_version[24];
+	u8 client_name_mode;	/* SO_CLIENT_NAME_MODE; tests set it (test_client_name) */
 	u8 delay;	/* online input delay in frames, 1-9 (Slippi's default 2) */
 	u32 lan_ip;	/* forced ipAddressLan; 0: this console's address */
 	u32 log_host;	/* send log lines to this PC over UDP; 0: off */
@@ -124,6 +140,8 @@ typedef struct {
 	/* tests: the game sees the opponent's inputs only this many frames
 	 * late, so rollback predicts (and rolls back) every frame */
 	u8 test_lag_frames;
+	u8 multi_delay_room_ms;	/* more than one opponent: the delay's room past the one-way time (so_exi.c, lobby_delay) */
+	u8 test_multi_rollback;	/* tests: roll back against more than one opponent too (so_exi.c, rollback_wanted) */
 	/* tests: every 5 s, the opponent's inputs held back this long, as in a
 	 * lag spike: the game predicts to the rollback limit, waits there, then
 	 * rolls back the most it can */
@@ -132,7 +150,7 @@ typedef struct {
 	/* tests: at this frame the sender thread sticks, as a sendto that never
 	 * returns has been seen to; the spare must carry the game on */
 	u16 test_stuck_frame;
-	u16 test_hang_frame;	/* tests: at this frame the PowerPC hangs (test_exit.s) */
+	u16 test_hang_frame;	/* tests: at this frame the PowerPC hangs (exit.s) */
 	u8 test_logfile_dump;	/* tests: at the online CSS, the newest file of the log's folder on the card is read back and its
 				 * first lines go to the PC's log: what a boot before wrote is really there (so_exi.c, logfile_dump) */
 	u16 test_crash_frame;	/* tests: at this frame the kernel does what it does with a crash report, the game
@@ -161,6 +179,11 @@ typedef struct {
 	 * port) to send the console back to the Homebrew Channel, and a crash
 	 * goes back there by itself (so_diag.h) */
 	u8 test_control;
+	u8 test_wifi;	/* tests: the console counts as on Wi-Fi (so_client.c, on_wifi) */
+	/* tests: the version a test server named in an earlier run is read at
+	 * start-up, as a console reads Slippi's (otherwise a test's leftover would
+	 * lock every later test out of online) */
+	u8 test_latest_keep;
 } SoConfig;
 
 void so_config_defaults(SoConfig *config);
@@ -178,5 +201,10 @@ int so_config_load(SoConfig *config, SoUser *user);
 
 /* True when the matchmaking host is Slippi's real server. */
 int so_config_is_real_mm(const SoConfig *config);
+
+/* After the settings are read: what no file may change against Slippi's
+ * server (the version reported and the client's name) is as compiled.
+ * Returns 1 when a setting was put back. */
+int so_config_finish(SoConfig *config);
 
 #endif

@@ -1,7 +1,8 @@
 """Runs the loader's SlippWii start-up (Nintendont/loader/source/slippwii.c)
 on a PC, against the release zip's files on fake SD/USB folders: every disc
 format, games on SD or USB, missing or broken accounts, a wrong disc,
-incomplete files and the second start. The loader's libogc/FatFS/screen
+incomplete files and the second start; and SlippWii's own changes to the
+files it has made (tools/menu_edits.py): made once, and only to Slippi's bytes. The loader's libogc/FatFS/screen
 calls are stand-ins (Nintendont/loader/tests/host/); the screen is printed.
 
     python tools/test_loader_slippwii.py --iso Melee.iso --zip dist/SlippWii-vX.Y.Z.zip [--cc gcc] [-v]
@@ -20,6 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import slippi_files  # noqa: E402
+import menu_edits  # noqa: E402
 
 LOADER = ROOT / 'Nintendont/loader'
 ACCOUNT = b'{"uid":"dummy-uid","playKey":"dummy-key","connectCode":"TEST#001","displayName":"Test Wii"}'
@@ -40,13 +42,33 @@ def manifest(root):
 
 
 def check_files(root, entries):
+    """Every file is what the manifest says, but for SlippWii's own changes (tools/menu_edits.py),
+    which must all be there: those places are put back to Slippi's bytes for the comparison."""
     for _, path, size, crc in entries:
         f = root / 'slippwii' / path
         if not f.exists():
             raise Fail(f'{f} is missing')
-        data = f.read_bytes()
+        data = bytearray(f.read_bytes())
+        for name, offset, length, old_crc, new_crc, what, new in menu_edits.edits():
+            if name == f.name:
+                if bytes(data[offset:offset + length]) != new:
+                    raise Fail(f"{f}: SlippWii's {what} is not in it")
+                data[offset:offset + length] = SLIPPI_BYTES[name, offset]
         if len(data) != size or zlib.crc32(data) != crc:
             raise Fail(f'{f} is wrong ({len(data)} bytes, {zlib.crc32(data):08x})')
+
+
+SLIPPI_BYTES = {}   # (file, offset) -> what Slippi's file has where SlippWii changes it
+
+
+def read_slippi_bytes(iso, release_zip):
+    disc = slippi_files.open_disc(iso)
+    z = zipfile.ZipFile(release_zip)
+    for name, offset, length, old_crc, _, what, _ in menu_edits.edits():
+        made = slippi_files.decode(disc.file(name), z.read(f'slippwii/patches/{name}.diff'))
+        SLIPPI_BYTES[name, offset] = made[offset:offset + length]
+        if zlib.crc32(SLIPPI_BYTES[name, offset]) != old_crc:
+            sys.exit(f"{name}: Slippi's file is not what tools/menu_edits.py expects at its {what}")
 
 
 def link_or_copy(src, dst):
@@ -100,6 +122,7 @@ def main():
     ap.add_argument('-v', action='store_true', help='print every screen')
     args = ap.parse_args()
     iso = Path(args.iso).resolve()
+    read_slippi_bytes(iso, args.zip)
     failures = 0
     with tempfile.TemporaryDirectory(dir=iso.parent) as tmp:   # same drive: hard links to the ISO
         tmp = Path(tmp)
@@ -156,11 +179,36 @@ def main():
             expect((sd / 'slippwii/ready.txt').exists(), 'no ready.txt')
             code, out = run('/games/melee.iso', sd)
             expect(code == 0 and READY_TEXT not in out and 'network=1' in out, 'the second start did the work again', out)
+            check_files(sd, manifest(sd))
             (sd / 'slippwii/files/MnMaAll.usd').unlink()
             code, out = run('/games/melee.iso', sd)
             expect(READY_TEXT in out, 'a deleted file was not made again', out)
             check_files(sd, manifest(sd))
-        case('ISO on the SD card: files made and checked; second start skips; a deleted file is made again', iso_on_sd)
+        case("ISO on the SD card: files made and checked, with SlippWii's changes; second start skips; "
+             "a deleted file is made again", iso_on_sd)
+
+        def edits_only_to_slippis_bytes():
+            # a place that holds something else (a file someone changed) is left as it is; Slippi's
+            # own bytes, put back by hand, are changed again at the next start
+            sd = card('edits')
+            link_or_copy(iso, sd / 'games/melee.iso')
+            code, out = run('/games/melee.iso', sd)
+            expect(code == 0, 'failed', out)
+            edits = menu_edits.edits()
+            name, offset, length = edits[0][:3]              # MnMaAll.usd, the option's name
+            name2, offset2, length2 = edits[3][:3]           # SdMenu.dat, a line under the menu
+            f, f2 = sd / 'slippwii/files' / name, sd / 'slippwii/files' / name2
+            data, data2 = bytearray(f.read_bytes()), bytearray(f2.read_bytes())
+            other = bytes((b ^ 0x5A) for b in data[offset:offset + length])
+            data[offset:offset + length] = other
+            data2[offset2:offset2 + length2] = SLIPPI_BYTES[name2, offset2]
+            f.write_bytes(data)
+            f2.write_bytes(data2)
+            code, out = run('/games/melee.iso', sd)
+            expect(code == 0 and READY_TEXT not in out, 'the files were made again', out)
+            expect(f.read_bytes()[offset:offset + length] == other, f"{name}: a place that was not Slippi's was changed")
+            expect(f2.read_bytes()[offset2:offset2 + length2] == edits[3][6], f"{name2}: Slippi's bytes were left")
+        case("SlippWii's changes to the menu files: only where Slippi's bytes are", edits_only_to_slippis_bytes)
 
         def no_account(answer):
             def t():

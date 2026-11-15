@@ -417,6 +417,10 @@ int _main( int argc, char *argv[] )
 	// Slippi Online starts here, after DIinit(): that clears the Triforce DIMM
 	// region (0x12B80000-0x12E80000), which SlipMem and slippi_online's heap
 	// reuse. Starting during NETWORK_INIT lost the heap (M2 hardware runs).
+	// (first, the word that sends the game back to the Homebrew Channel, so_diag.h:
+	// this memory outlives a restart, and the last session may have ended by it)
+	write32(SO_TEST_EXIT_WORD, 0);
+	sync_after_write((void*)SO_TEST_EXIT_WORD, 4);
 	if (UseNetwork == 1)
 		so_client_init();
 

@@ -57,6 +57,11 @@ int so_client_set_rumble(int on);
  * config.ini). Returns the setting. */
 int so_client_set_ping_display(int on);
 const SoUser *so_client_user(void);
+/* 1 when Slippi's server has named a version newer than the one this build
+ * speaks (SO_APP_VERSION_DEFAULT): the game locks its online modes ("update
+ * required", EXI 0xB9), as Slippi Dolphin does, and no search goes out until
+ * a SlippWii for that version is installed. */
+int so_client_outdated(void);
 
 /* Starts matchmaking; any previous search or match ends first. */
 void so_client_find_match(const SoSearch *search);

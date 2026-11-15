@@ -15,9 +15,12 @@
 #include "string.h"
 #include "host_platform.h"
 #include "test.h"
+#include "../../../common/include/Metadata.h"	/* SLIPPWII_VERSION */
 
 int test_failures;
 int test_checks;
+
+void test_mq(void);	/* test_mq.c */
 
 /* ---- so_util ------------------------------------------------------------- */
 
@@ -558,12 +561,87 @@ static void test_mm_ticket(void)
 		static const char ok[] = "{\"type\":\"create-ticket-resp\"}";
 		static const char refused[] = "{\"type\":\"create-ticket-resp\",\"error\":\"Nope\"}";
 		static const char other[] = "{\"type\":\"other\"}";
-		CHECK_INT(so_mm_parse_ticket_reply(ok, strlen(ok), err, sizeof(err)), 0);
-		CHECK(so_mm_parse_ticket_reply(refused, strlen(refused), err, sizeof(err)) < 0);
+		static const char outdated[] = "{\"type\":\"create-ticket-resp\",\"error\":\"Please update\","
+			"\"latestVersion\":\"3.6.5\"}";
+		char latest[24];
+		CHECK_INT(so_mm_parse_ticket_reply(ok, strlen(ok), err, sizeof(err), latest, sizeof(latest)), 0);
+		CHECK_STR(latest, "");
+		CHECK(so_mm_parse_ticket_reply(refused, strlen(refused), err, sizeof(err), latest, sizeof(latest)) < 0);
 		CHECK_STR(err, "Nope");
-		CHECK(so_mm_parse_ticket_reply(other, strlen(other), err, sizeof(err)) < 0);
+		CHECK_STR(latest, "");
+		/* a version the server no longer takes: its error, and the version it names */
+		CHECK(so_mm_parse_ticket_reply(outdated, strlen(outdated), err, sizeof(err), latest, sizeof(latest)) < 0);
+		CHECK_STR(err, "Please update");
+		CHECK_STR(latest, "3.6.5");
+		CHECK(so_mm_parse_ticket_reply(other, strlen(other), err, sizeof(err), latest, sizeof(latest)) < 0);
+		CHECK_STR(latest, "");
 	}
 	CHECK_STR(err, "Invalid response when joining mm queue");
+
+	/* The client's name (off unless Slippi's team asks for one): a key of its own, in the
+	 * place nlohmann::json's sorted keys give it, or after the version */
+	c.client_name_mode = 1;
+	CHECK(so_mm_build_ticket(out, sizeof(out), &c, &u, &s, "10.0.0.47:41234") > 0);
+	CHECK(strstr(out, "{\"appVersion\":\"3.6.4\",\"client\":\"SlippWii/" SLIPPWII_VERSION "\",\"ipAddressLan\":") == out);
+	c.client_name_mode = 2;
+	CHECK(so_mm_build_ticket(out, sizeof(out), &c, &u, &s, "10.0.0.47:41234") > 0);
+	CHECK(strstr(out, "{\"appVersion\":\"3.6.4+slippwii." SLIPPWII_VERSION "\",\"ipAddressLan\":") == out);
+	CHECK(!strstr(out, "\"client\""));
+}
+
+/* Slippi's version: what a build reports, and when it is behind. */
+static void test_versions(void)
+{
+	SoConfig c;
+	CHECK_INT(so_version_cmp("3.6.4", "3.6.4"), 0);
+	CHECK(so_version_cmp("3.6.5", "3.6.4") > 0);
+	CHECK(so_version_cmp("3.6.4", "3.6.5") < 0);
+	CHECK(so_version_cmp("3.10.0", "3.9.9") > 0);	/* by number, not by letter */
+	CHECK(so_version_cmp("4.0.0", "3.99.99") > 0);
+	CHECK(so_version_cmp("3.7", "3.6.4") > 0);
+	CHECK_INT(so_version_cmp("3.6", "3.6.0"), 0);
+	CHECK(so_version_cmp("3.6.5-beta.2", "3.6.4") > 0);
+	CHECK(so_version_cmp("3.6.4-beta.2", "3.6.4") < 0);	/* a release is over its own pre-releases */
+	CHECK(so_version_cmp("3.6.4", "3.6.4-rc.1") > 0);
+	CHECK_INT(so_version_cmp("3.6.4+slippwii.1.5.1", "3.6.4"), 0);	/* build metadata does not count */
+	CHECK_INT(so_version_cmp("v3.6.4", "3.6.4"), 0);
+	CHECK(so_version_cmp("", "3.6.4") < 0);	/* no version: nothing is newer */
+	CHECK(so_version_cmp("junk", "3.6.4") < 0);
+	CHECK_INT(so_version_cmp("", ""), 0);
+	CHECK(so_version_cmp("99999999999999999999.0.0", "3.6.4") > 0);
+
+	/* Wired only: the connection chosen in the Wii's settings (0xa7: chosen, wired; 0xa6: chosen,
+	 * wireless), the link's state where IOS gives it, neither on a console that cannot say */
+	CHECK_INT(so_net_is_wifi(2, 0, 0xa7), 0);
+	CHECK_INT(so_net_is_wifi(2, 0, 0xa6), 1);
+	CHECK_INT(so_net_is_wifi(3, SO_LINK_WIFI_UP, 0xa6), 1);
+	CHECK_INT(so_net_is_wifi(3, SO_LINK_WIRED, 0xa6), 0);	/* the link says wired: not refused */
+	CHECK_INT(so_net_is_wifi(3, SO_LINK_WIFI_UP, 0xa7), 0);
+	CHECK_INT(so_net_is_wifi(1, SO_LINK_WIFI_UP, 0), 1);
+	CHECK_INT(so_net_is_wifi(1, SO_LINK_WIFI_DOWN, 0), 1);
+	CHECK_INT(so_net_is_wifi(1, SO_LINK_WIRED, 0), 0);
+	CHECK_INT(so_net_is_wifi(1, SO_LINK_BUSY, 0), 0);
+	CHECK_INT(so_net_is_wifi(0, 0, 0), 0);
+	CHECK_INT(so_net_is_wifi(0, (u32)-6, 0xa6), 0);	/* (nothing read: the values mean nothing) */
+
+	/* Against Slippi's server the version reported and the client's name are the build's,
+	 * whatever config.ini says; a test server takes what a test sets. */
+	{
+		static const char ini[] = "app_version=9.9.9\ntest_client_name=1\n";
+		static const char test_ini[] = "mm_host=10.0.0.29\napp_version=3.6.3\ntest_client_name=2\n";
+		so_config_defaults(&c);
+		CHECK_INT(so_config_finish(&c), 0);
+		so_config_parse(&c, ini, sizeof(ini) - 1);
+		CHECK_STR(c.app_version, "9.9.9");
+		CHECK_INT(so_config_finish(&c), 1);
+		CHECK_STR(c.app_version, SO_APP_VERSION_DEFAULT);
+		CHECK_INT(c.client_name_mode, SO_CLIENT_NAME_MODE);
+		so_config_defaults(&c);
+		so_config_parse(&c, test_ini, sizeof(test_ini) - 1);
+		CHECK_INT(so_config_finish(&c), 0);
+		CHECK_STR(c.app_version, "3.6.3");
+		CHECK_INT(c.client_name_mode, 2);
+	}
 }
 
 static void test_mm_match(void)
@@ -970,11 +1048,13 @@ int main(void)
 	RUN(test_direct_mode);
 	RUN(test_peer_games);
 	RUN(test_mm_ticket);
+	RUN(test_versions);
 	RUN(test_mm_match);
 	RUN(test_text);
 	RUN(test_gct);
 	RUN(test_disc_files);
 	RUN(test_logfile);
+	RUN(test_mq);
 	printf("%d checks, %d failures\n", test_checks, test_failures);
 	return test_failures ? 1 : 0;
 }

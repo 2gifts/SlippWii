@@ -35,7 +35,7 @@ FRESULT f_open_char(FIL *fp, const char *path, BYTE mode)
 {
 	char p[1024];
 	real_path(p, sizeof(p), path);
-	fp->fp = fopen(p, (mode & FA_WRITE) ? "wb" : "rb");
+	fp->fp = fopen(p, !(mode & FA_WRITE) ? "rb" : (mode & FA_CREATE_ALWAYS) ? "wb" : "r+b");
 	if (!fp->fp)
 		return FR_NO_FILE;
 	fseek(fp->fp, 0, SEEK_END);

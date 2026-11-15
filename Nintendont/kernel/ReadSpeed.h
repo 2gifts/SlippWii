@@ -25,5 +25,6 @@ void ReadSpeed_Motor();
 void ReadSpeed_Start();
 void ReadSpeed_Setup(u32 Offset, int Length);
 u32 ReadSpeed_End();
+u32 ReadSpeed_Left(u32 *elapsed);
 
 #endif

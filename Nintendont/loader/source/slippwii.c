@@ -33,6 +33,7 @@
 #include "diskio.h"
 #include "vcdiff.h"
 #include "slippwii.h"
+#include "slippwii_edits.h"
 
 extern FATFS *devices[2];
 extern u32 Shutdown;	/* menu.c */
@@ -648,6 +649,42 @@ static void prepare_files(unsigned int CurDICMD, u32 ISOShift)
 	FlushDevices();
 }
 
+/* ---- SlippWii's own changes to Slippi's menu files ---------------------------------------- */
+
+/* The Online Play menu's "Exit": its name and the lines under the menu, put into the files
+ * made above (slippwii_edits.h; tools/menu_edits.py says what and why). A place is changed
+ * only while it holds exactly Slippi's bytes, so this does its work once after the files are
+ * made, nothing on later starts, and nothing to a file that is not Slippi's. Without it the
+ * option would still leave, under Slippi's name for it ("Log-out"). */
+static void apply_edits(void)
+{
+	unsigned i;
+	int changed = 0;
+	for (i = 0; i < SLIPPWII_EDIT_COUNT; i++) {
+		const SlippWiiEdit *e = &slippwii_edits[i];
+		char rel[64], path[128];
+		FIL f;
+		UINT n = 0;
+		u8 *buf;
+		snprintf(rel, sizeof(rel), "files/%s", e->file);
+		path_of(path, sizeof(path), dst_dev, rel);
+		if (f_open_char(&f, path, FA_READ | FA_WRITE | FA_OPEN_EXISTING) != FR_OK)
+			continue;
+		buf = memalign(32, e->size);
+		if (buf && (u32)f_size(&f) >= e->offset + e->size
+		    && f_lseek(&f, e->offset) == FR_OK
+		    && f_read(&f, buf, e->size, &n) == FR_OK && n == e->size
+		    && (u32)vcdiff_crc32(0, buf, e->size) == e->old_crc
+		    && f_lseek(&f, e->offset) == FR_OK
+		    && f_write(&f, e->data, e->size, &n) == FR_OK && n == e->size)
+			changed++;
+		free(buf);
+		f_close(&f);
+	}
+	if (changed)
+		FlushDevices();
+}
+
 /* ---- the entry ------------------------------------------------------------------------ */
 
 void SlippWii_Prepare(unsigned int CurDICMD, u32 ISOShift)
@@ -682,7 +719,9 @@ void SlippWii_Prepare(unsigned int CurDICMD, u32 ISOShift)
 		copy_to_game_drive("config.ini");
 	}
 	check_account();	/* first: without one there's no online play to get ready */
-	if (ncfg->Config & NIN_CFG_NETWORK)
+	if (ncfg->Config & NIN_CFG_NETWORK) {
 		prepare_files(CurDICMD, ISOShift);
+		apply_edits();
+	}
 	FlushDevices();
 }

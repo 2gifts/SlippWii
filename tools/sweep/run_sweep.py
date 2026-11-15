@@ -14,7 +14,7 @@ back right after) -> fake server + Dolphin copy + Wii boot + replay mirror
 
 Unattended: the run stops early on a crash, panic or stall in the
 Wii's log, and at the end the Wii goes back to the Homebrew Channel by itself
-(test_control, tools/ppc/test_exit.s; a crash goes back on its own), ready
+(test_control, tools/ppc/exit.s; a crash goes back on its own), ready
 for the next run. With --rollback LAG the Wii rolls back, its opponent's
 inputs shown LAG frames late (test_lag_frames); with --spike MS as well,
 held back MS every 5 s, as in a lag spike (test_spike_ms).
@@ -69,6 +69,7 @@ FAILURES = re.compile(r'CRASH:|PANIC|rb MISS|rb LOST|rb VERIFY|rb WALK [1-9]|PAD
 STALL_S = 120  # no Wii log line for this long once its games started: stuck
 STALL_FIRST_S = 300  # before them (matchmaking, a first boot)
 GAME_EVENTS = re.compile(r'rolls back|waits for inputs|game over')  # a game started or ended
+MENU_EXIT = re.compile(r"exit: the menu's (Exit|Update) asked")  # --menu-exit: the bot said yes to Exit, or chose Update
 IDLE_MARGIN_S = 120  # past a game's length (--lras-s) with no game starting or ending: stuck in the menus
 
 
@@ -102,7 +103,9 @@ def autoplay_codes(run_dir, plan, args):
     """Both sides' autoplay codes (the Wii's as a C2 code and as Dolphin's
     text, which the --baseline stand-in plays)."""
     # (--menu-latency: the Wii's bot stays on the main menu, pressing the d-pad: autoplay.c's seed 0xEC)
-    for side, col, seed in (('wii', 0, 0xEC if args.menu_latency else args.seed * 2 + 1),
+    # (--menu-exit: it goes to the Online Play menu's Exit and says yes: seed 0xEB; or to its Update: 0xEA)
+    menu_seed = {'exit': 0xEB, 'update': 0xEA}.get(args.menu_exit)
+    for side, col, seed in (('wii', 0, 0xEC if args.menu_latency else menu_seed or args.seed * 2 + 1),
                             ('dolphin', 1, args.seed * 2 + 2)):
         spec = {'rounds': [[r[col], r[2]] for r in plan], 'lras_s': args.lras_s, 'seed': seed,
                 'timer_s': args.timer_s, 'timer_rounds': args.timer_rounds, 'idle_rounds': args.idle_rounds,
@@ -169,7 +172,8 @@ def build(run_dir, plan, args, ip):
             *(['--rollback-verify-deep', '--no-ping-display', '--no-text-args'] if args.verify_deep else []),
             *(['--rollback-hwtest', '--no-ping-display', '--no-text-args'] if args.hwtest else []),
             # (with the probe: the walk that fits beside it, memory pieces only, a crash report its word)
-            *(['--rollback-walk', '--no-ping-display', '--no-text-args'] if args.walk else []))
+            *(['--rollback-walk', '--no-ping-display', '--no-text-args'] if args.walk else []),
+            *args.boot_arg)
         print('building the Wii test build (a minute or two)...')
         run('sh', ROOT / 'tools/build.sh', cwd=ROOT)
         shutil.copy(NIN / 'loader/loader.dol', run_dir / 'loader-sweep.dol')
@@ -254,7 +258,7 @@ LOCK = OUT / 'sweep.lock'
 def other_sweeps():
     """[(pid, command line)] of other run_sweep.py processes on this PC (not this one or its launcher)."""
     mine = {os.getpid(), os.getppid()}
-    return [(pid, cmd) for pid, _, cmd in processes('python.exe') if 'run_sweep.py' in cmd and pid not in mine]
+    return [(pid, cmd) for pid, _, cmd in processes('python.exe') if ('run_sweep.py' in cmd or 'lobby.py' in cmd) and pid not in mine]
 
 
 def take_lock():
@@ -273,12 +277,14 @@ def take_lock():
 def kill_leftovers():
     """The sweep's own processes only (never the player's Slippi Dolphin)."""
     subprocess.run(['taskkill', '/F', '/IM', 'slippi_fake_mm.exe'], capture_output=True)
+    subprocess.run(['taskkill', '/F', '/IM', 'so_pc_fake_mm.exe'], capture_output=True)
+    subprocess.run(['taskkill', '/F', '/IM', 'so_pc_lobby_mm.exe'], capture_output=True)
     for pid, path, _ in processes('Slippi Dolphin.exe'):
         if str(OUT).lower() in path.lower():
             subprocess.run(['taskkill', '/F', '/PID', str(pid)], capture_output=True)
     # the log listener, the replay mirror and the relay, from an earlier run
     for pid, _, cmd in processes('python.exe'):
-        if 'wii_mirror.py' in cmd or 'net_relay.py' in cmd or ('online_selftest.py' in cmd and ' watch' in cmd):
+        if 'wii_mirror.py' in cmd or 'net_relay.py' in cmd or 'lobby_relay.py' in cmd or 'udp_front.py' in cmd or ('online_selftest.py' in cmd and ' watch' in cmd):
             subprocess.run(['taskkill', '/F', '/PID', str(pid)], capture_output=True)
 
 
@@ -334,7 +340,8 @@ def net_args(net):
 
 def start_relay(run_dir, a_adv, a_real, b_adv, b_real, net):
     relay = start('relay', [sys.executable, '-u', HERE / 'net_relay.py', a_adv, a_real, b_adv, b_real,
-                            *net_args(net), '--trace', run_dir / 'relay-frames.txt'], run_dir)
+                            *net_args(net), '--trace', run_dir / 'relay-frames.txt',
+                            '--passes', run_dir / 'relay-passes.txt'], run_dir)
     time.sleep(0.5)
     unthrottle.unthrottle(relay[0].pid)  # its delays are timed: it must not wait for the CPU
     return relay
@@ -485,7 +492,8 @@ def report(run_dir, plan, started):
     print('\n'.join(lines))
 
 
-def main():
+def parser():
+    """The options (lobby.py builds the Wii's test build with them too)."""
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     ap.add_argument('--rounds', type=int, default=25)
     ap.add_argument('--seed', type=int, default=0, help='random inputs: another seed, other games')
@@ -538,6 +546,11 @@ def main():
     ap.add_argument('--menu-latency', type=int, default=0, metavar='SECONDS',
                     help='with --latency: no games; the bot presses the d-pad on the main menu for this long '
                          "(offline timing: with --kernel test_lag_reduction=1, Melee's own)")
+    ap.add_argument('--menu-exit', nargs='?', const='exit', choices=['exit', 'update'],
+                    help="the Wii's bot goes to the Online Play menu's Exit and says yes (or, 'update', picks its "
+                         "Update, which a start with --kernel test_latest_keep=1 shows after a run with "
+                         "--mm-turns-away): the Wii must be back at the Homebrew Channel by itself (with "
+                         "--capture, a recording of the menu and its box)")
     ap.add_argument('--release-engine', action='store_true',
                     help="with --human: the player's engine (-O2, no record), as in the beta, not the traced one")
     ap.add_argument('--no-delay-buttons', action='store_true', help='no delay buttons on the CSS (blind.py)')
@@ -547,6 +560,15 @@ def main():
                     help="timing runs: no replay stream from the Wii, so no replays compared (what a player's Wii does)")
     ap.add_argument('--kernel', action='append', default=[], metavar='KEY=VALUE',
                     help="a line for the Wii's config.ini (test builds; repeatable)")
+    ap.add_argument('--boot-arg', action='append', default=[], metavar='OPTION',
+                    help='one more option for tools/build_online_boot.py (repeatable; write --boot-arg=--no-xfb-wait)')
+    ap.add_argument('--mm-turns-away', metavar='VERSION',
+                    help="the matchmaking server turns versions under this one away and names it, as Slippi's does "
+                         '(so_pc_fake_mm.exe, from tests/pc/build.sh): no game is played, the Wii must lock its online '
+                         'modes; then --kernel test_latest_keep=1 for the start after')
+    ap.add_argument('--mm-arg', action='append', default=[], metavar='OPTION',
+                    help="an option for the fake matchmaking server (--mm-arg=--min-version --mm-arg=3.6.5: it "
+                         "turns versions under that away, naming it, as Slippi's does)")
     ap.add_argument('--baseline', action='store_true',
                     help="with --net: a second Slippi Dolphin plays the Wii's part (what the PC player feels "
                          'against a PC, to measure a Wii run with the same --net against)')
@@ -565,7 +587,11 @@ def main():
     ap.add_argument('--verify-deep', action='store_true',
                     help="with --rollback and --no-delay-buttons: a player's engine that keeps a sum of each page it saves "
                          "and checks what each deep load puts back ('rb VD' lines in the Wii's log)")
-    args = ap.parse_args()
+    return ap
+
+
+def main():
+    args = parser().parse_args()
     if (args.verify_deep or args.walk) and (not args.no_delay_buttons or (args.latency and not args.walk) or args.trace
                                             or args.human or args.verify or args.verify_all or (args.verify_deep and args.walk)):
         sys.exit('--verify-deep, --walk: with --no-delay-buttons, and not with --trace, --human or another check '
@@ -608,8 +634,14 @@ def main():
     replays = dolphin / 'replays'
     # --net: one external address for both, so each is given the other's LAN
     # address, which the relay holds (the Wii's is 127.0.0.2: lan_ip in build)
-    procs = [start('fake_mm', [TOOLS / 'slippi_fake_mm.exe', '--port', 43113,
-                               *(['--external-ip', '10.0.0.1'] if args.net else [])], run_dir)]
+    if args.mm_turns_away:
+        gate = Path(os.environ.get('TEMP', '/tmp')) / 'slippi_online_pc/so_pc_fake_mm.exe'
+        # (on a port of its own behind udp_front.py: the firewall lets Python's traffic in, not a new program's)
+        procs = [start('fake_mm', [gate, 43114, args.mm_turns_away, 'match', args.timeout_min * 60 + 120], run_dir),
+                 start('mm_front', [sys.executable, '-u', HERE / 'udp_front.py', 43113, 43114], run_dir)]
+    else:
+        procs = [start('fake_mm', [TOOLS / 'slippi_fake_mm.exe', '--port', 43113,
+                                   *(['--external-ip', '10.0.0.1'] if args.net else []), *args.mm_arg], run_dir)]
     if args.net:
         procs.append(start_relay(run_dir, f'{ip}:{PC_PORT}', f'127.0.0.1:{PC_PORT}', f'127.0.0.2:{WII_PORT}',
                                  f'{args.wii_ip}:{WII_PORT}', args.net))
@@ -650,6 +682,7 @@ def main():
     print(f'sweep {run_dir.name}: {len(plan)} rounds. Open the Homebrew Channel on the Wii '
           f'({args.wii_ip}); the test build is sent to it.')
     failure = None
+    menu_left = False
     try:
         done, seen, last_line_at = 0, 0, time.time()
         events, last_event_at = 0, time.time()
@@ -692,6 +725,16 @@ def main():
                 booted_at = time.time()
             if args.menu_latency and booted and time.time() - booted_at > args.menu_latency + 30:
                 break  # (30 s: Melee's start-up, to its main menu)
+            if args.menu_exit:
+                if any(MENU_EXIT.search(l) for l in lines):
+                    menu_left = True
+                    time.sleep(4)  # (the rest of the exit, for the log: the kernel's steps)
+                    break
+                if booted and time.time() - booted_at > 240:
+                    failure = f"the Wii's bot did not leave by the Online Play menu's {args.menu_exit.capitalize()} in 4 minutes"
+                    break
+                time.sleep(2)
+                continue
             if args.human:  # quiet in the menus is no sign of trouble: a person is choosing
                 time.sleep(10)
                 cpu.sample()
@@ -708,7 +751,8 @@ def main():
     except KeyboardInterrupt:
         failure = 'stopped'
     finally:
-        send_exit(args.wii_ip)  # back to the Homebrew Channel for the next run
+        if not menu_left:  # (--menu-exit: the Wii has to come back by its own menu)
+            send_exit(args.wii_ip)  # back to the Homebrew Channel for the next run
         for p, log in procs:
             if p.poll() is None:
                 p.terminate()

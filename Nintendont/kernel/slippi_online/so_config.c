@@ -18,12 +18,14 @@ void so_config_defaults(SoConfig *config)
 	strlcpy(config->mm_host, SO_MM_HOST_DEFAULT, sizeof(config->mm_host));
 	config->mm_port = SO_MM_PORT_DEFAULT;
 	strlcpy(config->app_version, SO_APP_VERSION_DEFAULT, sizeof(config->app_version));
+	config->client_name_mode = SO_CLIENT_NAME_MODE;
 	config->delay = 2;
 	config->rollback = 1;	/* (the default since 1.4.0; 0 in config.ini: the game waits for late inputs, as 1.3 did) */
 	config->boot_quiet_s = 60;
 	config->selftest_stage_pause_s = 3;
 	config->online_main_priority = 0x7C;
 	config->online_loop_us = 500;
+	config->multi_delay_room_ms = 20;
 	config->rollback_bg_saves = 2;
 	config->rollback_direct = 1;	/* (on since 1.4.0-beta.3; 0 in config.ini is the off-switch) */
 	config->rollback_direct_ping_ms = 75;
@@ -83,6 +85,7 @@ static int apply(SoConfig *c, const char *key, const char *value)
 		return 0; \
 	}
 	RANGED("mm_port", mm_port, 1, 65535)
+	RANGED("test_client_name", client_name_mode, 0, 2)
 	RANGED("local_port", local_port, 0, 65535)
 	RANGED("delay", delay, 1, 9)
 	RANGED("log_packets", log_packets, 0, 1)
@@ -120,6 +123,8 @@ static int apply(SoConfig *c, const char *key, const char *value)
 	RANGED("test_drop_pct", test_drop_pct, 0, 90)
 	RANGED("rollback", rollback, 0, 1)
 	RANGED("test_lag_frames", test_lag_frames, 0, 6)
+	RANGED("test_multi_rollback", test_multi_rollback, 0, 1)
+	RANGED("multi_delay_room_ms", multi_delay_room_ms, 0, 60)
 	RANGED("test_spike_ms", test_spike_ms, 0, 2000)
 	RANGED("test_spike_every", test_spike_every, 20, 3000)
 	RANGED("test_stuck_frame", test_stuck_frame, 0, 60000)
@@ -139,6 +144,8 @@ static int apply(SoConfig *c, const char *key, const char *value)
 	RANGED("rollback_poll_early_us", rollback_poll_early_us, 0, 12000)
 	RANGED("rollback_poll_deep_us", rollback_poll_deep_us, 0, 6000)
 	RANGED("test_control", test_control, 0, 1)
+	RANGED("test_wifi", test_wifi, 0, 1)
+	RANGED("test_latest_keep", test_latest_keep, 0, 1)
 #undef RANGED
 	return -2;
 }
@@ -211,6 +218,17 @@ int so_config_is_real_mm(const SoConfig *config)
 	return strstr(config->mm_host, "slippi.gg") != NULL;
 }
 
+int so_config_finish(SoConfig *config)
+{
+	int changed;
+	if (!so_config_is_real_mm(config))
+		return 0;	/* a test server: tests choose */
+	changed = strcmp(config->app_version, SO_APP_VERSION_DEFAULT) != 0 || config->client_name_mode != SO_CLIENT_NAME_MODE;
+	strlcpy(config->app_version, SO_APP_VERSION_DEFAULT, sizeof(config->app_version));
+	config->client_name_mode = SO_CLIENT_NAME_MODE;
+	return changed;
+}
+
 /* Test builds only (slippi-wii tools/sweep writes it, then restores the
  * empty default): settings compiled in, applied over config.ini, so an
  * automated test needs nothing on the SD card. */
@@ -236,6 +254,9 @@ static int load(SoConfig *config, SoUser *user, char *text)
 			strlcpy(config->user_path, SO_TEST_USER_PATH, sizeof(config->user_path));
 		so_log("config: TEST BUILD: compiled-in settings over %s", SO_CONFIG_PATH);
 	}
+	if (so_config_finish(config))
+		so_log("config: app_version is not a setting on Slippi's server: this build speaks Slippi %s",
+			SO_APP_VERSION_DEFAULT);
 
 	memset(user, 0, sizeof(*user));
 	n = so_read_file(config->user_path, text, FILE_MAX - 1);

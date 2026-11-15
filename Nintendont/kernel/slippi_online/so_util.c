@@ -2,6 +2,7 @@
  * Bounded formatting and parsing helpers (see so_util.h).
  */
 #include "so_util.h"
+#include "so_platform.h"	/* SO_LINK_*, SO_CONNECTION_* */
 #include "string.h"
 
 typedef struct {
@@ -171,6 +172,41 @@ long so_parse_long(const char *text, const char **end)
 	if (value > (~0UL >> 1))
 		value = ~0UL >> 1;
 	return negative ? -(long)value : (long)value;
+}
+
+/* A version's three numbers and whether it is a pre-release. */
+static void version_parts(const char *text, long *n, int *pre)
+{
+	int i;
+	if (*text == 'v')
+		text++;
+	for (i = 0; i < 3; i++) {
+		const char *end;
+		n[i] = *text >= '0' && *text <= '9' ? so_parse_long(text, &end) : 0;
+		if (!(*text >= '0' && *text <= '9'))
+			end = text;
+		text = *end == '.' && i < 2 ? end + 1 : end;
+	}
+	*pre = *text == '-';
+}
+
+int so_net_is_wifi(int got, u32 link, u32 flags)
+{
+	if (got & 2)
+		return !(flags & SO_CONNECTION_WIRED) && !((got & 1) && link == SO_LINK_WIRED);
+	return (got & 1) && (link == SO_LINK_WIFI_UP || link == SO_LINK_WIFI_DOWN);
+}
+
+int so_version_cmp(const char *a, const char *b)
+{
+	long x[3], y[3];
+	int px, py, i;
+	version_parts(a, x, &px);
+	version_parts(b, y, &py);
+	for (i = 0; i < 3; i++)
+		if (x[i] != y[i])
+			return x[i] < y[i] ? -1 : 1;
+	return py - px;	/* the same numbers: the pre-release is the older */
 }
 
 static int parse_ipv4_prefix(const char *text, u32 *addr, const char **end)

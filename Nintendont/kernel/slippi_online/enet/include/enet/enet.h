@@ -294,6 +294,7 @@ typedef struct _ENetPeer
    enet_uint32   timeoutMinimum;
    enet_uint32   timeoutMaximum;
    enet_uint32   lastRoundTripTime;
+   enet_uint32   sampleRoundTripTime;     /* Slippi Online: the last acknowledgement's own round trip, ms (0: none yet) */
    enet_uint32   lowestRoundTripTime;
    enet_uint32   lastRoundTripTimeVariance;
    enet_uint32   highestRoundTripTimeVariance;

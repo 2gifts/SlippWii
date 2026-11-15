@@ -19,6 +19,12 @@ int so_snprintf(char *out, int size, const char *fmt, ...) __attribute__((format
  * present. */
 long so_parse_long(const char *text, const char **end);
 
+/* Compares two versions by their numbers, as semver orders them: "3.6.5"
+ * is over "3.6.4", and a release over its own pre-releases ("3.6.5" over
+ * "3.6.5-beta.2"); what follows a '+' is not compared. Returns < 0, 0 or
+ * > 0. A text that is no version ("" too) counts as 0.0.0. */
+int so_version_cmp(const char *a, const char *b);
+
 /* "a.b.c.d" -> IPv4 address in network byte order (big-endian, as the Wii
  * stores it). Returns 0 on success. */
 int so_parse_ipv4(const char *text, u32 *addr);

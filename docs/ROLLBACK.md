@@ -210,10 +210,14 @@ fine, since the savestates start at the game's first frame.
 
 Melee has two frame buffers. With one on the screen and one waiting its turn, a frame's copy waits
 for the retrace, and the next frame's work starts when that copy is done: every frame goes up two
-retraces after its controller poll. That is the game's own pipeline, offline too (33.3 ms from the
-poll to the retrace with Slippi's polling fix, 41.7 ms with Melee's own polling; tools/latency).
-Online, with the poll a few ms before the retrace and 2 delay frames, a press took 74.8 ms from the
-controller's reading to the retrace that shows it, at any ping.
+retraces after its controller poll. That is the game's own pipeline (on the main menu 41.7 ms from
+the poll to the retrace with Melee's own polling, 33.4 ms with the polls at the retrace;
+tools/latency). Slippi's codes carry tauKhan's fix for it, the "VB" of "Polling Drift Fix + VB": a
+frame that had to wait for a buffer sets a flag, and the game's loop leaves the next frame undrawn,
+once. Online the flag is the engine's: with the poll a few ms before the retrace a frame that is
+only fast waits too, and no frame of a rollback may be the one left out. Offline it is never set,
+on purpose (see "Offline" at this section's end). Without a skip, at 2 delay frames, a press took
+74.8 ms from the controller's reading to the retrace that shows it, at any ping.
 
 One frame not drawn puts the game *level*: each frame starts at its own poll and goes up at the
 next retrace, 16.7 ms sooner. It stays there as long as every frame's work fits: the poll's lead and
@@ -285,8 +289,8 @@ before the reading and 9 ms to the middle of a CRT's picture), 2026-11-09/10:
 | 2, 70 ms | 74.8 ms | 58.1 ms | 133 of 136 (80 on 2026-11-10; the 3 others a refresh behind by the opponent's number, after a game with 3 passes too long) | 1, in about 90 minutes |
 | 1, 38 ms | 58.1 ms | 41.3 ms | 46 of 46 | 0 |
 | 2, 83 ms and 100 ms (cce69d8: over the limit) | 74.8 ms | 74.8 ms: no skip is asked, as with the setting off | 8 of 8 at 100 ms | as with the setting off (in that run the PC's side stalled twice for 0.1-0.2 s, with rollbacks of up to 8 frames: 19 frames shown twice around them, none elsewhere) |
-| offline, Melee's own polling | 41.7 ms | | | |
-| offline, Slippi's polling fix | 33.3 ms | | | |
+| offline, Melee's own polling and no lag reduction code (a stock console) | 41.7 ms | | | |
+| offline, SlippWii since 1.4.0: the polling drift fix, as Slippi Nintendont's default | 33.4 ms | | | |
 
 With 1 delay frame under about 42 ms of ping, a Wii online answers as a stock console does offline.
 The PC player sees no difference: the Wii's inputs leave when they did (about 2 ms after a PC's
@@ -315,6 +319,28 @@ Not done, and why:
   never by reading the pad earlier) is 2 to 6 ms less lag while level and 14% fewer rollbacks for
   the PC player in one run at 70 ms. It shortens a field by a line 1-2 times a second: to be looked
   at on a real CRT before it is anyone's default.
+
+**Offline.** Outside Slippi's online scenes no engine runs, and tauKhan's fix is on its own. Its
+flag is set by an instruction of its own in `HSD_VICopyXFBAsync`'s buffer wait (0x80376200: the
+buffer's number is -1, none free), and `tools/ppc/xfb_wait.s`, in every build since 1.4.0-beta.1,
+does that wait itself and hands back a buffer, never -1. So offline the flag is never set, and the
+fix's other half, the controller read once a refresh at the retrace, is what is left: the timing of
+Slippi Nintendont's default *Lag Reduction: PDF*. That is how offline play should be (the user,
+2026-11-12): a console player's Melee with the polling drift fix and Slippi Nintendont's usual
+codes, nothing faster. In 1.3.1 and before, without `xfb_wait.s`, the flag was live offline.
+Found on 2026-11-12, when a player asked whether SlippWii used "Polling Drift and Full Visual
+Buffer Fixes - Wii Only" (the same 14 lines as Slippi's `Binary/LagReduction/PD+VB.bin`, and one
+for the crash screen). On the main menu, the bot on the d-pad, from the controller's reading to
+the retrace:
+
+| Build | Presses | Reading to retrace |
+|---|---|---|
+| The game's own wait, as in 1.3.1 (`run_sweep.py --boot-arg=--no-xfb-wait`) | 75 | 16.7 ms, all at 1 refresh |
+| 1.5.1 | 74 | 33.4 ms, all at 2 |
+| A test build with `xfb_wait.s` setting the flag outside the online scenes (not kept) | 75 | 16.7 ms, all at 1 |
+
+The polling drift fix alone (`--kernel test_lag_reduction=2`, Slippi Nintendont's PDF code in
+place of Slippi's PD+VB) measured 33.3 ms on 2026-11-09: the same as SlippWii offline.
 
 ### Slippi Dolphin's optional codes
 
@@ -374,6 +400,13 @@ logged as `PERF rb ...`):
 | `rb p` | passes of the game's loop, by engine loops in the pass (1, 2, then 3, 4, 5 or more): each count / average µs / how many went over a refresh |
 | `rb exi` | the CPU's waits on the EXI, by what for (the `0xB0` sent, its answer, the rest): each count / average µs |
 
+The kernel's own lines at a game's end (`game over`, `game rollback`, `game checksums` and the rest) are followed by two
+`game quality` lines: Slippi's match quality rule as this game would have been judged by it (`so_mq.h`): the intervals
+judged, the highest debt of the 30 that end a Ranked match, the average depth (how far the game ran ahead of the
+opponent's newest input, in frames), the unhealthy intervals by signal, and whether a Ranked match would have been
+ended. During the game, a `quality:` line for an unhealthy interval (a game's first 10) and for the one that reaches
+the limit.
+
 ## Testing
 
 | Test | Runs on | What it checks |
@@ -386,6 +419,13 @@ logged as `PERF rb ...`):
 | `python tools/sweep/blind.py prepare --wii-ip IP --net 30,5 --delay 3`, then `next`, `stop`, `reveal` | Wii and PC | A blind comparison of rollback and delay: a person plays both in a random order, and the key comes last. |
 | `python tools/sweep/soak.py --wii-ip IP --nets 45,5 60,8,1 --rounds 8 --hours N` | Wii and PC | Games through a list of connections, other inputs and matchups each run, until something fails or the time is up. High latency finds what constant `--rollback LAG` does not: both the savestate race and the HSD crash below came from here. |
 | `python tools/sweep/ab.py --wii-ip IP --rounds 4 --nets 30,5 45,5 --pc-nets 32,5` | Wii and PC | The same games through the same connection against a second Slippi Dolphin and against the Wii, from the PC player's side (below). `--pc-nets` runs a PC alone, for comparing at the same ping. |
+| `python tools/sweep/match_quality.py RUN [--games]`; `--selftest` | PC | Slippi's own match quality rule (what its development source ends a Ranked match by: `so_mq.h`), scored for a `--net` run's games: the PC player's side from the relay's record of every pad (`relay-passes.txt`) and Dolphin's own halts, the Wii's from its kernel's count in its log. `ab.py`'s table has the PC player's columns. `--selftest` plays 200 random games through this tool's version of the rule (in doubles, as Slippi's) and the kernel's (`so_mq.c`, whole numbers): they must agree on every interval. |
+| `python tools/sweep/input_lateness.py RUN_DIR...` | PC (after a run with `--net`) | How late the opponent's inputs are as the PC player has them, from the relay's record: how much later than the PC player's own they were sent (a Wii: 1 to 3 ms; a second Dolphin: about 0), how late they are in hand, and that in whole frames, which is the rollback depth Slippi's rule counts. Shows why depth moves in steps with the ping, and the tail of a Wii that falls behind at a high ping. |
+| `python tools/test_online_gates.py` | PC | The rules of a guest on Slippi's servers (docs/RANKED_READINESS.md), on the online client built for Windows: a matchmaking server that turns the client's version away and names a newer one (`tests/pc/pc_fake_mm.c`) locks the online modes, the lock holds over a restart with no ticket sent, and lifts for a client that speaks the new version; a console on Wi-Fi sends no search; the forms of the client's name reach the server. |
+| `python tools/sweep/run_sweep.py --wii-ip IP --rollback 0 --rounds 1 --timeout-min 4 --mm-turns-away 3.6.5`, then the same with `--kernel test_latest_keep=1` in its place; `--kernel test_wifi=1` | Wii and PC | The same on the console. No game is played: the Wii's log must say that online is locked (and, at the next start, that the game was told an update is required), or that the search was refused on Wi-Fi, and the server's log must show no ticket from the Wii after that. |
+| `python tools/sweep/run_sweep.py --wii-ip IP --rollback 0 --rounds 1 --menu-exit --capture`; with `--boot-arg=--show-ranked`; `--menu-exit update --kernel test_latest_keep=1` | Wii | The Online Play menu's Exit (docs/HOW_IT_WORKS.md, "A way out"). The Wii's bot moves the cursor down to Exit, opens Slippi's "Are you sure?", closes it with B, opens it again and says yes: the Wii's log must say that the menu's Exit asked to leave, and the Wii must be back at the Homebrew Channel with nobody asking it from the PC. The recording (`capture.mkv`) shows the option's name, its line under the menu and the box. With Ranked shown the list has six options. `update`: the same by the menu's Update, which shows when Slippi's server has named a newer version. With `--kernel test_control=0` the kernel is as a player's (it takes no exit request from the PC): the run that matters, since a test build's kernel also brings the console back in cases a player's would not. |
+| `python tools/sweep/lobby.py --mode teams\|party [--wii-ip IP] [--rounds N] [--net D,J,L] [--no-mirror] [--wii-seat N] [--drop P,S] [--capture]` | PC, or Wii and PC | Slippi's four-player modes, played by bots with no Slippi server: three copies of Slippi Dolphin and the Wii (or, without `--wii-ip`, a fourth copy: what four PCs do), matched by `so_pc_lobby_mm.exe` (`tests/pc/pc_lobby_mm.c`; Teams by a shared lobby code, Party by a queue). Every player's replay of every game is compared with the first Dolphin's. `--net`: through `lobby_relay.py`, a delay, jitter and loss between every two players; the report then scores each Dolphin against each other player by Slippi's match quality rule and says how much later the first account's inputs left than each one's own. `--no-mirror`: without the Wii's replay stream, as a player's Wii is (the stream is a load of its own with four players: the Wii's own count of matching checksums then stands for its replay). `--wii-seat 1` makes the Wii the host. `--drop 4,15` closes a Dolphin copy 15 s into the first game: the others play on. `--lag N` (with the kernel's `test_multi_rollback`): the Wii rolls back against its three opponents, every input shown N frames late: what that costs. `--lockstep`: a build without the engine. `--boot-arg=--stall-all`: the stall profiler in every scene (from 90 retraces without a logic frame), with the interrupt masks. |
+| `python tools/test_loader_slippwii.py --iso Melee.iso --zip dist/SlippWii-vX.Y.Z.zip` | PC | The loader's start-up on fake cards, and with it SlippWii's own changes to Slippi's menu files (`tools/menu_edits.py`): all there after the first start, nothing done at the second, and a place that does not hold Slippi's bytes left as it is. `python tools/menu_edits.py --check` says whether the loader's table is current. |
 
 **Verify builds** (`--verify`, `RB_VERIFY`) check, on the Wii:
 

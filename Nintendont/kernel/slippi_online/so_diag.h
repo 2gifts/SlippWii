@@ -30,26 +30,37 @@ extern volatile u32 so_kernel_loops;
 
 void so_diag_start(const SoConfig *config);
 
-/* Tests (test_control=1): a word the PPC reads (0xD30034E0), "ARMD" from the
- * start, "EXIT" once the PC asks: the boot codes' test exit
- * (tools/ppc/test_exit.s) and crash reporter then go back to the Homebrew
- * Channel, as Nintendont's own exit combo does. */
+/* A word the PPC reads at every retrace (0xD30034E0; tools/ppc/exit.s): once
+ * it says "EXIT" the game stops and hands over to the kernel, which closes
+ * down and starts the Homebrew Channel (main.c, so_diag_launch_loader). 0
+ * from every start (main.c: this memory outlives a restart). Set by the Online Play menu's Exit and Update (so_exi.c) and, in
+ * tests (test_control=1), when the PC asks; there it is "ARMD" from the
+ * start, which also sends the crash reporter back after a crash. */
 #define SO_TEST_EXIT_WORD 0x130034E0	/* its own cache line: the kernel re-reads 0x13003420's constantly */
 #define SO_TEST_ARMED 0x41524D44	/* "ARMD" */
 #define SO_TEST_EXIT 0x45584954	/* "EXIT" */
 #define SO_TEST_HANG 0x48414E47	/* "HANG": tests of what follows a hung PowerPC */
-#define SO_TEST_RETRACES (SO_TEST_EXIT_WORD + 4)	/* counted by test_exit.s, logged */
+#define SO_TEST_RETRACES (SO_TEST_EXIT_WORD + 4)	/* counted by exit.s in test builds, logged */
 
-/* The exit's steps on the PPC, after the kernel's own: 1 let go, 2 into the
- * reload stub (tools/ppc/exit_to_loader.inc), 3 to 7 the stub's
- * (resetstub/main.c): 5 into the Homebrew Channel's stub, 6 and 7 IOS. */
+/* The exit's steps on the PPC, after the kernel's own: 1 stopped, waiting
+ * for the kernel to start the Homebrew Channel (tools/ppc/exit_to_loader.inc).
+ * An exit of Nintendont's own (a USB controller's buttons) reports 3 to 7,
+ * its reload stub's (resetstub/main.c): 5 into the Homebrew Channel's stub,
+ * 6 and 7 IOS. */
 #define SO_EXIT_STEP (SO_TEST_EXIT_WORD + 8)
 
-/* The kernel's exit is done (main.c): logs the PPC's steps for 10 s. */
+/* Sends the game back to the Homebrew Channel: it stops at its next retrace,
+ * and the kernel's exit then starts the Channel. `who` is for the log. */
+void so_diag_request_exit(const char *who);
+
+/* The kernel's exit is done (main.c): logs the PPC's steps, until it has
+ * stopped for the kernel (SlippWii's own exit) or for 10 s. */
 void so_diag_exit_watch(void);
 
-/* Tests (test_control): the PPC did not reload IOS (the kernel still runs
- * after the watch): the kernel launches the Homebrew Channel itself. */
+/* After an exit asked for by so_diag_request_exit, and in tests
+ * (test_control) after any exit or a hung PowerPC: the kernel has IOS start
+ * the Homebrew Channel (the Wii Menu if there is none), which restarts the
+ * console. Nothing after another exit: Nintendont's own finishes by itself. */
 void so_diag_launch_loader(void);
 
 /* The next beacon text (NUL-terminated, at most 31 characters). Lock-free:

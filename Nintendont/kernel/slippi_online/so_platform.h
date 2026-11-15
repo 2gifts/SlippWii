@@ -161,6 +161,7 @@ int so_read_file_bounced(const char *path, u8 *out, u32 size, u8 *bounce, u32 bo
  * (an overlap failed an open on hardware). No-ops until so_platform_init. */
 void so_fs_lock(void);
 void so_fs_unlock(void);
+void so_fs_diag(void);
 
 /* A file of the boot drive kept open (for reads while the game runs, with
  * no directory lookups then). so_file_open returns NULL, or a handle on the
@@ -208,6 +209,24 @@ void so_ppc_set_block(u32 addr, const void *data, u32 len);
 /* Asks IOS's ES to launch a title (the console reboots into it, the PPC
  * too); returns only when that failed: ES's error. Off the Wii, -1. */
 int so_launch_title(u64 title_id);
+
+/* What carries the console's network, from IOS's network configuration
+ * (/dev/net/ncd/manage), read only:
+ *   link     the link's state: SO_LINK_*
+ *   flags    of the three connections in the Wii's settings, the chosen
+ *            one's (SO_CONNECTION_*); raw[] has all three
+ * Returns bit 0 set when the link was read (when not, *link is IOS's error),
+ * bit 1 when a chosen connection was found. Off the Wii, 0. */
+enum { SO_LINK_BUSY = 1, SO_LINK_NONE, SO_LINK_WIRED, SO_LINK_WIFI_DOWN, SO_LINK_WIFI_UP };
+#define SO_CONNECTION_WIRED 0x01	/* the USB LAN adapter; clear: Wi-Fi */
+#define SO_CONNECTION_CHOSEN 0x80
+int so_net_link(u32 *link, u32 *flags, u8 raw[3]);
+/* The wired-only rule, by what so_net_link read (`got`: its return): 1 when
+ * the network is the console's Wi-Fi. The connection chosen in the Wii's
+ * settings decides, unless the link's state says wired; without a chosen
+ * connection the link's state decides; with neither, it is not Wi-Fi
+ * (nothing is refused on a console that cannot say). In so_util.c. */
+int so_net_is_wifi(int got, u32 link, u32 flags);
 #define SO_FILE_CACHE_SIZE 0x600000	/* 5.45 MB used: 1.1 MB of Stadium transformations, 4.4 MB of menus */
 
 /* Reads bytes of the game disc (the image Nintendont runs); 0, or < 0 with

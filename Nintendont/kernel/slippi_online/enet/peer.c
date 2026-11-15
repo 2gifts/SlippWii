@@ -408,6 +408,7 @@ enet_peer_reset (ENetPeer * peer)
     peer -> timeoutMinimum = ENET_PEER_TIMEOUT_MINIMUM;
     peer -> timeoutMaximum = ENET_PEER_TIMEOUT_MAXIMUM;
     peer -> lastRoundTripTime = ENET_PEER_DEFAULT_ROUND_TRIP_TIME;
+    peer -> sampleRoundTripTime = 0;
     peer -> lowestRoundTripTime = ENET_PEER_DEFAULT_ROUND_TRIP_TIME;
     peer -> lastRoundTripTimeVariance = 0;
     peer -> highestRoundTripTimeVariance = 0;
