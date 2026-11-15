@@ -344,12 +344,14 @@ place of Slippi's PD+VB) measured 33.3 ms on 2026-11-09: the same as SlippWii of
 
 ### Slippi Dolphin's optional codes
 
-Four of the codes a player can turn on in Slippi Dolphin are switches on the loader's Slippi
-Settings page: Flash Red on Failed L-Cancel, Disable Screen Shake, Center Align 2P HUD and Freeze
-Final Destination Background (`Nintendont/kernel/gecko/g_opt_*.bin`, byte for byte from
-slippi-ssbm-asm's `Output/Netplay/GALE01r2.ini`). Show Friendly Player Indicators is left out until
-Teams is sound. They change what is drawn, not the game, so two players need not agree on them: 12
-games with all four on matched Dolphin's replays frame for frame.
+Five of the codes a player can turn on in Slippi Dolphin are switches on the loader's Slippi
+Settings page: Flash Red on Failed L-Cancel, Disable Screen Shake, Center Align 2P HUD, Freeze
+Final Destination Background and, since 1.6.1, Show Friendly Player Indicators ("Team Indicators":
+432 bytes, three hooks that nothing else here patches) (`Nintendont/kernel/gecko/g_opt_*.bin`, byte
+for byte from slippi-ssbm-asm's `Output/Netplay/GALE01r2.ini`). They change what is drawn, not the
+game, so two players need not agree on them: 12 games with the first four on matched Dolphin's
+replays frame for frame, and with the fifth on, three Teams lobbies and two games against one
+opponent (2026-11-15).
 
 - **Where they go.** A normal boot runs Slippi's online codeset in every mode, the offline ones
   too, so the kernel adds the codes that are on to that codeset as it loads it (`so_files.c`,
@@ -357,7 +359,8 @@ games with all four on matched Dolphin's replays frame for frame.
   1 KB). The Screen setting's code goes with them: it is Dolphin's "Widescreen 16:9" byte for byte.
   A boot without the online codeset (no account, Slippi on port A) gets them after its other codes
   (`Patch.c`, `SlippWiiOptionalCodes`).
-- **Where they are kept.** Bits 16-20 of the loader's settings (`CommonConfig.h`, `NIN_CFG_SW_*`),
+- **Where they are kept.** Bits 16-24 of the loader's settings (`CommonConfig.h`, `NIN_CFG_SW_*`;
+  Quick Chat's two bits are among them),
   which Slippi Nintendont and SlippWii 1.3 leave as they find them. The file keeps its layout and
   version, as the rollback beta and 1.3 share `/slippwii_nincfg.bin`.
 - **What a log says.** The boot's own lines about the codeset are dropped before a PC's listener
@@ -372,6 +375,20 @@ drive:
 - **`crash-N.txt`, always.** When the game's crash report or a panic comes over the EXI, the ring's
   lines, the report (the `post:` lines among them) and what follows. The game has stopped, so it
   costs nothing.
+- **`desync-N.txt`, always.** When a frame's checksum is not an opponent's for that frame
+  (`check_sums`), the game gives an opponent up and goes on without it, or all three opponents
+  leave a game of four in its middle (they gave this console up): the ring's lines, a
+  `desync:` block and what follows to that game's end. The block is the game as set up (mode, stage,
+  each port's character/colour/team/shade, the delay) and, for a checksum, the inputs this console had
+  from each opponent for the 12 frames up to it. The ring before it has each player's choices
+  (`np: selections from player`, `exi: our selections`), the connections, and a player taken for gone
+  (`np: no connection left with player`, `exi: player N has left at frame`). The file ends with the
+  game, so the games after it have no writes. Read with a replay of the same game from a PC in it:
+  the same inputs with another result is the game's state (its setup, a player gone); other inputs
+  is the netcode. `test_desync_frame=N` makes one of a game that is in step. The same file is
+  written for a game that was set up and has had no poll 20 s later (`so_exi_start_watch`: all had
+  picked and the game never came), with the kernel's side of a disc read: the disc command in hand,
+  the file system's lock, the prefetch. `test_start_limit_ms=N` makes one of a game that starts.
 - **`log-N.txt`, with the loader's Diagnostic Log switch.** Every line of the boot: between games a
   write a second, in a game one every 5 s, at once when a match stops for 100 ms or more or a crash
   comes. In a match it also says every 5 s how the match goes, and when no pad poll has come for a

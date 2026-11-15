@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.6.1
+
+- **A desync leaves a report on the card.** When a game goes out of step with an opponent's,
+  SlippWii now saves `slippwii/logs/desync-N.txt` by itself, as it does a crash's report: what the
+  game was (mode, stage, each port's character, colour and team, the delay), what each player
+  chose, the connections, the frame where the game's checksum first differed and from whom, and the
+  inputs the Wii had from each opponent just before it. Nothing to turn on first. With a replay of
+  the same game from a PC player in it, that says what went wrong. A game that never starts after
+  everyone has picked leaves the same report.
+- **Quick Chat**, a setting on the *Slippi Settings* page with Slippi Dolphin's three choices:
+  *Yes* (every mode), *Direct* (in Direct only) or *No*. Where it is off you send no quick chat
+  messages and see none, and whoever writes to you is told chat is off. (It was a line in
+  `config.ini` before, which still works.)
+- **Team Indicators**, a switch on the same page: Slippi Dolphin's optional code "Show Friendly
+  Player Indicators". In online games your own character's tag says YOU, and in Teams your
+  teammates keep their marker.
+- The *Slippi Networking* row is gone from that page: it was always *Yes* in SlippWii and could not
+  be changed.
+- Building: a second place of the loader's start-up hang is avoided (a black screen right after
+  SlippWii is started; `tools/build.sh`). No released version had it.
+
 ## 1.6.0
 
 - **Teams and Party work.** A Teams game used to go out of step at once: the Wii set up a

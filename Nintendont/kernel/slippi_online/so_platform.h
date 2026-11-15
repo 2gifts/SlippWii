@@ -150,6 +150,8 @@ void so_make_dir(const char *path);
 int so_platform_info(char *out, int size);
 /* The loader's Diagnostic Log switch */
 int so_diag_log_setting(void);
+/* The loader's Quick Chat setting: 1 on (as without one), 2 in Direct only, 0 off */
+int so_quick_chat_setting(void);
 /* Reads up to `size` bytes of a file into `out` through `bounce` (32-byte
  * aligned, `bounce_size` bytes), a piece at a time: for destinations the SD
  * and USB drivers must not write to directly, such as the game's memory.

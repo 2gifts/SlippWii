@@ -141,6 +141,8 @@ On the *Slippi Settings* page:
 |---|---|
 | **Check for Updates** | Looks for a newer SlippWii and installs it (see *Updating*). |
 | **No Music** | Turns the game's music off, in the menus and in matches. Sound effects stay. |
+| **Quick Chat** | Slippi's quick chat on the online character select screen, with Slippi Dolphin's three choices: **Yes** (every mode), **Direct** (in Direct only) or **No**. Where it is off you send no messages and see none, and whoever writes to you is told chat is off. |
+| **Team Indicators** | In online games your own character's tag says YOU, and in Teams your teammates keep their marker. |
 | **L-Cancel Red Flash** | A character flashes red when it misses an L-cancel. |
 | **No Screen Shake** | The screen does not shake. |
 | **Center 2P HUD** | With two players, the percents sit in the middle of the screen. |
@@ -148,8 +150,9 @@ On the *Slippi Settings* page:
 | **Screen** (under *MELEE CODES*) | Widescreen, online too. |
 | **Diagnostic Log** | Saves SlippWii's log on the SD card for a problem report (see *Reporting problems*). Leave it off otherwise. |
 
-*L-Cancel Red Flash*, *No Screen Shake*, *Center 2P HUD* and *Freeze FD* are Slippi's own optional
-codes, the ones you can turn on in Slippi Dolphin. They and *No Music* work online and offline,
+*L-Cancel Red Flash*, *No Screen Shake*, *Center 2P HUD*, *Freeze FD* and *Team Indicators* are
+Slippi's own optional codes, the ones you can turn on in Slippi Dolphin (*Team Indicators* is its
+"Show Friendly Player Indicators"). They and *No Music* work online and offline,
 change only what your console shows and plays, and your opponent does not need them.
 
 SlippWii has its own app folder, settings file and data folder, so **Slippi Nintendont stays
@@ -163,7 +166,7 @@ On the SD card:
 | `slippwii/user.json` | Your Slippi account (keep it private) |
 | `slippwii/netplay.gct`, `slippwii/files/`, `slippwii/patches/` | Slippi's online code, menu files and patches |
 | `slippwii/config.ini` | Settings (optional) |
-| `slippwii/logs/` | Crash reports, and the diagnostic log when it is on |
+| `slippwii/logs/` | Crash and desync reports, and the diagnostic log when it is on |
 | `slippwii_nincfg.bin` | SlippWii's loader settings (Slippi Nintendont uses `slippi_nincfg.bin`) |
 
 If your games are on a USB drive, SlippWii copies what it needs to `slippwii/` on that drive by itself.
@@ -205,7 +208,9 @@ opponent's setup. A Slippi replay (`.slp`) from the opponent's side helps with d
 
 **Send the log.** It tells us far more than a description can.
 
-1. If the game **crashed**, there is nothing to turn on: SlippWii saved a crash report by itself.
+1. If the game **crashed** or **desynced**, there is nothing to turn on: SlippWii saved a report
+   by itself. For a desync, a Slippi replay (`.slp`) of the same game from a PC player in it is the
+   other half.
 2. For anything else (stutter, a freeze, a black screen, a disconnect), press **B** on the game list,
    go to the *Slippi Settings* page and set **Diagnostic Log** to **Yes**. Then play until the problem
    happens again. If the console hangs, wait ten seconds before you switch it off.

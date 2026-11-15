@@ -82,6 +82,11 @@ void so_exi_stats(SoExiStats *out);
 
 /* The game's last polls and the engine's last captures and loads, to the log. */
 void so_exi_report_last(void);
+/* A game out of step with an opponent's: said, and its file started (the network thread; so_logfile.c) */
+void so_exi_desync_service(void);
+/* A game set up and not started: said, with the kernel's side of the disc, as a desync is (the
+ * network thread) */
+void so_exi_start_watch(void);
 /* The game's 0xB0 polls so far: one a frame in a match (so_diag.c: a game that has stopped). */
 u32 so_exi_poll_count(void);
 /* How long ago the last one was, in ms (0xFFFFFFFF: there has been none) */

@@ -32,7 +32,7 @@ void DIDiag(void);	/* DI.c */
 /* A game that has stopped with its interrupts going on: what the kernel holds that it could be waiting
  * for. (Not the game's own memory: its newest writes are in the PPC's cache, and what the kernel reads
  * of its threads is seconds old. tools/ppc/stall.s, with --stall-all, says where the game is.) */
-static void kernel_where(void)
+void so_diag_where(void)
 {
 	DIDiag();
 	so_fs_diag();
@@ -49,7 +49,7 @@ static u8 exit_asked;	/* so_diag_request_exit: the kernel starts the Homebrew Ch
  * kernel sees them. */
 static u32 WatchThread(void *unused)
 {
-	u32 n = 0, retraces = 0, still = 0, booting = 0, polls = 0, stuck = 0, received = 0, silent = 0;
+	u32 n = 0, retraces = 0, still = 0, booting = 0, polls = 0, stuck = 0, received = 0, silent = 0, versus = 0;
 	/* (this word outlives a reboot: last run's count, standing still until the game's first
 	 * retrace, would look like a hung PowerPC if the game takes over 10 s to get there) */
 	if (test_control)
@@ -77,6 +77,15 @@ static u32 WatchThread(void *unused)
 					(unsigned)(so_ppc_word((0x003F0DFC + port * 0x24 + 0x0E) & ~3u) >> (8 * (3 - ((0x0E + port * 0x24) & 3))) & 0xFF),
 					(unsigned)so_ppc_word(0x004C1FAC), (unsigned)so_ppc_word(0x004C1FAC + 0x44),
 					(unsigned)so_ppc_word(0x004C1FAC + 0x88), (unsigned)so_ppc_word(0x004C1FAC + 0xCC));
+				/* The versus screen lasts 140 frames. A lobby of four sat on it for good while its three
+				 * PCs waited at READY (run 20261114-220434): what the kernel's side of a disc read is
+				 * doing, the second time it is seen here. */
+				if ((so_ppc_word(0x00479D30) & 0xFF0000FF) == 0x08000004) {
+					if (++versus >= 2)
+						so_diag_where();
+				} else {
+					versus = 0;
+				}
 			}
 		}
 		/* A game whose own thread has stopped while its interrupts go on counts retraces all the
@@ -91,7 +100,7 @@ static u32 WatchThread(void *unused)
 			} else if (++stuck == STUCK_S) {
 				so_log("diag: GAME STUCK: no poll for %u s in a match, retraces going on (%u)", (unsigned)STUCK_S,
 					(unsigned)so_ppc_word(SO_TEST_RETRACES));
-				kernel_where();
+				so_diag_where();
 				so_exi_report_last();
 				so_diag_launch_loader();
 			}

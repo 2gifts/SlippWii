@@ -76,7 +76,7 @@ shares. A file is synced every 10 s, so a game cut short still leaves a readable
 | `boot_quiet_s` | 60 | Seconds without traffic after start-up |
 | `ack_delay_us` | 0 | Hold a pad ack up to this long to share a datagram with our next pad |
 | `selftest`, `selftest_code`, `selftest_frames`, `selftest_allow_real_mm` | 0, -, 600, 0 | Self-test (below) |
-| `chat` | 1 | 0: quick chat off (received messages answer "chat disabled") |
+| `chat` | 1 | Quick chat: 1 as the loader's *Quick Chat* setting says, 2 in Direct only, 0 off (received messages answer "chat disabled") |
 | `rumble` | 1 | 0: controller rumble off in online play (the CSS switch saves `rumble.txt`, which wins) |
 | `ping_display` | 1 | 0: no ping in a game's top left corner (the CSS switch saves `ping.txt`, which wins) |
 | `test_drop_pct` | 0 | Tests: drop this share of our pad packets |

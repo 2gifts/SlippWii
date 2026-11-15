@@ -52,12 +52,21 @@ def make_plan(rounds, players):
             for i in range(rounds)]
 
 
+def seats_of(args):
+    """The connect codes in the order of their ports."""
+    seats = CODES[1:args.players]
+    seats.insert(min(args.wii_seat, args.players) - 1, CODES[0])
+    return seats
+
+
 def autoplay_codes(run_dir, plan, args):
     """One bot per player; the first one's also as the Wii's boot code."""
+    seats = seats_of(args)
     for k in range(args.players):
         name = 'autoplay-wii' if k == 0 else f'autoplay-p{k + 1}'
         spec = {'rounds': [[chars[k], stage] for chars, stage in plan], 'lras_s': args.lras_s,
-                'seed': args.seed * 8 + k + 1, 'person': 0 if args.plain_bot else 1, 'mode': MODES[args.mode]}
+                'seed': args.seed * 8 + k + 1, 'person': 0 if args.plain_bot else 1, 'mode': MODES[args.mode],
+                'team': args.teams[seats.index(CODES[k])] if args.teams else 0}
         (run_dir / f'plan-p{k + 1}.json').write_text(json.dumps(spec))
         rs.run(sys.executable, HERE / 'build_autoplay.py', '--plan', run_dir / f'plan-p{k + 1}.json',
                '--out', run_dir / name)
@@ -94,6 +103,17 @@ def start_of(path):
         return slp_compare.field(start, 0x13, 2, '>H'), chars, start[0x0D] if len(start) > 0x0D else None
     except (Exception, SystemExit):
         return None, [None] * 4, None
+
+
+def teams_of(path):
+    """Each port's team in a Teams game, by a replay's start ('red', 'blue', 'green'), else ''."""
+    try:
+        start, _ = slp_compare.index(path)
+        if not start[0x0D]:
+            return [''] * 4
+        return [' (' + ('red', 'blue', 'green')[start[0x6E + 0x24 * port] % 3] + ')' for port in range(4)]
+    except (Exception, SystemExit):
+        return [''] * 4
 
 
 def char_name(ext):
@@ -186,7 +206,9 @@ def report(run_dir, args, plan, failure, cpu, returned):
                 cells.append('match (but its last frames, not final in one)')
             else:
                 cells.append(f'DESYNC at frame {first.group(1)}' if first else 'not compared')
-        rows.append(f'| {i + 1} | {stage} | ' + ' / '.join(char_name(c) for c in chars) + f' | {frames_of(ref) if ref else ""} | '
+        teams = teams_of(ref) if ref else [''] * 4
+        rows.append(f'| {i + 1} | {stage} | ' + ' / '.join(char_name(c) + t for c, t in zip(chars, teams))
+                    + f' | {frames_of(ref) if ref else ""} | '
                     + ' | '.join(cells) + ' |')
     lines += [f'{n} games; {compared} replays compared with Dolphin 2\'s: {match} match, {compared - match} do not.', '',
               '| # | Stage | Ports 1-4 | Frames | ' + ' | '.join(names[k] for k in range(args.players) if k != 1) + ' |',
@@ -221,13 +243,20 @@ def report(run_dir, args, plan, failure, cpu, returned):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     ap.add_argument('--mode', required=True, choices=list(MODES))
-    ap.add_argument('--players', type=int, default=4, choices=[2, 3, 4], help='Party: the lobby size (Teams is always 4)')
+    ap.add_argument('--players', type=int, default=4, choices=[2, 3, 4],
+                    help='the lobby size (Teams with 3: 2 against 1, or 1 against 1 against 1)')
+    ap.add_argument('--codes', type=lambda v: int(v, 0), default=0, metavar='BITS',
+                    help="the Wii's loader switches, as run_sweep.py's --codes (128: Team Indicators)")
     ap.add_argument('--rounds', type=int, default=3)
     ap.add_argument('--lras-s', type=int, default=40, help='seconds of play before each game is quit (0: never)')
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--plain-bot', action='store_true', help="the bots' sticks are still")
     ap.add_argument('--wii-ip', default=None, help="the Wii's address; without it a fourth Dolphin copy plays its part")
     ap.add_argument('--wii-seat', type=int, default=4, choices=[1, 2, 3, 4], help='the port the first account gets')
+    ap.add_argument('--teams', type=lambda v: [int(t) for t in v.split(',')], metavar='T,T,T,T',
+                    help="Teams: the team each port's player picks with Slippi's team button, 0 red, 1 blue, 2 green "
+                         '(0,0,1,1: ports 1 and 2 against 3 and 4). Without it nobody presses the button: all are '
+                         'red, and the game draws the teams')
     ap.add_argument('--lockstep', action='store_true',
                     help="a build without the rollback engine (the Wii's game waits for inputs with it too, against "
                          'more than one opponent: this is the build that cannot do otherwise)')
@@ -256,7 +285,7 @@ def main():
     ap.add_argument('--boot-arg', action='append', default=[], metavar='OPTION',
                     help='one more option for tools/build_online_boot.py')
     args = ap.parse_args()
-    if args.mode == 'teams':
+    if args.mode == 'teams' and args.players < 3:
         args.players = 4
     if not MM.exists():
         sys.exit(f'{MM}: build it first (Nintendont/kernel/slippi_online/tests/pc/build.sh)')
@@ -272,8 +301,7 @@ def main():
             build_wii(run_dir, [(c[0], c[1], s) for c, s in plan], args, ip)
     rs.kill_leftovers()
     # seats: the server gives ports in this order of connect codes
-    seats = CODES[1:args.players]
-    seats.insert(min(args.wii_seat, args.players) - 1, CODES[0])
+    seats = seats_of(args)
     dolphins = {}
     for k in range(args.players):
         if k == 0 and args.wii_ip:
@@ -315,6 +343,7 @@ def main():
     if args.wii_ip:
         procs.append(rs.start('watch', [sys.executable, '-u', ROOT / 'tools/online_selftest.py', 'watch', '--boot',
                                         '--dol', run_dir / 'loader-sweep.dol', '--wii-ip', args.wii_ip,
+                                        *(['--cfg', rs.loader_cfg(run_dir, codes=args.codes)] if args.codes else []),
                                         '--timeout', args.timeout_min * 60], run_dir))
     if args.capture and args.wii_ip:
         procs.append(rs.start('capture', [decode_marker.FFMPEG, '-y', '-f', 'dshow', '-rtbufsize', '200M', '-vcodec', 'mjpeg',

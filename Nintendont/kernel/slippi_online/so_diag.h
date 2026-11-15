@@ -62,6 +62,9 @@ void so_diag_exit_watch(void);
  * the Homebrew Channel (the Wii Menu if there is none), which restarts the
  * console. Nothing after another exit: Nintendont's own finishes by itself. */
 void so_diag_launch_loader(void);
+/* What the kernel holds that a game could be waiting for: the disc command in hand, the file
+ * system's lock, the prefetch (three log lines) */
+void so_diag_where(void);
 
 /* The next beacon text (NUL-terminated, at most 31 characters). Lock-free:
  * called from the broadcast thread. */

@@ -408,6 +408,8 @@ static void logfile_tick(int now_anyway)
 			polled = 0;
 		}
 	}
+	so_exi_desync_service();
+	so_exi_start_watch();
 	so_logfile_service(age < 300, now_anyway);
 }
 
@@ -520,6 +522,8 @@ int so_client_init(void)
 	c.init_ms = so_time_ms();
 	SO_PHASE("init config");
 	res = so_config_load(&c.config, &c.user);
+	if (c.config.chat == 1)
+		c.config.chat = (u8)so_quick_chat_setting();	/* (the loader's setting; config.ini's chat= stands if it is not 1) */
 	so_logfile_init(so_diag_log_setting());	/* (lines before this are in no file: the heap's and the config's) */
 	load_delay();
 	load_rumble();
@@ -528,10 +532,11 @@ int so_client_init(void)
 	so_step_pause_us = (u32)c.config.diag_step_pause_ms * 1000;
 	so_diag_start(&c.config);
 	if (so_config_is_real_mm(&c.config))
-		so_log("client: matchmaking %s:%u, app version %s, delay %u", c.config.mm_host,
-			(unsigned)c.config.mm_port, c.config.app_version, (unsigned)c.config.delay);
+		so_log("client: matchmaking %s:%u, app version %s, delay %u, chat %u", c.config.mm_host,
+			(unsigned)c.config.mm_port, c.config.app_version, (unsigned)c.config.delay, (unsigned)c.config.chat);
 	else
-		so_log("client: TEST matchmaking server %s:%u", c.config.mm_host, (unsigned)c.config.mm_port);
+		so_log("client: TEST matchmaking server %s:%u, chat %u", c.config.mm_host, (unsigned)c.config.mm_port,
+			(unsigned)c.config.chat);
 	on_wifi(0);	/* (for the log: a search asks again) */
 
 	SO_PHASE("init threads");

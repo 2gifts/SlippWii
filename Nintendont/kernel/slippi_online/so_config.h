@@ -126,7 +126,7 @@ typedef struct {
 	/* staying level: behind by this much (us, by the Wii's reckoning) it starts, ahead of
 	 * minus this it stops (0: 2500 and 1500); frames end early 2 ms past the start */
 	u16 rollback_nudge_on_us, rollback_nudge_off_us;	/* the earliest it reads the pad for that (0: the engine's 8000) */
-	u8 chat;	/* quick chat in Direct (Slippi's default: on) */
+	u8 chat;	/* quick chat: 1 on (Slippi's default), 2 in Direct only, 0 off (so_exi.c, chat_on) */
 	u8 rumble;	/* controller rumble in online play (default on; rumble.txt, set on the
 		 * online CSS, wins over config.ini) */
 	u8 ping_display;	/* the ping in a game's top left corner (default on; ping.txt, set on
@@ -155,6 +155,10 @@ typedef struct {
 				 * first lines go to the PC's log: what a boot before wrote is really there (so_exi.c, logfile_dump) */
 	u16 test_crash_frame;	/* tests: at this frame the kernel does what it does with a crash report, the game
 				 * going on: the crash file on the card (so_logfile.c) */
+	u16 test_start_limit_ms;	/* tests: a game set up this long ago with no poll yet counts as one that never
+				 * started (20 s without it), so a game that starts leaves that report (so_exi.c) */
+	u16 test_desync_frame;	/* tests: from this frame an opponent's checksum is taken for another: the desync
+				 * file on the card, of a game that is in step (so_exi.c, check_sums) */
 	/* tests: each frame run also takes this long, so the game falls behind and runs
 	 * queued inputs, as it does now and then at a high ping; with the capture check
 	 * as Slippi has it (so_gct_fix_capture_check), that loses savestates */

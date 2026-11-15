@@ -66,6 +66,7 @@ typedef struct {
 	u8 mode;		/* 0xBF the Online Play option to choose: 3 Teams, 4 Party (0: Direct, 2) */
 	s32 played;		/* 0xC0 the game's frames in_game has made inputs for */
 	s8 jx, jy;		/* 0xC4 the stick's unsteadiness this frame */
+	u8 team;		/* 0xC6 (build_autoplay.py) Teams: the team to pick with Slippi's button: 0 red, 1 blue, 2 green */
 } Bot;
 
 #define B_LEFT 0x0001
@@ -213,6 +214,21 @@ static void name_entry(Bot *b, Pad *o)
 		o->button = B_A;
 }
 
+/* The team Slippi's team button stands at: 1 red, 2 blue, 3 green, as the button keeps it in its own
+ * code (InitTeamToggleButton.asm, the C2 at 0x802652F4: a branch, a blrl, the byte) so that it
+ * stays for the session; 0: no such code here. */
+static u32 team_now(void)
+{
+	u32 ins = rd32(0x802652F4), at, v;
+	if (ins >> 26 != 18)
+		return 0;
+	at = 0x802652F4u + (u32)(((s32)(ins << 6) >> 6) & ~3);
+	if (!valid_ptr(at) || rd32(at + 4) != 0x4E800021u)
+		return 0;
+	v = rd8(at + 8);
+	return v >= 1 && v <= 3 ? v : 0;
+}
+
 static void css(Bot *b, Pad *o)
 {
 	if (b->seed == 0xEE) {
@@ -229,6 +245,21 @@ static void css(Bot *b, Pad *o)
 	u32 cursor = rd32(0x804A0BC0 + (rd8(0x804D6CF5) <= 1 ? 0 : port) * 4);	/* (one hand in a one-player CSS) */
 	if (b->scene_polls < 40)
 		return;
+	if (b->team && b->step == 0 && valid_ptr(cursor) && team_now() && team_now() != (u32)b->team + 1) {
+		/* Slippi's team button (its InitTeamToggleButton.asm: the hand within x -23.5..-17.5,
+		 * y -5..-2.5, and A pressed that frame, is the next team: red, blue, green), pressed
+		 * until the button itself says the team. (Not a count of presses: on a Wii the polls
+		 * go on while the CSS loads, and presses counted by them were made before the screen
+		 * was there: its bot stayed red in every lobby of 2026-11-14, seen on the capture.)
+		 * All players on one team is the other case: the teams are then drawn. As bit
+		 * patterns: this code has no constants of its own. */
+		u32 t = b->scene_polls % 30;
+		*(volatile u32 *)(cursor + 0x0C) = 0xC1A40000u;	/* -20.5 */
+		*(volatile u32 *)(cursor + 0x10) = 0xC0700000u;	/* -3.75 */
+		if (t >= 10 && t < 12)
+			o->button = B_A;
+		return;
+	}
 	if (b->step == 0 && valid_ptr(cursor)) {
 		u32 e = 0x803F0B24u + icon * 0x1C;
 		float x = (rdf(e + 0x0C) + rdf(e + 0x10)) * b->half;

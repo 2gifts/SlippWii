@@ -499,6 +499,11 @@ int so_diag_log_setting(void)
 	return ConfigGetConfig(NIN_CFG_SW_DIAG_LOG);
 }
 
+int so_quick_chat_setting(void)
+{
+	return ConfigGetConfig(NIN_CFG_SW_NO_CHAT) ? 0 : ConfigGetConfig(NIN_CFG_SW_CHAT_DIRECT) ? 2 : 1;
+}
+
 char *getMainDrivePath(const char *path);	/* common.c */
 
 u32 SlippWiiOptionalCodes(u8 *out, u32 room, int screen);	/* Patch.c */

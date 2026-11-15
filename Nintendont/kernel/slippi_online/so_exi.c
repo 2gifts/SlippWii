@@ -311,8 +311,13 @@ static struct {
 		s32 first_desync;
 		u32 hard, near, soft;	/* the desyncs as Slippi's ASM sees them: positions off (ends the game), off by 1, action states only */
 		u32 first_ours, first_theirs;
+		u8 setup_said;	/* say_setup's line is in the log */
+		u8 gone_said;	/* a bit an opponent: fill_gone's line is */
+		u8 left_said;	/* every opponent gone in the middle of the game: kept for a report */
 	} game;
 	int initialised;
+	u32 setup_ms;	/* a game was set up then (setup_on), and has had no poll yet (so_exi_start_watch) */
+	u8 setup_on;	/* 1: waiting for that poll; 2: said that it has not come (once a game) */
 	int drive_runs;	/* the drive's runs since the last game still to log, a line a poll */
 	u8 poll_delay;	/* the last 0xB0's delay (diagnostics: a change is logged) */
 	/* so_prefetch may use the engine's scratch again: once this game is over, and
@@ -424,6 +429,7 @@ static void cleanup(void)
 	x.forced_error = 0;
 	x.sent_chat = 0;
 	x.last_frame = 0;	/* the next frame 1 starts a game */
+	x.setup_on = 0;
 }
 
 /* ---- 0xEF PING_DISPLAY ----------------------------------------------------- */
@@ -471,6 +477,11 @@ static void fill_gone(u8 *r, int i, s32 frame, s32 finalized, s32 head, s32 newe
 	so_put_u32(r + 0x02 + i * 8, (u32)cf);
 	so_put_u32(r + 0x06 + i * 8, cs);
 	*num = newest < frame ? newest : frame;
+	if (!(x.game.gone_said & (1 << i))) {
+		x.game.gone_said |= (u8)(1 << i);
+		so_log("exi: player %u has left at frame %d: its inputs end at frame %d, it is out of the game from frame %d",
+			(unsigned)so_np_remote_player_idx(i) + 1, (int)frame, (int)head, (int)despawn);
+	}
 	for (k = 0; k < ROLLBACK_MAX_FRAMES && off + k <= top - lo; k++)
 		so_np_remote_pad(i, top - off - k, pads + k * PAD_FULL_SIZE);
 	r[0x2A + 3 * ROLLBACK_MAX_FRAMES * PAD_FULL_SIZE + i] = frame >= despawn;
@@ -528,6 +539,131 @@ static void fill_remote_inputs(u8 *r, s32 frame, s32 finalized, const s32 *heads
 			if (!x.game.rb || k == 0 || nums[i] - k >= finalized)	/* Dolphin's holds no older ones */
 				so_np_remote_pad(i, nums[i] - k, pads + k * PAD_FULL_SIZE);	/* 8 bytes; the rest stays 0 */
 	}
+}
+
+/* The game as it was set up, in a line: what a desync's report is read by first (two consoles with
+ * another team, colour or stage here are in different games from the first frame). Each port:
+ * character/colour/team/shade, - for none, * for this console's. (Not with dots: four numbers with
+ * dots are an address to the card's file, and lose two: so_logfile_scrub.) */
+static void say_setup(void)
+{
+	const u8 *b = x.match_block;
+	char ports[64];
+	int i, len = 0;
+	for (i = 0; i < 4; i++) {
+		const u8 *q = b + 0x60 + i * 0x24;
+		if (q[1] != 0)
+			len += so_snprintf(ports + len, sizeof(ports) - len, " -");
+		else
+			len += so_snprintf(ports + len, sizeof(ports) - len, " %u/%u/%u/%u%s", (unsigned)q[0], (unsigned)q[3],
+				(unsigned)q[9], (unsigned)q[7], i == x.local_idx ? "*" : "");
+	}
+	so_log("exi: the game: mode %u, stage %u, teams %u, delay %u, %u opponents, rollback %u; ports:%s", (unsigned)x.mode,
+		(unsigned)so_get_u16(b + 0x0E), (unsigned)b[0x08], (unsigned)x.game.mq.delay, (unsigned)so_np_remote_count(),
+		(unsigned)x.game.rb, ports);
+}
+
+/* A desync's report. check_sums keeps, at the first frame whose checksum is not an opponent's, the
+ * inputs this console had from each opponent for the frames up to it; so_exi_desync_service (the
+ * network thread: not the game's poll) says them, with the game's setup, and starts the file. With
+ * a replay of the same game from a PC in it, that is: the same inputs and another result (the game's
+ * state: its setup, a player taken for gone), or other inputs (the netcode). On the online heap, as
+ * the checksums: the kernel's data is full. */
+#define DESYNC_PADS 12
+static struct {
+	/* 1: a checksum differs; 2: an opponent was given up, and the game goes on without it; 3: every
+	 * opponent left in the middle of a game of four (what they gave this console up for is in the
+	 * lines before) */
+	u8 pending;
+	u8 remotes;
+	u8 over;	/* the game ended before the network thread's turn: the file ends when it is started */
+	u8 player[SO_REMOTE_MAX];
+	s32 frame;
+	u8 have[SO_REMOTE_MAX][DESYNC_PADS];
+	u8 pads[SO_REMOTE_MAX][DESYNC_PADS][SO_PAD_SIZE];
+} *desync;
+
+/* (the game's poll, the client lock held) */
+static void desync_keep(int kind, s32 frame, int remotes)
+{
+	int i, k;
+	if (!desync && !(desync = so_malloc(sizeof(*desync))))
+		return;
+	memset(desync, 0, sizeof(*desync));
+	desync->frame = frame;
+	desync->remotes = (u8)(kind == 1 ? remotes : 0);
+	for (i = 0; i < desync->remotes && i < SO_REMOTE_MAX; i++) {
+		desync->player[i] = so_np_remote_player_idx(i);
+		for (k = 0; k < DESYNC_PADS; k++)
+			desync->have[i][k] = so_np_remote_pad(i, frame - (DESYNC_PADS - 1) + k, desync->pads[i][k]) == 0;
+	}
+	desync->pending = (u8)kind;
+}
+
+void so_exi_desync_service(void)
+{
+	static const char hex[] = "0123456789abcdef";
+	int kind, i, k, b;
+	if (!desync || !desync->pending)
+		return;
+	kind = desync->pending;
+	desync->pending = 0;
+	so_log("desync: %s (frame %d); what this console had:", kind == 1 ? "a frame's checksum is not an opponent's" :
+		kind == 2 ? "an opponent's inputs stopped, and the game goes on without it" :
+		"every opponent left in the middle of the game", (int)desync->frame);
+	say_setup();
+	for (i = 0; i < desync->remotes; i++) {
+		for (k = 0; k < DESYNC_PADS; k += 4) {
+			char line[4 * (2 * SO_PAD_SIZE + 1) + 1];
+			int len = 0, j;
+			for (j = k; j < k + 4; j++) {
+				for (b = 0; b < SO_PAD_SIZE; b++) {
+					u8 v = desync->pads[i][j][b];
+					line[len++] = desync->have[i][j] ? hex[v >> 4] : '-';
+					line[len++] = desync->have[i][j] ? hex[v & 15] : '-';
+				}
+				line[len++] = ' ';
+			}
+			line[len] = 0;
+			so_log("desync: player %u's inputs, frames %d to %d: %s", (unsigned)desync->player[i] + 1,
+				(int)(desync->frame - (DESYNC_PADS - 1) + k), (int)(desync->frame - (DESYNC_PADS - 1) + k + 3), line);
+		}
+	}
+	so_logfile_desync();
+	if (desync->over) {
+		desync->over = 0;
+		so_logfile_report_end();
+	}
+}
+
+/* A game that was set up and never started. Once (run 20261114-220434, a Teams lobby, 1 of about 130
+ * that day and night) all four had picked, the Wii went to the versus screen and stayed on it, having
+ * loaded that screen's files and none of the game's, and its three PCs stood at READY for good. From
+ * the game's setup to its first poll is 3 to 5 s here; a PC gives a player up after 7. So 20 s without
+ * a poll, on the versus screen or past it: said with the game's setup and the kernel's side of a disc
+ * read, and written as a desync's report is: nothing else would be left of it. */
+#define START_LIMIT_MS 20000
+void so_exi_start_watch(void)
+{
+	u32 limit = so_client_config()->test_start_limit_ms, waited, scene;
+	if (x.setup_on != 1)
+		return;
+	waited = so_time_ms() - x.setup_ms;
+	if (waited < (limit ? limit : START_LIMIT_MS) || waited > 0x7FFFFFFFu)	/* (or set this very moment) */
+		return;
+	/* (only on the versus screen or in the game's own scene: all have picked while one may still be
+	 * choosing the stage, for as long as it likes; looked at again in a second) */
+	scene = so_ppc_word(0x00479D30) & 0xFF0000FF;
+	if (scene != 0x08000004 && scene != 0x08000002) {
+		x.setup_ms += 1000;
+		return;
+	}
+	x.setup_on = 2;
+	so_log("desync: the game was set up %u s ago and has not started; what this console had:", (unsigned)(waited / 1000));
+	say_setup();
+	so_diag_where();
+	so_logfile_desync();
+	so_logfile_report_end();	/* (this, and no more: a game that starts after all is another matter) */
 }
 
 /* Desync detection: this console's checksum of each finalized frame
@@ -731,6 +867,11 @@ static void log_game(int keep)
 		so_log("%s", line);
 	}
 	so_client_unlock();
+	/* (a desync's file: this game's lines, and no write in the next) */
+	if (desync && desync->pending)
+		desync->over = 1;
+	else
+		so_logfile_report_end();
 	if (keep)
 		x.game.reported = 1;
 	else
@@ -756,6 +897,8 @@ static void check_sums(s32 finalized, u32 checksum, int remotes)
 		slot = cf % SUMS;
 		if (sums[slot].frame != cf)
 			continue;
+		if (so_client_config()->test_desync_frame && cf >= (s32)so_client_config()->test_desync_frame && !x.game.desyncs)
+			cs ^= 0x10;	/* tests: the desync file, of a game in step */
 		x.game.last_checked = cf;
 		x.game.checks++;
 		if (sums[slot].sum != cs) {
@@ -776,8 +919,9 @@ static void check_sums(s32 finalized, u32 checksum, int remotes)
 				x.game.first_desync = cf;
 				x.game.first_ours = ours;
 				x.game.first_theirs = cs;
-				so_log("exi: checksum differs at frame %d: ours %08x, the opponent's %08x", (int)cf,
-					(unsigned)ours, (unsigned)cs);
+				so_log("exi: checksum differs at frame %d: ours %08x, player %u's %08x", (int)cf,
+					(unsigned)ours, (unsigned)so_np_remote_player_idx(i) + 1, (unsigned)cs);
+				desync_keep(1, cf, remotes);
 			}
 		}
 	}
@@ -1128,11 +1272,11 @@ static u32 marks_found, marks_first[8];	/* (so_exi_scratch_boot) */
  * from the kernel starts at 0, and the diagnostics this session reports are its own.
  * ISO.c, once it has given the scratch to the engine: before the game runs at all. */
 /* tests (test_logfile_dump): the newest file in the log's folder on the card, as newest.txt names it, read
- * back: its size as far as 6 KB and its first lines, to the PC's log only. A file this boot is writing is
- * left alone (it is open). */
+ * back: its size as far as 24 KB, its first lines, and of the rest those a desync's report is read by, to
+ * the PC's log only. A file this boot is writing is left alone (it is open). */
 static void logfile_dump(void)
 {
-	enum { MOST = 6144, LINES = 24 };
+	enum { MOST = 24576, FIRST = 8, LINES = 48 };
 	char *buf = (char *)so_malloc(MOST + 1), path[64], *name, *end, *line;
 	int n, lines = 0;
 	if (!buf)
@@ -1156,16 +1300,20 @@ static void logfile_dump(void)
 	n = so_read_file(path, buf, MOST);
 	so_log_private("card> %s: %d bytes read (of at most %d)", path, n, (int)MOST);
 	buf[n > 0 ? n : 0] = 0;
-	for (line = buf; n > 0 && *line && lines < LINES; lines++) {
+	for (line = buf; n > 0 && *line && lines < LINES;) {
 		char *nl = strchr(line, 10);	/* (a newline) */
 		if (nl)
 			*nl = 0;
-		so_log_private("card> %.140s", line);
+		if (lines < FIRST || strstr(line, "desync") || strstr(line, "the game:") || strstr(line, "checksum") ||
+		    strstr(line, "selections") || strstr(line, "has left") || strstr(line, "game over") ||
+		    strstr(line, " di: ") || strstr(line, "fs lock") || strstr(line, "prefetch: state")) {
+			so_log_private("card> %.140s", line);
+			if (!(++lines & 7))
+				so_client_flush_logs();
+		}
 		if (!nl)
 			break;
 		line = nl + 1;
-		if (!(lines & 7))
-			so_client_flush_logs();
 	}
 	so_free(buf);
 }
@@ -1661,6 +1809,7 @@ static void on_online_inputs(const u8 *p)
 		}
 	}
 	x.game.last_poll_us = t_poll;
+	x.setup_on = 0;	/* (the game has started: so_exi_start_watch) */
 	if (!r)
 		return;
 	if (!client_up()) {
@@ -1696,6 +1845,8 @@ static void on_online_inputs(const u8 *p)
 		x.drive_runs = 1;
 		so_log("exi: this game rolls back from frame %d (test lag %u frames, spikes %u ms)", (int)frame,
 			(unsigned)so_client_config()->test_lag_frames, (unsigned)so_client_config()->test_spike_ms);
+		say_setup();
+		x.game.setup_said = 1;
 		so_set_ppc_word(ENGINE_SLOW_FRAME, so_client_config()->test_slow_frame_ms);
 		so_set_ppc_word(ENGINE_POLL_EARLY, so_client_config()->rollback_poll_early_us |
 			(u32)so_client_config()->rollback_poll_deep_us << 16);
@@ -1714,6 +1865,9 @@ static void on_online_inputs(const u8 *p)
 	} else if (frame == 2 && x.game.depth_frame != 2 && !rollback_wanted()) {
 		so_log("exi: this game waits for inputs (rollback %u, scratch %u, %u opponents)",
 			(unsigned)so_client_config()->rollback, (unsigned)so_ppc_scratch_free, (unsigned)so_np_remote_count());
+		if (!x.game.setup_said)
+			say_setup();
+		x.game.setup_said = 1;
 	}
 	/* (a new connection's ping is first measured from this game's own acks, often after the write
 	 * above: the engine's word follows it through the countdown, where the engine reads it for its
@@ -1726,6 +1880,12 @@ static void on_online_inputs(const u8 *p)
 	if (t_lock > x.game.max_lock_us)
 		x.game.max_lock_us = (u32)t_lock;
 	if (so_np_status() != SO_NP_CONNECTED) {
+		/* A game of four ends for one console alone when the three others have given it up (one
+		 * who leaves is played on without): kept as a desync is, for the lines before this one. */
+		if (so_np_remote_count() > 1 && !x.game.reported && !x.game.left_said && !x.game.desyncs) {
+			x.game.left_said = 1;
+			desync_keep(3, frame, 0);
+		}
 		so_client_unlock();
 		r[0] = RESP_DISCONNECTED;
 		if (x.game.rb)
@@ -1790,6 +1950,8 @@ static void on_online_inputs(const u8 *p)
 					(unsigned)so_np_remote_player_idx(i) + 1);
 				so_np_drop_player(i);
 				x.game.short_since_us[i] = 0;
+				if (!x.game.desyncs)
+					desync_keep(2, frame, remotes);
 			}
 			continue;
 		}
@@ -2022,6 +2184,13 @@ static int rules_broken(int remotes)
 	return 1;
 }
 
+/* isSlippiChatEnabled: the setting on, or "in Direct only" and this is Direct */
+static int chat_on(void)
+{
+	u8 chat = so_client_config()->chat;
+	return chat == 1 || (chat == 2 && x.mode == SO_MODE_DIRECT);
+}
+
 /* Writes the per-game fields into the match block once both players have
  * picked. The client lock is held. */
 static u32 build_game(int remotes, u8 *alt_out)
@@ -2161,7 +2330,7 @@ static void on_get_match_state(void)
 		if (!sent) {
 			u8 from;
 			chat_id = (u8)so_np_take_chat(&from);
-			if (chat_id && chat_id != SO_CHAT_DISABLED && !so_client_config()->chat) {
+			if (chat_id && chat_id != SO_CHAT_DISABLED && !chat_on()) {
 				so_np_send_chat(SO_CHAT_DISABLED);
 				chat_id = 0;
 			}
@@ -2184,6 +2353,10 @@ static void on_get_match_state(void)
 				continue;
 			}
 			rng = build_game(remotes, &alt);
+			if (!x.setup_on) {	/* (the game asks twice on its way in: from the first) */
+				x.setup_ms = so_time_ms();
+				x.setup_on = 1;
+			}
 		}
 		game_delay = lobby_delay(remotes);	/* (with the lock: it reads the connections) */
 		so_client_unlock();
@@ -2316,6 +2489,10 @@ static void on_set_selections(const u8 *p)
 		s.stage_id = random_stage();
 	s.alt_stage_mode = p[9];
 	s.rng_offset = so_random() % 0xFFFF;
+	if (s.is_character_selected || s.is_stage_selected)
+		so_log("exi: our selections: char %u/%u%s, team %u, stage %u%s", (unsigned)s.character_id,
+			(unsigned)s.character_color, s.is_character_selected ? " (picked)" : "", (unsigned)s.team_id,
+			(unsigned)s.stage_id, s.is_stage_selected ? " (picked)" : "");
 	merge_selections(&x.local_sel, &s);
 	if (s.is_character_selected)
 		so_pf_want_char(0, s.character_id, s.character_color);
@@ -2348,7 +2525,7 @@ static void on_online_status(void)
 
 static void on_send_chat(const u8 *p)
 {
-	if (!x.have_client || !so_client_config()->chat)
+	if (!x.have_client || !chat_on())
 		return;
 	so_client_lock();
 	if (so_np_status() == SO_NP_CONNECTED) {

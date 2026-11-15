@@ -293,14 +293,104 @@ So that nobody tries them again without a new reason:
 - **Slippi's real servers and real players.** What the server sends for Party (how many players,
   items, the stage list) is not known; the test server's choices stand in for it. The first real
   session is the test.
-- **A long soak** of either mode (the longest lobby: 4 games; Party: 2).
-- **Loss on the line** (every `--net` run had none), and pings over 130 ms.
+- **A long lobby** (the longest: 4 games in a row; the soak of "After the release" is 105 lobbies
+  of one or two games).
+- **Pings over 130 ms**, and more loss than 1% (see "After the release").
 - **Two Wiis in one lobby** (one console here). Each would wait for the other.
 - **The release build in automated runs.** Every four-player run here was a test build
   (`test_control=1`).
 - **Slippi's settings beside the game:** 480p, widescreen, the optional codes, with four players.
 - **Items** in Party (`--items`), and Party with fewer than four (`--players`): the options exist,
   no run used them.
+
+## After the release
+
+**The first report came the day 1.6.0 went out:** a desync in the first game of a doubles lobby
+(Teams by a lobby code). Nothing came with it: a desync wrote nothing to the card unless the
+Diagnostic Log happened to be on.
+
+What was done about it, 2026-11-14:
+
+- **The code was read against Slippi Dolphin 3.6.4 again**: the teams, colours and shades of the
+  game's setup, the selections message and how it is merged, which opponent is which port, the
+  connections and who has left, and Slippi's own team button. No difference found.
+- **What a lobby of people does and the lab's bots never did, played on the Wii.** Until then every
+  Teams lobby here had all four on the red team, where the game draws the teams itself; people pick
+  them. `lobby.py --teams 0,0,1,1` has each bot press Slippi's team button. And the Wii had only
+  been in ports 1 and 4.
+
+| Lobby (2 games each) | Result |
+|---|---|
+| The PCs' teams by hand, the Wii in port 4, 3, 2 and 1 (40 s games, its replays compared) | all replays the same |
+| Drawn teams, the Wii in port 2 and in port 3 | all replays the same |
+| The PCs' teams by hand, the Wii in port 2, 63 ms with 1% loss, 3-minute games | PCs' replays the same, 0 checksums differ |
+| The PCs' teams by hand, the Wii in port 3, 63 ms with 1% loss, 3-minute games, its replays compared | all replays the same |
+
+- **The Wii's own bot never changed its team in those lobbies** (so several were 3 against 1, which
+  Slippi allows and which stayed in sync). The test's fault, not the Wii's: the button answers a
+  person, and the bot counted its presses by controller polls, which on a Wii go on while the
+  character select screen loads, so its press was made before the screen was there (seen on the
+  capture card). It now presses until the button itself says the team. With that: the Wii picks
+  blue, says so in its selections, the versus screen and the game are 2 against 2, and the
+  replays match.
+- **One lobby did fail, and not by a desync** (run 20261114-220434, 1 of about 30 lobbies that day,
+  and not again in four more of the same). All four had picked; the Wii went to the versus screen
+  and stayed on it; the three PCs started the game and stood at READY for good, giving the Wii's
+  player up every 7 seconds and never moving on (their log: `Force-disconnecting player 0 after 7s
+  stall`, over and over). The Wii loaded the versus screen's files and then nothing more: not one
+  file of the game. That is a first game that never starts for anyone, which a player may well call
+  a desync. Its cause is not known. For the next time it shows: `--boot-arg=--stall-all` (where the
+  game is), and a test build now says the kernel's disc state by itself when the Wii sits on the
+  versus screen (`so_diag.c`).
+- **What cannot be played here:** two Wiis in one lobby; real routers (a connection that arrives
+  from another port than matchmaking named is filed under the first opponent, in Dolphin's code as
+  in ours); Slippi's own server.
+- **The next report brings its evidence.** `slippwii/logs/desync-N.txt` is written by itself when a
+  frame's checksum is not an opponent's, when the game gives an opponent up, or when all three leave
+  a game of four in its middle: the game's setup, everyone's choices, the connections, who was
+  taken for gone and at what frame, and the inputs the Wii had from each opponent up to the first
+  bad frame ([ROLLBACK.md](ROLLBACK.md), "The log on the SD card"). With a PC player's replay of the
+  same game: the same inputs and another result is the game's state; other inputs is the netcode.
+  Checked on the Wii with a test's desync, against one opponent and in a Teams lobby, each file read
+  back from the card. A game that never starts, as above, leaves the same file 20 seconds after
+  its setup, with what the kernel's disc reads were doing.
+
+**The soak, the night after (2026-11-14 22:57 to 05:58):** 105 lobbies one after the other, 193
+games, with the stall profiler in every scene. By turns the Wii in each port (26 or 27 lobbies
+each), teams of two picked by hand or drawn, the replay stream on and off, a LAN and 63 ms of ping
+with 1% loss; one lobby in six was Party.
+
+| Lobbies | Games | In sync | Frames the Wii waited, a game (median, most) | The PCs' depth against the Wii |
+|---|---|---|---|---|
+| Teams, LAN, no replay stream: 35 | 70 | 140 of 140 PC replays, 0 checksums differ | 0, 0 | |
+| Teams, LAN, replay stream: 35 | 70 | 210 of 210 replays | 7, 35 | |
+| Teams, 63 ms and 1% loss, replay stream: 18 | 36 | 108 of 108 replays | 17, 38 | 1.73, 513 of 1647 unhealthy |
+| Party, 63 ms and 1% loss, no replay stream: 17 | 17 | 34 of 34 PC replays, 0 checksums differ | 1, 5 | 1.04, 40 of 6120 unhealthy |
+
+- **Every lobby started and every game stayed in sync**: 492 of 492 replays the same, no frame's
+  checksum different in any game. The lobby that never left the versus screen did not come again:
+  once in about 135 lobbies in all, with the replay stream on that time.
+- **The replay stream is the load.** Without it the Wii waited 0 frames in 70 LAN games and no disc
+  command took half a second; with it, 703 disc commands of over half a second in 35 lobbies (up
+  to 5 s for one), and the Wii's own count by Slippi's rule went as high as 45. A player's Wii
+  sends no such stream unless console mirroring is in use: with four players, better not.
+- **Party at 63 ms with loss, as a player's Wii is:** the PCs' depth against the Wii 1.04, 40 of
+  6120 intervals unhealthy.
+
+**Teams beyond two against two (2026-11-15).** Slippi's FAQ lists 2v2, 3v1, 2v1, 2v1v1 and 1v1v1.
+One lobby of each of the three never played here, two games each on a LAN, the Wii's replays
+compared, with *Team Indicators* on: 2v1v1 (four players, the Wii alone on blue), 2v1 (three
+players, the Wii in port 1 on the side of two) and 1v1v1 (three players, three teams). All 14
+replays the same, no checksum different; the versus screen and the game show the teams as picked.
+(`lobby.py --players 3`: the test's lobby server makes a Teams lobby of the size asked. How Slippi's
+own server decides a lobby of three is not known here.)
+
+Two more things the first lobbies showed. With the test's replay stream on, a lobby's first game waits
+more than its second (19 and 5 frames, 7 and 2, 41 and 5, 23 and 6), with 11 to 37 disc commands
+of over half a second a lobby; one lobby whose stream did not connect waited 0 frames and had no
+slow command. And the loader's start-up hang has a second address (`tools/build.sh`): a test
+build whose BSS began at 801d5860 gave a black screen, and the same sources with 32 bytes of
+padding booted.
 
 ## If this is picked up again
 
@@ -318,7 +408,8 @@ In the order of what it would give the three PC players:
 5. **Rollback for four** only with a different engine: see "Tried and dropped".
 6. **Slippi's newer answer format.** Slippi's development source has a newer answer to the game's
    poll (despawn frames, input predictions) than 3.6.4's 297 bytes: a future codeset will need it.
-7. The "Show Friendly Player Indicators" optional code is not among SlippWii's.
+7. (Done in 1.6.1: the "Show Friendly Player Indicators" optional code is the *Team Indicators*
+   switch.)
 
 ## Where things are
 

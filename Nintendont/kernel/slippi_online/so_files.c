@@ -12,7 +12,7 @@
 #define MAX_FILES 32
 #define MAX_NAME 32	/* Melee's file names are short ("GameSetup_gui.dat") */
 #define MAX_GCT 0x10000	/* the bootloader reads it in one DMA */
-#define MAX_OPTIONAL 0x400	/* Slippi Dolphin's optional codes, all on, with the Screen setting's: 728 bytes */
+#define MAX_OPTIONAL 0x600	/* Slippi Dolphin's optional codes, all on, with the Screen setting's: 1160 bytes */
 
 static u32 optional_bytes;
 

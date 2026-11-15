@@ -335,6 +335,7 @@ int so_append_file(const char *path, const void *buf, u32 size, int create)
 void so_make_dir(const char *path) { (void)path; }
 int so_platform_info(char *out, int size) { return so_snprintf(out, size, "a PC\n"); }
 int so_diag_log_setting(void) { return 0; }
+int so_quick_chat_setting(void) { return 1; }
 
 u32 so_optional_codes(u8 *out, u32 room)
 {

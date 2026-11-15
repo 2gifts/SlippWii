@@ -27,18 +27,20 @@ make clean >/dev/null 2>&1 || true
 # One job: the upstream Makefile can compile MeleeCodes.c while the gecko
 # headers it includes are still being generated (a broken build, no error).
 make windows=1 -j1 > "$ROOT/build.log" 2>&1 || { grep -n -i "error" "$ROOT/build.log" | head -20; exit 1; }
-# The loader hangs the Wii at boot, every boot, when its BSS starts 0x460 past a 2 KB boundary
-# (7 of 7 such builds, 2 addresses; 0 of 145 builds elsewhere; cause not found yet). Its layout
-# moves with the kernel's compressed size, so a build that lands there gets 32 bytes of padding
-# after the loader's blobs, and the loader is linked again.
-bss_mod() { python -c "import struct;d=open('loader/loader.dol','rb').read();print(struct.unpack('>I',d[0xD8:0xDC])[0]%0x800)"; }
+# The loader hangs the Wii at boot, every boot, at some places of its BSS (a black screen, nothing
+# logged; cause not found yet). Its layout moves with the kernel's compressed size. By 581 test
+# builds sent to the Wii: 6 of 6 hung whose BSS started 0x460 or 0x860 past a 4 KB boundary
+# (8019c460, 801d5860), 8 of 8 booted at 0x060 (8019f060, 801ce060), and all others booted. So a
+# BSS that starts 0x60 past any 1 KB boundary is moved: 32 bytes of padding after the loader's blobs,
+# and the loader is linked again.
+bss_mod() { python -c "import struct;d=open('loader/loader.dol','rb').read();print(struct.unpack('>I',d[0xD8:0xDC])[0]%0x400)"; }
 rm -f loader/data/zz_pad.bin
-if [ "$(bss_mod)" = "$((0x460))" ]; then
+if [ "$(bss_mod)" = "$((0x60))" ]; then
 	head -c 32 /dev/zero > loader/data/zz_pad.bin
 	make -C loader windows=1 -j1 >> "$ROOT/build.log" 2>&1 || { rm -f loader/data/zz_pad.bin; grep -n -i "error" "$ROOT/build.log" | tail -20; exit 1; }
 	rm -f loader/data/zz_pad.bin
-	if [ "$(bss_mod)" = "$((0x460))" ]; then
-		echo "the loader's layout is still the one that hangs at boot" >&2
+	if [ "$(bss_mod)" = "$((0x60))" ]; then
+		echo "the loader's layout is still one that hangs at boot" >&2
 		exit 1
 	fi
 	echo "loader padded: its BSS was where the boot hangs"

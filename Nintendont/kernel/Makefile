@@ -68,6 +68,9 @@ OBJECTS += ../common/config/MeleeCodes_arm.o
 # SlippWii: the kernel's code region (kernel.ld: 384 KB, with the online boot codes in it) is full.
 # The Triforce arcade boards' code, which Melee never runs, is built for size, not speed.
 GCAM.o JVSIO.o JVSIOMessage.o TRI.o: CFLAGS += -Os
+# SlippWii: so is the patcher of the game's timers, which runs once as the game loads (12 KB at -O3,
+# the code region's last room: a test build's kernel was 40 bytes over it, 2026-11-15).
+PatchTimers.o: CFLAGS += -Os
 
 # When make is invoked with `make SLIPPI_DEBUG=1`: compile SlippiDebug.o and
 # let GCC define SLIPPI_PROFILE as a macro. Use this for some profiling code.

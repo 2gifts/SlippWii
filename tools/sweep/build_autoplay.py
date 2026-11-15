@@ -11,7 +11,8 @@ For games that reach the timer: "timer_s" seconds in the rounds of the bit mask
 "timer_rounds" (bit 0: the first round), no inputs in those of "idle_rounds", over the
 ledge grab limit in those of "over_limit" (one mask per port), and without
 tools/text_args/ in those of "no_text_fix_rounds". "mode": the Online Play option the
-bot chooses (3 Teams, 4 Party; Direct without it).
+bot chooses (3 Teams, 4 Party; Direct without it). "team": in Teams, how often the bot presses
+Slippi's team button (0 stays red, 1 blue, 2 green).
 Both sides need the same values, or they drift apart.
 
 Writes OUT.gecko.txt (Dolphin GameSettings lines) and OUT.c2.bin (the code,
@@ -44,6 +45,7 @@ def fill(blob, offset, plan, port, lras_s, seed):
                                                plan.get('idle_rounds', 0), over[0], over[1],
                                                plan.get('no_text_fix_rounds', 0), plan.get('person', 0),
                                                plan.get('mode', 0)))
+    blob[offset + 0xC6] = plan.get('team', 0)
 
 
 def c2(code):

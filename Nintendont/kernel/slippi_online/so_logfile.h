@@ -13,6 +13,12 @@ int so_logfile_diag(void);
 void so_logfile_line(const char *line);
 /* The game has crashed or hung: this boot's last lines, and what comes, as a crash file */
 void so_logfile_crash(void);
+/* The game is out of step with an opponent's (so_exi.c, check_sums): this boot's last lines, and what
+ * comes until that game is over (so_logfile_report_end), as a desync file. With the switch on, or a
+ * crash's file open, they are in that file. */
+void so_logfile_desync(void);
+/* The game is over: a desync's file ends here (a later game's is a new one); a crash's goes on */
+void so_logfile_report_end(void);
 /* What is pending is written at the next service, in a game or not */
 void so_logfile_now(void);
 /* The writes (the network thread: not the game's loop). in_game: only every 5 s

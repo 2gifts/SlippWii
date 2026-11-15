@@ -931,6 +931,9 @@ static void test_logfile(void)
 	strcpy(line, "account: TEST#123 and X#1, version 1.4.0-beta.3, word 80003100, SO searching #3");
 	so_logfile_scrub(line);
 	CHECK_STR(line, "account: T***#*** and X#*, version 1.4.0-beta.3, word 80003100, SO searching #3");
+	strcpy(line, "exi: the game: mode 3, stage 31, teams 1, delay 4, 3 opponents, rollback 0; ports: 25/4/1/0 2/1/0/0* 20/2/1/1 -");
+	so_logfile_scrub(line);	/* (a game's setup, so_exi.c say_setup: nothing of it is an address) */
+	CHECK_STR(line, "exi: the game: mode 3, stage 31, teams 1, delay 4, 3 opponents, rollback 0; ports: 25/4/1/0 2/1/0/0* 20/2/1/1 -");
 	strcpy(line, "1.2.3.4.5 and 1234.1.1.1 and 1.1.1.1234 and 714.508 are no addresses");
 	so_logfile_scrub(line);
 	CHECK_STR(line, "1.2.3.4.5 and 1234.1.1.1 and 1.1.1.1234 and 714.508 are no addresses");
@@ -1025,6 +1028,85 @@ static void test_logfile(void)
 	CHECK(so_logfile_service(0, 0) > 0);
 	f = test_log_file("/slippwii/logs/crash-1.txt", NULL);
 	CHECK(f && strstr(f, "number 9 on this card") != NULL);
+
+	/* a desync, the switch off: the boot's last lines and the game's to its end, as a desync file; the
+	 * next game's lines are in no file, and the next report is a new one, from the lines after it */
+	test_log_files_reset();
+	so_logfile_test_reset();
+	CHECK_INT(so_alloc_init(arena, sizeof(arena)), 0);
+	test_set_time_us(0);
+	so_logfile_init(0);
+	so_logfile_line("10.000 np: selections from player 0: char 2/1 (picked), team 1, stage 31");
+	so_logfile_line("20.000 exi: checksum differs at frame 500: ours 00010002, player 2's 00010040");
+	so_logfile_report_end();	/* (no desync: nothing to end, and no file) */
+	CHECK_INT(so_logfile_service(1, 1), 0);
+	so_logfile_desync();
+	CHECK(so_logfile_service(1, 0) > 0);	/* (at once, in the game) */
+	f = test_log_file("/slippwii/logs/desync-1.txt", NULL);
+	CHECK(f && strstr(f, "SlippWii desync report, number 1 on this card\n") == f);
+	CHECK(f && strstr(f, "team 1, stage 31\n") && strstr(f, "checksum differs at frame 500"));
+	CHECK(test_log_file("/slippwii/logs/crash-1.txt", NULL) == NULL);
+	CHECK(strstr(test_log_file("/slippwii/logs/newest.txt", NULL), "desync-1.txt (number 1)") != NULL);
+	CHECK(so_logfile_path() != NULL);
+	so_logfile_line("30.000 game over: 900 frames");
+	so_logfile_report_end();
+	CHECK(so_logfile_service(1, 0) > 0);	/* (the game's last lines, at once) */
+	CHECK(strstr(test_log_file("/slippwii/logs/desync-1.txt", NULL), "30.000 game over: 900 frames\n") != NULL);
+	CHECK(so_logfile_path() == NULL);
+	so_logfile_line("40.000 the next game's line");
+	test_advance_us(6000000);
+	CHECK_INT(so_logfile_service(1, 1), 0);
+	CHECK(strstr(test_log_file("/slippwii/logs/desync-1.txt", NULL), "the next game") == NULL);
+	/* a second desync: a new file, from the lines after the first one's */
+	so_logfile_line("50.000 exi: checksum differs at frame 77");
+	so_logfile_desync();
+	CHECK(so_logfile_service(1, 0) > 0);
+	f = test_log_file("/slippwii/logs/desync-2.txt", NULL);
+	CHECK(f && strstr(f, "number 2 on this card") && strstr(f, "40.000 the next game's line\n") && strstr(f, "frame 77\n"));
+	CHECK(f && strstr(f, "frame 500") == NULL);
+	/* a crash in that game: its lines go on into the file, and the game's end does not end it */
+	so_logfile_line("60.000 CRASH: exception 2");
+	so_logfile_crash();
+	so_logfile_report_end();
+	CHECK(so_logfile_service(1, 0) > 0);
+	so_logfile_line("61.000 exit: done");
+	CHECK(so_logfile_service(1, 1) > 0);
+	f = test_log_file("/slippwii/logs/desync-2.txt", NULL);
+	CHECK(f && strstr(f, "60.000 CRASH: exception 2\n") && strstr(f, "61.000 exit: done\n"));
+	CHECK(test_log_file("/slippwii/logs/crash-3.txt", NULL) == NULL);
+	/* the game's end before the file was ever written: it is written whole, and ended */
+	test_log_files_reset();
+	so_logfile_test_reset();
+	CHECK_INT(so_alloc_init(arena, sizeof(arena)), 0);
+	so_logfile_init(0);
+	so_logfile_line("1.000 exi: checksum differs at frame 9");
+	so_logfile_desync();
+	so_logfile_line("2.000 game over");
+	so_logfile_report_end();
+	CHECK(so_logfile_service(0, 0) > 0);
+	f = test_log_file("/slippwii/logs/desync-1.txt", NULL);
+	CHECK(f && strstr(f, "frame 9\n") && strstr(f, "2.000 game over\n"));
+	CHECK(so_logfile_path() == NULL);
+	/* a crash after a desync's file is done: a crash file of its own */
+	so_logfile_line("3.000 PANIC");
+	so_logfile_crash();
+	CHECK(so_logfile_service(0, 0) > 0);
+	f = test_log_file("/slippwii/logs/crash-2.txt", NULL);
+	CHECK(f && strstr(f, "SlippWii crash report, number 2") == f && strstr(f, "3.000 PANIC\n") && !strstr(f, "frame 9"));
+	/* the switch on: a desync's lines are in the log's file, and it goes on after the game */
+	test_log_files_reset();
+	so_logfile_test_reset();
+	CHECK_INT(so_alloc_init(arena, sizeof(arena)), 0);
+	so_logfile_init(1);
+	so_logfile_line("1.000 exi: checksum differs at frame 9");
+	so_logfile_desync();
+	CHECK(so_logfile_service(1, 0) > 0);
+	so_logfile_report_end();
+	so_logfile_line("2.000 the next game's line");
+	CHECK(so_logfile_service(1, 1) > 0);
+	f = test_log_file("/slippwii/logs/log-1.txt", NULL);
+	CHECK(f && strstr(f, "frame 9\n") && strstr(f, "2.000 the next game's line\n"));
+	CHECK(test_log_file("/slippwii/logs/desync-1.txt", NULL) == NULL);
 	test_log_files_reset();
 	so_logfile_test_reset();
 }

@@ -164,7 +164,7 @@ static int seat(const Ticket *t)
 static void try_match(Ticket *t)
 {
 	Ticket *lobby[MAX_LOBBY];
-	int want = t->mode == 3 ? 4 : t->mode == 4 ? party_size : 2, n = 0, i;
+	int want = t->mode == 3 || t->mode == 4 ? party_size : 2, n = 0, i;	/* (Teams: of 3 too, as Slippi's) */
 	for (i = 0; i < MAX_TICKETS && n < want; i++) {
 		Ticket *o = &tickets[i];
 		if (!o->active || o->mode != t->mode)

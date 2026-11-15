@@ -743,9 +743,9 @@ static void on_selections(Reader *r)
 		so_log("np: bad selections packet");
 		return;
 	}
-	so_log("np: selections from player %u: char %u/%u%s, stage %u%s", (unsigned)s.player_idx,
+	so_log("np: selections from player %u: char %u/%u%s, team %u, stage %u%s", (unsigned)s.player_idx,
 		(unsigned)s.character_id, (unsigned)s.character_color, s.is_character_selected ? " (picked)" : "",
-		(unsigned)s.stage_id, s.is_stage_selected ? " (picked)" : "");
+		(unsigned)s.team_id, (unsigned)s.stage_id, s.is_stage_selected ? " (picked)" : "");
 	merge_selections(&np->remote_sel[remote], &s);
 	if (s.is_character_selected)
 		so_pf_want_char(1, s.character_id, s.character_color);
@@ -941,8 +941,11 @@ static void on_disconnect(ENetPeer *peer, u32 data)
 	if (c)
 		c->disconnected = 1;
 	all_for_key = all_disconnected_for(host, port);
-	if (all_for_key && c)
+	if (all_for_key && c) {
+		if (np->player_active[c->player_idx])
+			so_log("np: no connection left with player %u: it has left", (unsigned)c->player_idx + 1);
 		np->player_active[c->player_idx] = 0;
+	}
 	/* Only a connection we actually play over counts; a failed duplicate
 	 * from a port-changing router does not. */
 	for (i = 0; i < np->remote_count; i++)

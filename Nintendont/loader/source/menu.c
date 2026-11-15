@@ -172,14 +172,6 @@ static const char *desc_update[] = {
 	"are kept.",
 	NULL
 };
-static const char *desc_networking[] = {
-	"Always on in SlippWii (Slippi",
-	"Online needs it). Network settings",
-	"must be configured in the Wii",
-	"settings menu, on the wired LAN",
-	"adapter.",
-	NULL
-};
 static const char *desc_slippi_replays[] = {
 	"Write Slippi replays to a",
 	"secondary storage device.",
@@ -258,9 +250,35 @@ static const char *desc_sw_no_music[] = {
 	NULL
 };
 
+static const char *desc_sw_quick_chat[] = {
+	"Slippi's quick chat, the D-pad",
+	"messages on the online character",
+	"select screen, as Slippi",
+	"Dolphin's setting:",
+	"",
+	"Yes: in every mode.",
+	"Direct: in Direct only.",
+	"No: you send none and see none;",
+	"who writes to you is told chat",
+	"is off.",
+	NULL
+};
+static const char *desc_sw_friendly[] = {
+	"One of Slippi's optional codes",
+	"(Show Friendly Player",
+	"Indicators): in online games",
+	"your own character's tag says",
+	"YOU, and in Teams your",
+	"teammates keep their marker.",
+	"",
+	"Only this console shows it.",
+	NULL
+};
+
 // SlippWii's switches on the Slippi page: the row (CommonConfig.h, ninslippisettings), the bit of
 // ncfg->Config (NIN_CFG_SW_*), what it is called. The kernel reads the bits: Patch.c and
-// slippi_online/so_files.c for the codes, slippi_online/so_logfile.c for the log.
+// slippi_online/so_files.c for the codes, slippi_online/so_logfile.c for the log. (Quick Chat has
+// three values and two bits: its own lines, where the rows are drawn and changed.)
 static const struct {
 	int row;
 	unsigned int bit;
@@ -272,6 +290,7 @@ static const struct {
 	{ NIN_SLIPPI_NO_SHAKE, NIN_CFG_SW_NO_SHAKE, "No Screen Shake", desc_sw_no_shake },
 	{ NIN_SLIPPI_CENTER_HUD, NIN_CFG_SW_CENTER_HUD, "Center 2P HUD", desc_sw_center_hud },
 	{ NIN_SLIPPI_FREEZE_FD, NIN_CFG_SW_FREEZE_FD, "Freeze FD", desc_sw_freeze_fd },
+	{ NIN_SLIPPI_FRIENDLY, NIN_CFG_SW_FRIENDLY, "Team Indicators", desc_sw_friendly },
 	{ NIN_SLIPPI_NO_MUSIC, NIN_CFG_SW_NO_MUSIC, "No Music", desc_sw_no_music },
 };
 #define SLIPPWII_SWITCHES (sizeof(slippwiiSwitches) / sizeof(slippwiiSwitches[0]))
@@ -298,7 +317,7 @@ FPAD_WRAPPER_REPEAT(Up)
 FPAD_WRAPPER_REPEAT(Down)
 FPAD_WRAPPER_REPEAT(Left)
 FPAD_WRAPPER_REPEAT(Right)
-inline u32 SettingY(u32 row) { return 127 + 16 * row; }
+inline u32 SettingY(u32 row) { return 127 + 15 * row; }
 
 u32 Shutdown = 0;
 void SetShutdown(void) { Shutdown = 1; }
@@ -1032,8 +1051,8 @@ static const char *const *GetSettingsDescription(const MenuCtx *ctx)
 		switch (ctx->settings.posX) {
 		case NIN_SLIPPI_UPDATE:
 			return desc_update;
-		case NIN_SLIPPI_NETWORKING: 
-			return desc_networking;
+		case NIN_SLIPPI_QUICK_CHAT:
+			return (const char *const *)desc_sw_quick_chat;
 		case NIN_SLIPPI_REPLAYS: 
 			return desc_slippi_replays;
 		case NIN_SLIPPI_REPLAYS_LED:
@@ -1332,8 +1351,14 @@ static void Menu_Settings_InputHandler(MenuCtx *ctx)
 				ctx->saveSettings = false;
 				SlippWii_Update();
 				break;
-			case NIN_SLIPPI_NETWORKING:
-				ncfg->Config |= (NIN_CFG_NETWORK);	// always on in SlippWii
+			case NIN_SLIPPI_QUICK_CHAT:
+				// Yes (no bit), Direct, No, and Yes again
+				if (ncfg->Config & NIN_CFG_SW_NO_CHAT)
+					ncfg->Config &= ~(NIN_CFG_SW_NO_CHAT | NIN_CFG_SW_CHAT_DIRECT);
+				else if (ncfg->Config & NIN_CFG_SW_CHAT_DIRECT)
+					ncfg->Config = (ncfg->Config & ~NIN_CFG_SW_CHAT_DIRECT) | NIN_CFG_SW_NO_CHAT;
+				else
+					ncfg->Config |= NIN_CFG_SW_CHAT_DIRECT;
 				break;
 			case NIN_SLIPPI_REPLAYS:
 				ncfg->Config ^= (NIN_CFG_SLIPPI_REPLAYS);
@@ -1354,6 +1379,7 @@ static void Menu_Settings_InputHandler(MenuCtx *ctx)
 			case NIN_SLIPPI_NO_SHAKE:
 			case NIN_SLIPPI_CENTER_HUD:
 			case NIN_SLIPPI_FREEZE_FD:
+			case NIN_SLIPPI_FRIENDLY:
 			case NIN_SLIPPI_NO_MUSIC: ;
 				unsigned int sw;
 				for (sw = 0; sw < SLIPPWII_SWITCHES; sw++)
@@ -1520,11 +1546,6 @@ static void Menu_Settings_Redraw(MenuCtx *ctx)
 				"%-18s", "Check for Updates");
 		ListLoopIndex++;
 
-		// Networking
-		PrintFormat(MENU_SIZE, BLACK, MENU_POS_X + SETTINGS_X_START, SettingY(ListLoopIndex),
-				"%-18s:%-4s", "Slippi Networking", (ncfg->Config & (NIN_CFG_NETWORK)) ? "Yes" : "No ");
-		ListLoopIndex++;
-
 		// Slippi Replays
 		PrintFormat(MENU_SIZE, BLACK, MENU_POS_X + SETTINGS_X_START, SettingY(ListLoopIndex),
 				"%-18s:%-4s", "Slippi Replays", (ncfg->Config & (NIN_CFG_SLIPPI_REPLAYS)) ? "Yes" : "No ");
@@ -1554,6 +1575,10 @@ static void Menu_Settings_Redraw(MenuCtx *ctx)
 			PrintFormat(MENU_SIZE, BLACK, MENU_POS_X + SETTINGS_X_START, SettingY(slippwiiSwitches[sw].row),
 					"%-18s:%-4s", slippwiiSwitches[sw].name, (ncfg->Config & slippwiiSwitches[sw].bit) ? "Yes" : "No ");
 		}
+		// Quick Chat, as Slippi Dolphin's setting: everywhere, in Direct only, or not at all
+		PrintFormat(MENU_SIZE, BLACK, MENU_POS_X + SETTINGS_X_START, SettingY(NIN_SLIPPI_QUICK_CHAT),
+				"%-18s:%-6s", "Quick Chat", (ncfg->Config & NIN_CFG_SW_NO_CHAT) ? "No" :
+				(ncfg->Config & NIN_CFG_SW_CHAT_DIRECT) ? "Direct" : "Yes");
 		ListLoopIndex = NIN_SLIPPI_BLANK_1;
 
 		PrintFormat(14, DARK_BLUE, MENU_POS_X + SETTINGS_X_START, SettingY(ListLoopIndex), "MELEE CODES");

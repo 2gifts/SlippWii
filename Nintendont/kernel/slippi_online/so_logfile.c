@@ -6,6 +6,10 @@
  *                match stops with no pad poll for 5 s (a hang sends no report): this boot's last
  *                lines, the report and what follows. Always: the game has stopped, so a write
  *                costs nothing.
+ *   desync-N.txt When a game goes out of step with an opponent's (a frame's checksum differs, the game
+ *                gives an opponent up, or all three leave a game of four): this boot's last lines, what the game was (so_exi.c,
+ *                so_exi_desync_service) and what follows to that game's end. Always: such a game is
+ *                lost already, and nothing else would be left of it.
  *   log-N.txt    With the loader's Diagnostic Log switch on: every line of this boot, a crash's
  *                among them. Written between games, every 5 s in one, and at once when something is
  *                wrong (so_logfile_now). A write is the SD card's business for some milliseconds,
@@ -44,6 +48,9 @@ static struct {
 	u32 file_bytes, last_ms;
 	u32 writes, write_us_max, write_us_all;	/* the card's writes this boot, the longest, all (so_logfile_stats) */
 	u8 ready, diag, crash, now, opened, failed, lost, align;
+	u8 desync;	/* the file wanted (crash) is a desync's: named so, and ended with its game */
+	u8 ending;	/* its game is over: what is pending, and the file is done */
+	u8 keep;	/* a crash has come: the file goes on whatever it started as */
 	char path[48];
 } lf;
 
@@ -149,7 +156,36 @@ void so_logfile_crash(void)
 	so_mutex_lock(&lf.lock);
 	if (!lf.diag)
 		lf.crash = 1;	/* (from the ring's oldest line: `written` is there) */
+	if (!lf.opened)
+		lf.desync = 0;	/* (a crash's name; one that is a desync's already keeps it) */
+	lf.ending = 0;
+	lf.keep = 1;	/* (and goes on) */
 	lf.now = 1;
+	so_mutex_unlock(&lf.lock);
+}
+
+void so_logfile_desync(void)
+{
+	if (!lf.ready)
+		return;
+	so_mutex_lock(&lf.lock);
+	if (!lf.diag && !lf.crash) {
+		lf.crash = 1;
+		lf.desync = 1;
+	}
+	lf.now = 1;
+	so_mutex_unlock(&lf.lock);
+}
+
+void so_logfile_report_end(void)
+{
+	if (!lf.ready)
+		return;
+	so_mutex_lock(&lf.lock);
+	if (lf.crash && lf.desync && !lf.keep) {
+		lf.ending = 1;
+		lf.now = 1;
+	}
 	so_mutex_unlock(&lf.lock);
 }
 
@@ -164,6 +200,8 @@ static int open_file(void)
 {
 	char text[16];
 	const SoConfig *config = so_client_config();
+	const char *kind = lf.diag ? "log" : lf.desync ? "desync" : "crash";
+	const char *what = lf.diag ? "diagnostic log" : lf.desync ? "desync report" : "crash report";
 	u32 number = 0, i;
 	int n, got;
 	so_make_dir(DIR);
@@ -176,9 +214,8 @@ static int open_file(void)
 	number++;
 	n = so_snprintf(text, sizeof(text), "%u\n", (unsigned)number);
 	so_write_file(DIR "/number.txt", text, (u32)n);
-	so_snprintf(lf.path, sizeof(lf.path), DIR "/%s-%u.txt", lf.diag ? "log" : "crash", (unsigned)((number - 1) % SLOTS + 1));
-	n = so_snprintf(lf.chunk, CHUNK, "SlippWii %s, number %u on this card\n", lf.diag ? "diagnostic log" : "crash report",
-		(unsigned)number);
+	so_snprintf(lf.path, sizeof(lf.path), DIR "/%s-%u.txt", kind, (unsigned)((number - 1) % SLOTS + 1));
+	n = so_snprintf(lf.chunk, CHUNK, "SlippWii %s, number %u on this card\n", what, (unsigned)number);
 	n += so_platform_info(lf.chunk + n, (int)(CHUNK - n));
 	if (config)
 		n += so_snprintf(lf.chunk + n, CHUNK - n, "online: delay %u, rollback %u, direct %u (under %u ms), background saves %u, "
@@ -191,7 +228,7 @@ static int open_file(void)
 	lf.file_bytes = (u32)n;
 	lf.opened = 1;
 	/* (said in the log, so in the file too: which file this is) */
-	so_log("%s: on the card as %s (number %u)", lf.diag ? "the diagnostic log" : "the crash report", lf.path, (unsigned)number);
+	so_log("the %s: on the card as %s (number %u)", what, lf.path, (unsigned)number);
 	n = so_snprintf(lf.chunk, CHUNK, "The newest file in this folder is %s (number %u).\r\n"
 		"To report a problem, attach this whole folder.\r\n", lf.path + sizeof(DIR), (unsigned)number);
 	so_write_file(DIR "/newest.txt", lf.chunk, (u32)n);
@@ -201,7 +238,7 @@ static int open_file(void)
 int so_logfile_service(int in_game, int now_anyway)
 {
 	u32 pending, now;
-	int wrote = 0;
+	int wrote = 0, ending;
 	if (!lf.ready || lf.failed || (!lf.diag && !lf.crash))
 		return 0;
 	so_mutex_lock(&lf.lock);
@@ -209,9 +246,10 @@ int so_logfile_service(int in_game, int now_anyway)
 	if (lf.now)
 		now_anyway = 1;
 	lf.now = 0;
+	ending = lf.ending;
 	so_mutex_unlock(&lf.lock);
 	now = so_time_ms();
-	if (lf.opened && !pending)
+	if (lf.opened && !pending && !ending)
 		return 0;
 	if (lf.opened && !now_anyway && pending < HISTORY / 2 &&
 	    now - lf.last_ms < (u32)(in_game ? GAME_PERIOD_MS : IDLE_PERIOD_MS))
@@ -262,6 +300,14 @@ int so_logfile_service(int in_game, int now_anyway)
 		}
 	}
 	lf.last_ms = so_time_ms();
+	if (ending) {
+		/* a desync's game is over and its lines are in the file: no writes in the games after it;
+		 * the next report is a new file, from the lines after this one's */
+		so_mutex_lock(&lf.lock);
+		if (lf.ending && lf.written == lf.head)
+			lf.ending = lf.desync = lf.crash = lf.opened = 0;
+		so_mutex_unlock(&lf.lock);
+	}
 	return wrote;
 }
 

@@ -116,6 +116,19 @@ def autoplay_codes(run_dir, plan, args):
             '--out', run_dir / f'autoplay-{side}')
 
 
+def put_back(path, data):
+    """A file of the repo's as it was before a test build. On Windows a file just written can be held
+    for a moment by whatever reads it (a scanner, another shell's git): one write refused here ended a
+    run and left the boot codes a test's for the rest of its batch (2026-11-14)."""
+    for _ in range(40):
+        try:
+            path.write_bytes(data)
+            return
+        except PermissionError:
+            time.sleep(0.25)
+    path.write_bytes(data)
+
+
 def build(run_dir, plan, args, ip):
     """Autoplay codes for both sides, then the Wii's test build."""
     autoplay_codes(run_dir, plan, args)
@@ -178,11 +191,11 @@ def build(run_dir, plan, args, ip):
         run('sh', ROOT / 'tools/build.sh', cwd=ROOT)
         shutil.copy(NIN / 'loader/loader.dol', run_dir / 'loader-sweep.dol')
     finally:
-        inc.write_bytes(original_inc)
-        boot.write_bytes(original_boot)
-        update_inc.write_bytes(original_update_inc)
+        put_back(inc, original_inc)
+        put_back(boot, original_boot)
+        put_back(update_inc, original_update_inc)
         if original_dol is not None:
-            dol.write_bytes(original_dol)  # the normal build stays the default one
+            put_back(dol, original_dol)  # the normal build stays the default one
     print(f'test build: {run_dir / "loader-sweep.dol"} (repo files restored)')
 
 
@@ -223,6 +236,9 @@ def loader_cfg(run_dir, replays=False, codes=0, screen=0, diag_log=False, force_
     cfg = bytearray(wii_boot.BASE_CFG.read_bytes())
     flags = (int.from_bytes(cfg[8:12], 'big') | (1 << 14 if replays else 0) | (codes & 0xF) << 16 | (1 << 20 if diag_log else 0)
              | (1 << 21 if codes & 16 else 0)  # (16: No Music, the bit after the log's)
+             | (1 << 22 if codes & 32 else 0)  # (32: Quick Chat off)
+             | (1 << 23 if codes & 64 else 0)  # (64: Quick Chat in Direct only)
+             | (1 << 24 if codes & 128 else 0)  # (128: Team Indicators, Slippi's "Show Friendly Player Indicators")
              # Force Progressive (and Force Widescreen with it, as the player's settings were whose 480p games
              # ran at half speed, 2026-11-11): the kernel then patches Melee's video modes to 480p whatever
              # cable is in. Over composite there is no picture to capture; the logs have the timing.
@@ -511,7 +527,8 @@ def parser():
     ap.add_argument('--replays', action='store_true', help='the Wii saves its replays too, on the drive the game is not on')
     ap.add_argument('--codes', type=lambda v: int(v, 0), default=0, metavar='BITS',
                     help="the loader's switches for Slippi Dolphin's optional codes: 1 flash red on a failed L-cancel, "
-                         "2 no screen shake, 4 center the 2P HUD, 8 freeze Final Destination's background (15: all); 16 No Music")
+                         "2 no screen shake, 4 center the 2P HUD, 8 freeze Final Destination's background (15: all); 16 No Music; "
+                         "32 Quick Chat off; 64 Quick Chat in Direct only; 128 Team Indicators")
     ap.add_argument('--screen', type=int, default=0, choices=[0, 1, 2, 3],
                     help="the loader's Screen setting: 1 default, 2 16:9 to 73:60, 3 widescreen (0: as the base settings)")
     ap.add_argument('--diag-log', action='store_true',
