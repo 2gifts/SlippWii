@@ -34,6 +34,8 @@ typedef struct {
  * first search on. */
 static Mm *mmp;
 #define mm (*mmp)
+/* 1 while the search in hand is the WebSocket service's (so_mm_ws.c) */
+static int ws_search;
 
 static void enter(SoMmState state)
 {
@@ -85,6 +87,7 @@ int so_mm_start(const SoConfig *config, const SoUser *user, const SoSearch *sear
 	}
 	SO_STEP("mm stop");
 	so_mm_stop();
+	ws_search = 0;
 	memset(&mm.result, 0, sizeof(mm.result));
 	mm.error[0] = '\0';
 	mm.latest_version[0] = '\0';
@@ -171,8 +174,20 @@ static void on_message(const char *text, u32 len)
 	}
 }
 
+int so_mm_start_ws(const SoConfig *config, const SoUser *user, const SoSearch *search, u32 server, u16 port,
+	const SoStun *stun)
+{
+	so_mm_stop();
+	ws_search = 1;
+	return so_mmws_start(config, user, search, server, port, stun);
+}
+
 void so_mm_poll(void)
 {
+	if (ws_search) {
+		so_mmws_poll();
+		return;
+	}
 	if (!mmp)
 		return;
 	ENetEvent event;
@@ -235,6 +250,8 @@ void so_mm_poll(void)
 
 void so_mm_stop(void)
 {
+	if (ws_search)
+		so_mmws_stop();
 	if (!mmp)
 		return;
 	if (mm.host) {
@@ -247,21 +264,29 @@ void so_mm_stop(void)
 
 SoMmState so_mm_state(void)
 {
+	if (ws_search)
+		return so_mmws_state();
 	return mmp ? mm.state : SO_MM_IDLE;
 }
 
 const char *so_mm_error(void)
 {
+	if (ws_search)
+		return so_mmws_error();
 	return mmp ? mm.error : "Failed to create mm client";
 }
 
 const char *so_mm_latest_version(void)
 {
+	if (ws_search)
+		return so_mmws_latest_version();
 	return mmp ? mm.latest_version : "";
 }
 
 const SoMatchResult *so_mm_result(void)
 {
+	if (ws_search)
+		return so_mmws_result();
 	return mmp ? &mm.result : NULL;
 }
 

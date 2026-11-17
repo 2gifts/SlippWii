@@ -27,6 +27,8 @@ includes have been generated.
 | `Nintendont/loader/source/slippwii.c`, `vcdiff.c` | Before Melee starts: the account check, and Slippi's menu patches applied to the disc (first start) |
 | `release/` | What goes on the SD card besides the app: the Homebrew Channel icon and `meta.xml`, the account-copy script |
 | `tools/slippi_files.py` | Slippi's pinned files; `netplay.gct`, and a PC-side patcher for development |
+| `tools/slippi_version.py` | Which Slippi the checkout builds for: 3.6.4, or the version after it ([NEXT_SLIPPI.md](NEXT_SLIPPI.md)) |
+| `Nintendont/loader/source/hsd_links.c`, `tools/hsd_links.py` | The next Slippi's two game files whose pictures and models are links into the disc: resolved on the Wii, and the same in Python |
 | `tools/make_release.py` | The release zip (the SD card's files, with the manifest of what the Wii must make) |
 | `tools/make_beta.py` | A beta's zip, as rollback's betas were: an app alone (`apps/SlippWii-Rollback`), beside an installed SlippWii |
 | `tools/menu_shot.py` | A picture of the loader's Slippi Settings page from a capture card, with nobody at the console |
@@ -46,7 +48,12 @@ python tools/online_selftest.py pc --game                       # the client vs 
 python tools/online_selftest.py pc --game --rollback 2          # the same, rolling back (docs/ROLLBACK.md)
 python tools/rollback/test/run.py                               # the savestate engine vs a simulated Wii
 python tools/test_update.py [--live]                            # the updater's core (--live: a download from GitHub)
+python tools/test_loader_slippwii.py --iso Melee.iso --zip dist/SlippWii-vX.zip   # the loader's file making, on a PC
+python tools/test_hsd_links.py --iso Melee.iso                  # the next Slippi's linked files, C and Python
+python tools/online_selftest.py pc --next-mm                    # matchmaking as after 3.6.4 (WebSocket, TLS, STUN)
 ```
+
+The unit tests run twice, as a build for each Slippi version (`SO_SLIPPI_NEXT`).
 
 `online_selftest.py pc` needs a fake matchmaking server and peer (`slippi_fake_mm.exe`,
 `slippi_fake_peer.exe`, from the Melee 3DS port's Slippi tools); point `--tools` at them. Without

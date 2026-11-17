@@ -229,7 +229,7 @@ Slippi Dolphin runs Slippi's online code inside Melee and acts as Melee's "Slipp
 That device handles matchmaking, the connection to the opponent and the replay stream. SlippWii does
 the same on a real Wii: Slippi Nintendont's kernel (on the Wii's ARM chip) stands in for that device,
 with a network client (matchmaking, ENet peer connection) and the same online code Slippi Dolphin
-3.6.4 runs. See [`docs/HOW_IT_WORKS.md`](docs/HOW_IT_WORKS.md) and the byte-level
+3.7.0 runs. See [`docs/HOW_IT_WORKS.md`](docs/HOW_IT_WORKS.md) and the byte-level
 [`docs/EXI_DEVICE_SPEC.md`](docs/EXI_DEVICE_SPEC.md).
 
 Rollback needs savestates, which Dolphin makes from outside the game. A Wii has no outside, so a

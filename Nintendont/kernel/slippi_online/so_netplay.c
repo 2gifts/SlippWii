@@ -30,6 +30,9 @@ enum {
 	MSG_CHAT = 0x84,
 	MSG_GAME_PREP_STEP = 0x85,
 	MSG_SYNCED_STATE = 0x86,
+	/* from Slippi 3.6.5 */
+	MSG_PAD_SUGGESTION = 0x87,
+	MSG_PLAYER_DROP = 0x88,
 };
 
 /* One ENet connection to an opponent (Dolphin's activeConnections). */
@@ -80,6 +83,11 @@ typedef struct {
 	int game_started;
 	s32 frozen_head;	/* the newest pad sent ahead of the game (send_frozen_pads) */
 	u8 frozen_on, frozen_game_on;
+	u8 next;	/* the opponents speak Slippi 3.6.5 or later (so_config_next) */
+	/* (3.6.5) a player lost in a game of several: when (so_time_ms; 0: not lost), and the frame it
+	 * is out of the game from once that is settled (process_drops) */
+	u32 drop_ms[SO_MAX_PLAYERS];
+	s32 despawn_frame[SO_MAX_PLAYERS];
 	s32 newest_offset_us;
 	u32 head_word, changed_word;	/* so_np_publish_head */
 	SoLocalPads local_pads;
@@ -600,6 +608,9 @@ static void on_pad(Reader *r, ENetPeer *peer, u64 now_us)
 		return;
 	}
 	np->stats.pad_packets_received++;
+	/* (3.6.5) The others have been told which inputs we have of a player that left: no more are taken. */
+	if (np->next && !np->player_active[player])
+		return;
 
 	/* Two connections to the same opponent: the lower player index keeps
 	 * this one and closes the others. */
@@ -665,7 +676,7 @@ static void on_pad(Reader *r, ENetPeer *peer, u64 now_us)
 			for (f = old_head + 1; f <= frame; f++)
 				if (so_remote_pads_get(&np->remote_pads[0], f, pad) == 0 &&
 				    so_remote_pads_get(&np->remote_pads[0], f - 1, before) == 0 &&
-				    memcmp(pad, before, SO_PAD_SIZE))
+				    memcmp(pad, before, SO_PAD_INPUT))	/* (the inputs: a pad's random bits always differ) */
 					changed = f;
 			if (changed)
 				so_set_ppc_word(np->changed_word, (u32)changed);
@@ -775,8 +786,10 @@ static void on_chat(Reader *r)
 {
 	int id = (int)rd_u32(r);
 	u8 player = rd_u8(r);
-	if (!r->ok || !chat_id_allowed(id)) {
-		so_log("np: bad chat message %d", id);
+	/* (the player, as Slippi Dolphin checks it from 3.7.0: the game shows who wrote by this number
+	 * as it is, so it must be an opponent's) */
+	if (!r->ok || !chat_id_allowed(id) || player == np->local_idx || remote_from_player(player) >= np->remote_count) {
+		so_log("np: bad chat message %d from player %u", id, (unsigned)player);
 		return;
 	}
 	np->chat_message = id;
@@ -825,6 +838,110 @@ static void on_synced_state(Reader *r)
 		np->synced[remote] = s;
 }
 
+/* ---- a player lost in a game of several (Slippi 3.6.5: SlippiNetplay.cpp, ProcessPlayerDrops) ----
+ * Each player tells the others the last inputs it has of the one that left (64 at most). After 300 ms,
+ * time for those reports to come, the newest input anyone had is its last: it is repeated from there
+ * (so_np_fill_dropped), and 16 frames on (twice the rollback limit and 2) its character leaves the
+ * game, on the same frame for everybody. A report that comes later than that leaves players with
+ * different inputs: the checksums find that out. */
+#define DROP_REPORT_WAIT_MS 300
+#define DROP_DESPAWN_FRAMES (2 * 7 + 2)
+
+static void set_disconnected(void);
+
+static void lose_player(u8 idx)
+{
+	int i, left = 0;
+	np->player_active[idx] = 0;
+	for (i = 0; i < MAX_CONNECTIONS; i++) {
+		Connection *c = &np->conns[i];
+		if (c->peer && !c->disconnected && c->player_idx == idx) {
+			enet_peer_disconnect(c->peer, 0);
+			c->disconnected = 1;
+		}
+	}
+	for (i = 0; i < np->remote_count; i++)
+		left += np->player_active[so_np_remote_player_idx(i)];
+	if (!left && np->status == SO_NP_CONNECTED)
+		set_disconnected();
+}
+
+static void send_drop_report(u8 port)
+{
+	u8 *out = np->packet;	/* (3 + SO_DROP_REPORT_MAX bytes of it) */
+	out[0] = MSG_PLAYER_DROP;
+	out[1] = np->local_idx;
+	out[2] = port;
+	send_all(out, 3 + (u32)so_drop_report_encode(&np->remote_pads[remote_from_player(port)], out + 3));
+}
+
+static void process_drops(void)
+{
+	u32 now = so_time_ms();
+	int i;
+	if (!np->next || np->remote_count < 2)
+		return;
+	for (i = 0; i < np->remote_count; i++) {
+		u8 port = so_np_remote_player_idx(i);
+		const SoRemotePads *q = &np->remote_pads[i];
+		s32 last = q->count ? q->head_frame : 0;
+		if (np->player_active[port])
+			continue;
+		/* (we are the one leaving, or nothing is being played: nobody to tell) */
+		if (np->status != SO_NP_CONNECTED)
+			return;
+		if (!np->drop_ms[port]) {
+			np->drop_ms[port] = now ? now : 1;	/* (0: not lost; never later than now, for the wait below) */
+			so_log("np: player %u is lost; its last input here: frame %d", (unsigned)port + 1, (int)last);
+			send_drop_report(port);
+		}
+		if (np->despawn_frame[port] || (s32)(now - np->drop_ms[port]) < DROP_REPORT_WAIT_MS)
+			continue;
+		np->despawn_frame[port] = last + DROP_DESPAWN_FRAMES;
+		so_log("np: settled on player %u: its last input is frame %d, it is out of the game from frame %d",
+			(unsigned)port + 1, (int)last, (int)np->despawn_frame[port]);
+	}
+}
+
+static void on_player_drop(Reader *r)
+{
+	u8 sender = rd_u8(r), dropped = rd_u8(r), count;
+	s32 last = (s32)rd_u32(r);
+	const u8 *inputs;
+	int added;
+	count = rd_u8(r);
+	inputs = r->p;
+	np->stats.drop_reports++;
+	if (!np->next || !r->ok || r->left < (u32)count * so_pad_wire || sender >= SO_MAX_PLAYERS || dropped >= SO_MAX_PLAYERS ||
+	    sender == np->local_idx || sender == dropped || last < 0 || remote_from_player(sender) >= np->remote_count ||
+	    (dropped != np->local_idx && remote_from_player(dropped) >= np->remote_count)) {
+		so_log("np: a drop report that makes no sense (from %u about %u, last frame %d)", (unsigned)sender + 1,
+			(unsigned)dropped + 1, (int)last);
+		return;
+	}
+	/* About us: the others see to it. From a player we have lost: no say (or two that lost each
+	 * other would take each other out). */
+	if (dropped == np->local_idx || !np->player_active[sender])
+		return;
+	/* Lost to one is lost to all, whether or not our own connection to it still stands; and the
+	 * others are told what we have of it. */
+	lose_player(dropped);
+	process_drops();
+	if (np->despawn_frame[dropped]) {
+		if (last + DROP_DESPAWN_FRAMES > np->despawn_frame[dropped])
+			so_log("np: player %u's report about player %u came too late (its last frame %d; settled: out from %d)",
+				(unsigned)sender + 1, (unsigned)dropped + 1, (int)last, (int)np->despawn_frame[dropped]);
+		return;
+	}
+	/* the inputs we were missing: as real as if the player had sent them */
+	added = so_drop_report_apply(&np->remote_pads[remote_from_player(dropped)], last, inputs, count);
+	if (added < 0)
+		so_log("np: a drop report with too many frames (to frame %d)", (int)last);
+	else if (added)
+		so_log("np: player %u's report gave %d more inputs of player %u (to frame %d)", (unsigned)sender + 1,
+			added, (unsigned)dropped + 1, (int)last);
+}
+
 static void on_data(const u8 *data, u32 len, ENetPeer *peer, u64 now_us)
 {
 	Reader r;
@@ -852,6 +969,13 @@ static void on_data(const u8 *data, u32 len, ENetPeer *peer, u64 now_us)
 		break;
 	case MSG_SYNCED_STATE:
 		on_synced_state(&r);
+		break;
+	case MSG_PAD_SUGGESTION:
+		/* What the opponent's adapter has read since its last frame's pad: Slippi Dolphin predicts
+		 * with it. Only a better guess, checked against the real input as any prediction is: not used. */
+		break;
+	case MSG_PLAYER_DROP:
+		on_player_drop(&r);
 		break;
 	default:
 		if (r.ok)
@@ -900,6 +1024,12 @@ static void on_connect(ENetPeer *peer)
 		}
 	} else {
 		remote = remote_for_address(peer, 1);
+		if (np->next && np->drop_ms[so_np_remote_player_idx(remote)]) {
+			/* (3.6.5) a player that was lost stays lost: the others have gone on without it */
+			so_log("np: a new connection from player %u, which was lost: refused", (unsigned)so_np_remote_player_idx(remote) + 1);
+			enet_peer_disconnect(peer, 0);
+			return;
+		}
 		add_connection(peer, so_np_remote_player_idx(remote));
 		so_log("np: late connection with %s:%u", ip_text(peer->address.host, ip), (unsigned)peer->address.port);
 	}
@@ -941,11 +1071,6 @@ static void on_disconnect(ENetPeer *peer, u32 data)
 	if (c)
 		c->disconnected = 1;
 	all_for_key = all_disconnected_for(host, port);
-	if (all_for_key && c) {
-		if (np->player_active[c->player_idx])
-			so_log("np: no connection left with player %u: it has left", (unsigned)c->player_idx + 1);
-		np->player_active[c->player_idx] = 0;
-	}
 	/* Only a connection we actually play over counts; a failed duplicate
 	 * from a port-changing router does not. */
 	for (i = 0; i < np->remote_count; i++)
@@ -953,6 +1078,15 @@ static void on_disconnect(ENetPeer *peer, u32 data)
 			is_server = 1;
 	if (is_server && data)
 		np->disconnect_reason = data;
+	/* (3.6.5: a player counts as lost only by such a connection, as losing it makes everyone drop it) */
+	if (all_for_key && c && (is_server || !np->next)) {
+		if (np->player_active[c->player_idx])
+			so_log("np: no connection left with player %u: it has left", (unsigned)c->player_idx + 1);
+		if (np->next)
+			lose_player(c->player_idx);	/* (and any other connection to it closed, as Dolphin) */
+		else
+			np->player_active[c->player_idx] = 0;
+	}
 	if (is_server && all_for_key && all_disconnected())
 		set_disconnected();
 }
@@ -996,6 +1130,8 @@ int so_np_start(const SoMatchResult *match, u16 port, const SoConfig *config)
 	np->drop_pct = config->test_drop_pct;
 	np->ack_delay_us = config->ack_delay_us;
 	np->fast_ack = config->fast_ack && !config->ack_delay_us && !config->test_drop_pct;
+	np->next = (u8)so_config_next(config);
+	so_pad_wire = np->next ? SO_PAD_SIZE : SO_PAD_INPUT;
 	fast_ack_off();
 	fa.acked = 0;
 	np->local_sel.player_idx = np->local_idx;
@@ -1046,8 +1182,14 @@ void so_np_poll(void)
 			/* ENet's throttle drops unreliable packets, a pad here and there, when the ping
 			 * swings: each costs the opponent a rollback. What isn't acked goes with the next
 			 * pad; this side's alone, so the opponent's sends are as against a PC. */
-			event.peer->packetThrottleAcceleration = 0;
-			event.peer->packetThrottleDeceleration = 0;
+			if (np->next) {
+				/* (Slippi Dolphin does this itself from 3.6.5 on, and tells the peer to as well) */
+				enet_peer_throttle_configure(event.peer, ENET_PEER_PACKET_THROTTLE_INTERVAL,
+					ENET_PEER_PACKET_THROTTLE_ACCELERATION, 0);
+			} else {
+				event.peer->packetThrottleAcceleration = 0;
+				event.peer->packetThrottleDeceleration = 0;
+			}
 			on_connect(event.peer);
 			break;
 		case ENET_EVENT_TYPE_RECEIVE:
@@ -1076,6 +1218,8 @@ void so_np_poll(void)
 		if (late)
 			enet_host_flush(np->host);
 	}
+
+	process_drops();
 
 	if (np->status == SO_NP_CONNECTING) {
 		all = 1;
@@ -1444,23 +1588,26 @@ const SoSyncedState *so_np_remote_synced_state(int remote)
  * connections close and the game goes on with the others; the last one gone ends it. */
 void so_np_drop_player(int remote)
 {
-	u8 idx;
-	int i, left = 0;
 	if (!np || remote < 0 || remote >= np->remote_count)
 		return;
-	idx = so_np_remote_player_idx(remote);
-	np->player_active[idx] = 0;
-	for (i = 0; i < MAX_CONNECTIONS; i++) {
-		Connection *c = &np->conns[i];
-		if (c->peer && !c->disconnected && c->player_idx == idx) {
-			enet_peer_disconnect(c->peer, 0);
-			c->disconnected = 1;
-		}
-	}
+	lose_player(so_np_remote_player_idx(remote));
+}
+
+s32 so_np_despawn_frame(int remote)
+{
+	if (!np || remote < 0 || remote >= np->remote_count)
+		return 0;
+	return np->despawn_frame[so_np_remote_player_idx(remote)];
+}
+
+void so_np_fill_dropped(s32 frame)
+{
+	int i;
+	if (!np || !np->next)
+		return;
 	for (i = 0; i < np->remote_count; i++)
-		left += np->player_active[so_np_remote_player_idx(i)];
-	if (!left && np->status == SO_NP_CONNECTED)
-		set_disconnected();
+		if (np->despawn_frame[so_np_remote_player_idx(i)])
+			so_remote_pads_repeat(&np->remote_pads[i], frame);
 }
 
 void so_np_force_disconnect(u32 reason)
@@ -1468,10 +1615,12 @@ void so_np_force_disconnect(u32 reason)
 	int i;
 	np->pending_reason = reason;
 	np->disconnect_reason = reason;
-	for (i = 0; i < np->remote_count; i++)
-		np->player_active[so_np_remote_player_idx(i)] = 0;
+	/* (the status first, as Dolphin: process_drops tells "we are leaving" from "they dropped" by it,
+	 * and would report the players marked gone below to each other) */
 	if (np->status == SO_NP_CONNECTED)
 		set_disconnected();
+	for (i = 0; i < np->remote_count; i++)
+		np->player_active[so_np_remote_player_idx(i)] = 0;
 }
 
 void so_np_stats(SoNpStats *out)

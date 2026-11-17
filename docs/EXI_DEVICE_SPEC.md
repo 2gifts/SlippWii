@@ -952,3 +952,33 @@ This is for wiring; the wire formats already match Ishiiruka 3.6.4 (`N/slippi_on
 14. **Time sync is one-sided.** The PC slows and stalls for the Wii; the Wii only stalls (SKIP).
     - If the Wii falls behind, the PC compensates by rolling back; it never stalls the Wii.
     - Implementing Dolphin's ADVANCE rule on the Wii would need two engine frames in one VI. Leave it for later; it is not needed for correctness.
+
+## 7. After 3.6.4
+
+Added 2026-11-16, from Slippi's development source (Ishiiruka `7333463b`, "3.6.5-dev.1";
+`EXI_DeviceSlippi.cpp`, `SlippiExiTypes.h`). The kernel uses these layouts when the version it
+reports is over 3.6.4 (`so_config_next`), and the ones above otherwise; `docs/NEXT_SLIPPI.md` has
+the rest of that version.
+
+**`0xB0` (online inputs).** The request's payload is 27 bytes: as before, then the input's source
+port at 25 and "is leaving" at 26 (not 0: the client disconnects, as on a lost connection). The
+answer is 559 bytes:
+
+| Offset | Size | What |
+|---|---|---|
+| 0x000 | 1 | result, as before |
+| 0x001 | 1 | opponents |
+| 0x002 | 3 x 8 | each opponent's checksum frame (s32) and checksum (u32) |
+| 0x01A | 3 x 4 | each opponent's newest frame (s32) |
+| 0x026 | 4 | the smallest of those |
+| 0x02A | 3 x 7 x 12 | pads, as before; byte 8 of a pad is its frame's RNG bits |
+| 0x126 | 3 x 4 | the frame each opponent's character leaves the game on (s32; 0: it has not left) |
+| 0x132 | 3 x 7 x 12 | predicted inputs: each opponent's newest pad, seven times |
+| 0x22E | 1 | random bits for the local player's next pad |
+
+**`0xB3` (matchmaking state).** 1030 bytes: as before to 0x3C2, then rank information (4 x 16) and
+"is a bot" for each port (4 bytes at 0x402). Party's game is set up as a stock game of 8 minutes,
+as every other mode's.
+
+**The pad sent with `0xB0`** has its RNG bits at byte 8: the game takes them from the answer's last
+byte of the poll before.

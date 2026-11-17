@@ -17,6 +17,7 @@
 #include "so_platform.h"
 #include "so_selftest.h"	/* so_encode_connect_code */
 #include "so_text.h"
+#include "so_tls.h"
 #include "so_util.h"
 #include "string.h"
 
@@ -86,8 +87,34 @@ enum { RESP_NORMAL = 1, RESP_SKIP = 2, RESP_DISCONNECTED = 3, RESP_ADVANCE = 4 }
 enum { MM_IDLE = 0, MM_INITIALIZING = 1, MM_MATCHMAKING = 2, MM_OPPONENT_CONNECTING = 3, MM_CONNECTION_SUCCESS = 4,
 	MM_ERROR = 5 };
 
-#define RXB_SIZE 297
-#define MSRB_SIZE 962
+/* The 0xB0's request and answer and the 0xB3's answer, as Slippi 3.6.4's game code has them and as
+ * 3.6.5's does, under Slippi's own names where the two differ (Online.s; docs/NEXT_SLIPPI.md).
+ * Which one this build speaks is a setting (so_config_next), as the codeset on the card must be the
+ * same version's. tools/check_exi_layout.py, run with every build, holds these numbers to Slippi's
+ * source: one byte off in a field that is 0 in every test goes unseen otherwise. */
+#define TXB_DELAY 13
+#define TXB_PAD 14			/* 12 bytes */
+#define TXB_INPUT_SOURCE_INDEX 26	/* (3.6.5) the port the controller is in */
+#define TXB_IS_LEAVING 27		/* (3.6.5) the player chose to leave the game */
+#define TXB_SIZE_364 26
+#define TXB_SIZE_NEXT 28
+#define RXB_SIZE_364 297
+#define RXB_SIZE_NEXT 559
+#define MSRB_SIZE_364 962
+#define MSRB_SIZE_NEXT 1030
+#define RXB_SIZE (next_mode() ? RXB_SIZE_NEXT : RXB_SIZE_364)
+#define MSRB_SIZE (next_mode() ? MSRB_SIZE_NEXT : MSRB_SIZE_364)
+/* in the 3.6.5 answer, after the opponents' pads (RXB_DESPAWN_FRAMES, RXB_OPNT_PREDICTED_INPUTS,
+ * RXB_NEXT_PAD_RNG_BITS) and in its match state (MSRB_IS_BOT) */
+#define RXB_DESPAWN 0x126
+#define RXB_PREDICTED 0x132
+#define RXB_NEXT_RNG 0x22E
+#define MSRB_IS_BOT 0x402
+
+static int next_mode(void)
+{
+	return so_config_next(so_client_config());
+}
 #define OSB_SIZE 42
 #define PLAYER_SETTINGS_SIZE 3264
 #define ROLLBACK_MAX_FRAMES 7
@@ -102,7 +129,7 @@ enum { MM_IDLE = 0, MM_INITIALIZING = 1, MM_MATCHMAKING = 2, MM_OPPONENT_CONNECT
 static u16 payload_size(u8 cmd)
 {
 	switch (cmd) {
-	case CMD_ONLINE_INPUTS: return 25;
+	case CMD_ONLINE_INPUTS: return (next_mode() ? TXB_SIZE_NEXT : TXB_SIZE_364) - 1;	/* (after the command's byte) */
 	case CMD_CAPTURE_SAVESTATE:
 	case CMD_LOAD_SAVESTATE: return 32;
 	case CMD_FIND_OPPONENT: return 19;
@@ -130,7 +157,7 @@ static u16 payload_size(u8 cmd)
 	case CMD_SET_DELAY: return 1;
 	case CMD_SET_RUMBLE: return 1;
 	case CMD_ROLLBACK: return 2;
-	case CMD_EARLY_PAD: return 25;
+	case CMD_EARLY_PAD: return (next_mode() ? TXB_SIZE_NEXT : TXB_SIZE_364) - 1;	/* (as CMD_ONLINE_INPUTS) */
 	case CMD_TEXT_REPORT: return 0x7F;
 	default: return 0;
 	}
@@ -320,6 +347,7 @@ static struct {
 	u8 setup_on;	/* 1: waiting for that poll; 2: said that it has not come (once a game) */
 	int drive_runs;	/* the drive's runs since the last game still to log, a line a poll */
 	u8 poll_delay;	/* the last 0xB0's delay (diagnostics: a change is logged) */
+	u8 rng_bits[16], rng_left;	/* (3.6.5) random bytes for RXB_NEXT_RNG, one an answer */
 	/* so_prefetch may use the engine's scratch again: once this game is over, and
 	 * the engine (when it was asked to run) has reported, so is done with it */
 	int pf_engine, pf_game_over;
@@ -484,7 +512,10 @@ static void fill_gone(u8 *r, int i, s32 frame, s32 finalized, s32 head, s32 newe
 	}
 	for (k = 0; k < ROLLBACK_MAX_FRAMES && off + k <= top - lo; k++)
 		so_np_remote_pad(i, top - off - k, pads + k * PAD_FULL_SIZE);
-	r[0x2A + 3 * ROLLBACK_MAX_FRAMES * PAD_FULL_SIZE + i] = frame >= despawn;
+	if (next_mode())
+		so_put_u32(r + RXB_DESPAWN + i * 4, (u32)despawn);	/* (3.6.5: the frame itself; the game compares) */
+	else
+		r[RXB_DESPAWN + i] = frame >= despawn;
 }
 
 static void fill_remote_inputs(u8 *r, s32 frame, s32 finalized, const s32 *heads, int remotes)
@@ -506,7 +537,7 @@ static void fill_remote_inputs(u8 *r, s32 frame, s32 finalized, const s32 *heads
 	}
 	for (i = 0; i < 3; i++) {
 		nums[i] = frame;
-		if (i < remotes && gone[i]) {
+		if (i < remotes && gone[i] && !next_mode()) {
 			fill_gone(r, i, frame, finalized, heads[i], newest, newest_cf, newest_cs, &nums[i]);
 			so_put_u32(r + 0x1A + i * 4, (u32)nums[i]);
 			continue;
@@ -515,6 +546,13 @@ static void fill_remote_inputs(u8 *r, s32 frame, s32 finalized, const s32 *heads
 			s32 head = heads[i], cf;
 			u32 cs;
 			so_np_remote_checksum(i, &cf, &cs);
+			if (gone[i]) {
+				/* (3.6.5) One that has left: its checksums stopped, so the game is given the newest
+				 * of the others'. Its inputs are in its queue as anyone's: the last one, repeated
+				 * (so_np_fill_dropped), and the frame its character leaves on follows below. */
+				cf = newest_cf;
+				cs = newest_cs;
+			}
 			so_put_u32(r + 0x02 + i * 8, (u32)cf);
 			so_put_u32(r + 0x06 + i * 8, cs);
 			/* Dolphin sends the oldest 7 frames it holds, from the
@@ -533,11 +571,30 @@ static void fill_remote_inputs(u8 *r, s32 frame, s32 finalized, const s32 *heads
 	so_put_u32(r + 0x26, (u32)smallest);
 	for (i = 0; i < remotes; i++) {
 		u8 *pads = r + 0x2A + i * ROLLBACK_MAX_FRAMES * PAD_FULL_SIZE;
-		if (gone[i])
+		if (gone[i] && !next_mode())
 			continue;	/* (fill_gone) */
+		if (next_mode())
+			so_put_u32(r + RXB_DESPAWN + i * 4, (u32)so_np_despawn_frame(i));
 		for (k = 0; k < ROLLBACK_MAX_FRAMES; k++)
 			if (!x.game.rb || k == 0 || nums[i] - k >= finalized)	/* Dolphin's holds no older ones */
-				so_np_remote_pad(i, nums[i] - k, pads + k * PAD_FULL_SIZE);	/* 8 bytes; the rest stays 0 */
+				so_np_remote_pad(i, nums[i] - k, pads + k * PAD_FULL_SIZE);	/* 9 bytes; the rest stays 0 */
+	}
+	if (next_mode()) {
+		/* (3.6.5) What the game predicts with for each of the 7 frames after an opponent's newest
+		 * input: that input, the first of its block (Slippi Dolphin puts an "input suggestion" there
+		 * when it has one; SlippWii takes none). And the random bits the game sends with its next pad:
+		 * not so_random's, whose generator an opponent could read back from them. */
+		for (i = 0; i < 3; i++) {
+			const u8 *latest = r + 0x2A + i * ROLLBACK_MAX_FRAMES * PAD_FULL_SIZE;
+			u8 *predicted = r + RXB_PREDICTED + i * ROLLBACK_MAX_FRAMES * PAD_FULL_SIZE;
+			for (k = 0; k < ROLLBACK_MAX_FRAMES; k++)
+				memcpy(predicted + k * PAD_FULL_SIZE, latest, PAD_FULL_SIZE);
+		}
+		if (x.rng_left == 0) {
+			so_tls_random(x.rng_bits, sizeof(x.rng_bits));
+			x.rng_left = sizeof(x.rng_bits);
+		}
+		r[RXB_NEXT_RNG] = x.rng_bits[--x.rng_left];
 	}
 }
 
@@ -617,7 +674,7 @@ void so_exi_desync_service(void)
 			char line[4 * (2 * SO_PAD_SIZE + 1) + 1];
 			int len = 0, j;
 			for (j = k; j < k + 4; j++) {
-				for (b = 0; b < SO_PAD_SIZE; b++) {
+				for (b = 0; b < so_pad_wire; b++) {
 					u8 v = desync->pads[i][j][b];
 					line[len++] = desync->have[i][j] ? hex[v >> 4] : '-';
 					line[len++] = desync->have[i][j] ? hex[v & 15] : '-';
@@ -1276,7 +1333,7 @@ static u32 marks_found, marks_first[8];	/* (so_exi_scratch_boot) */
  * the PC's log only. A file this boot is writing is left alone (it is open). */
 static void logfile_dump(void)
 {
-	enum { MOST = 24576, FIRST = 8, LINES = 48 };
+	enum { MOST = 24576, FIRST = 8, LINES = 96 };
 	char *buf = (char *)so_malloc(MOST + 1), path[64], *name, *end, *line;
 	int n, lines = 0;
 	if (!buf)
@@ -1306,6 +1363,7 @@ static void logfile_dump(void)
 			*nl = 0;
 		if (lines < FIRST || strstr(line, "desync") || strstr(line, "the game:") || strstr(line, "checksum") ||
 		    strstr(line, "selections") || strstr(line, "has left") || strstr(line, "game over") ||
+		    strstr(line, " np: ") || strstr(line, "exi: no input") ||
 		    strstr(line, " di: ") || strstr(line, "fs lock") || strstr(line, "prefetch: state")) {
 			so_log_private("card> %.140s", line);
 			if (!(++lines & 7))
@@ -1314,6 +1372,44 @@ static void logfile_dump(void)
 		if (!nl)
 			break;
 		line = nl + 1;
+	}
+	if (so_client_config()->test_logfile_dump > 1 && n == MOST) {
+		/* (2) what a long report says after its first part: the rest of the file, a part at a time, whole
+		 * lines, without the stall profiler's (a test build writes thousands of those in a stall) */
+		int err = 0;
+		void *f = so_file_open(path, &err);
+		u8 *bounce = (u8 *)so_malloc(4096);
+		u32 at = MOST;
+		lines = 0;
+		while (f && bounce && lines < 400) {
+			int last;
+			n = so_file_read_at(f, at, (u8 *)buf, MOST, bounce, 4096);
+			if (n <= 0)
+				break;
+			buf[n] = 0;
+			for (last = n; n == MOST && last > 0 && buf[last - 1] != 10; last--)
+				;	/* (a line cut by the part's end comes with the next) */
+			if (!last)
+				break;
+			buf[last - (n == MOST)] = 0;
+			at += (u32)last;
+			for (line = buf; *line;) {
+				char *nl = strchr(line, 10);
+				if (nl)
+					*nl = 0;
+				if (!strstr(line, "STALL") && !strstr(line, "SHOWN")) {
+					so_log_private("card+ %.150s", line);
+					if (!(++lines & 7))
+						so_client_flush_logs();
+				}
+				if (!nl)
+					break;
+				line = nl + 1;
+			}
+		}
+		so_log_private("card+ (%d lines of the rest, read to byte %u; open %d)", lines, (unsigned)at, err);
+		if (bounce)
+			so_free(bounce);
 	}
 	so_free(buf);
 }
@@ -1363,9 +1459,11 @@ void so_exi_scratch_boot(void)
 }
 
 /* rollback.c: replay_queue, answer_ready */
-#define ENGINE_REPLAY_HEAD 0x1159F300
-#define ENGINE_REPLAY_TAIL 0x1159F320
-#define ENGINE_ANSWER 0x1159F340
+/* (the answer of Slippi 3.6.5's 0xB0 is 559 bytes, where there was room for 448 before the words
+ * at 0x1159F500: the ring's two words moved up, and the answer down into their place) */
+#define ENGINE_REPLAY_HEAD 0x1159FE00
+#define ENGINE_REPLAY_TAIL 0x1159FE20
+#define ENGINE_ANSWER 0x1159F2A0
 #define ENGINE_REPLAY 0x115A0000
 #define ENGINE_REPLAY_SIZE 0x10000u
 #define ENGINE_REPLAY_WRAP 0xFFFFFFFFu
@@ -1879,6 +1977,13 @@ static void on_online_inputs(const u8 *p)
 	t_lock = so_time_us() - t_in;
 	if (t_lock > x.game.max_lock_us)
 		x.game.max_lock_us = (u32)t_lock;
+	/* (3.6.5) The player chose to leave (Party's L+R+A+Start): the game ends for this console as when
+	 * the connection is lost, and the others play on without it. */
+	if (next_mode() && p[TXB_IS_LEAVING] && so_np_status() == SO_NP_CONNECTED) {
+		so_log("exi: the player leaves the game at frame %d", (int)frame);
+		so_np_force_disconnect(0);
+		x.game.left_said = 1;	/* (its own choice: nothing went wrong, nothing to report) */
+	}
 	if (so_np_status() != SO_NP_CONNECTED) {
 		/* A game of four ends for one console alone when the three others have given it up (one
 		 * who leaves is played on without): kept as a desync is, for the lines before this one. */
@@ -1896,6 +2001,8 @@ static void on_online_inputs(const u8 *p)
 	if (remotes > 3)
 		remotes = 3;
 	check_sums(finalized, checksum, remotes);
+	if (next_mode())
+		so_np_fill_dropped(frame);
 	/* tests: a lag spike (test_spike_ms) every 300 frames (test_spike_every), the first at
 	 * frame 80, so its rollbacks cross the end of the countdown (GO),
 	 * timed, as the game's frames stop while it waits */
@@ -1938,7 +2045,10 @@ static void on_online_inputs(const u8 *p)
 			 * the game goes on with the others (fill_remote_inputs); one whose inputs hold the
 			 * game for 7 s is given up, alone. */
 			int late = x.game.rb ? !within_rollback_limit(frame, finalized, heads[i]) : heads[i] < frame;
-			if (!so_np_player_active(so_np_remote_player_idx(i)) || !late) {
+			int gone = !so_np_player_active(so_np_remote_player_idx(i));
+			/* (3.6.5: one that has left is waited for like anyone until its last input is settled:
+			 * until then the others' reports may still add to its inputs) */
+			if (next_mode() ? (gone && so_np_despawn_frame(i)) || !late : gone || !late) {
 				x.game.short_since_us[i] = 0;
 				continue;
 			}
@@ -2038,7 +2148,7 @@ static void on_online_inputs(const u8 *p)
 		r[0] = RESP_NORMAL;
 		if (x.game.early_frame && frame >= x.game.early_frame) {
 			/* the pad the opponent has must be this frame's and this pad */
-			if (!sent_early || memcmp(x.game.early_pad, p + 14, SO_PAD_SIZE)) {
+			if (!sent_early || memcmp(x.game.early_pad, p + 14, so_pad_wire)) {
 				x.stats.early_wrong++;
 				if (!x.game.early_wrong++)
 					so_log("exi: PAD SENT AHEAD IS WRONG: for frame %d, this is frame %d", (int)x.game.early_frame,
@@ -2370,8 +2480,9 @@ static void on_get_match_state(void)
 	r[0x004] = x.remote_idx;
 
 	/* Always: mode, timer and items. */
-	if (x.mode == SO_MODE_PARTY) {
-		/* (as Slippi Dolphin 3.6.4's games of it: a replay of four of them, 2026-11-14) */
+	if (x.mode == SO_MODE_PARTY && !next_mode()) {
+		/* (as Slippi Dolphin 3.6.4's games of it: a replay of four of them, 2026-11-14; from 3.6.5
+		 * Party is stock mode with 8 minutes, as every other mode) */
 		x.match_block[0x00] = 0x12;	/* time mode */
 		x.match_block[0x03] = 0xCC;	/* score UI shown */
 		so_put_u32(x.match_block + 0x10, 5 * 60);
@@ -2441,6 +2552,13 @@ static void on_get_match_state(void)
 	so_game_string(error, 120, r + 0x165);
 	memcpy(r + 0x256, x.match_block, MATCH_BLOCK_SIZE);
 	r[0x3C1] = alt;
+	if (next_mode() && client_up() && (m = so_client_match()) != NULL) {
+		/* (3.6.5: for the replay's Game Start. The rank information before it stays zero: SlippWii
+		 * has no ranks) */
+		for (i = 0; i < m->player_count; i++)
+			if (m->players[i].port >= 1 && m->players[i].port <= 4)
+				r[MSRB_IS_BOT + m->players[i].port - 1] = m->players[i].is_bot;
+	}
 }
 
 /* ---- the other commands --------------------------------------------------- */

@@ -8,6 +8,8 @@
 #define MSG_PAD 0x80
 #define PAD_HEADER_SIZE 14	/* id, frame, player index, checksum frame, checksum */
 
+u8 so_pad_wire = SO_PAD_INPUT;
+
 /* ---- local pads ---------------------------------------------------------- */
 
 void so_local_pads_reset(SoLocalPads *q)
@@ -53,7 +55,7 @@ int so_local_pads_encode(const SoLocalPads *q, u8 player_idx, u8 *out, int size)
 	u32 i;
 	if (!newest)
 		return 0;
-	if (size < PAD_HEADER_SIZE + (int)q->count * SO_PAD_SIZE)
+	if (size < PAD_HEADER_SIZE + (int)q->count * so_pad_wire)
 		return -1;
 	out[0] = MSG_PAD;
 	so_put_u32(out + 1, (u32)newest->frame);
@@ -61,8 +63,8 @@ int so_local_pads_encode(const SoLocalPads *q, u8 player_idx, u8 *out, int size)
 	so_put_u32(out + 6, (u32)newest->checksum_frame);
 	so_put_u32(out + 10, newest->checksum);
 	for (i = 0; i < q->count; i++)
-		memcpy(out + PAD_HEADER_SIZE + i * SO_PAD_SIZE, so_local_pads_at(q, i)->pad, SO_PAD_SIZE);
-	return PAD_HEADER_SIZE + q->count * SO_PAD_SIZE;
+		memcpy(out + PAD_HEADER_SIZE + i * so_pad_wire, so_local_pads_at(q, i)->pad, so_pad_wire);
+	return PAD_HEADER_SIZE + q->count * so_pad_wire;
 }
 
 /* ---- remote pads --------------------------------------------------------- */
@@ -77,19 +79,29 @@ int so_remote_pads_add(SoRemotePads *q, s32 newest_frame, const u8 *pads, u32 pa
 {
 	s64 to_copy = (s64)newest_frame - (s64)q->head_frame;
 	s64 i;
-	if (to_copy > SO_PADS_MAX_PER_PACKET || to_copy * SO_PAD_SIZE > (s64)pad_bytes)
+	if (to_copy > SO_PADS_MAX_PER_PACKET || to_copy * so_pad_wire > (s64)pad_bytes)
 		return -1;
 	if (to_copy <= 0)
 		return 0;	/* an old packet: nothing new */
 	/* Oldest first, so the ring stays in frame order. */
 	for (i = to_copy - 1; i >= 0; i--) {
 		s32 frame = (s32)(newest_frame - i);
-		memcpy(q->pads[(u32)frame % SO_REMOTE_PAD_RING], pads + i * SO_PAD_SIZE, SO_PAD_SIZE);
+		u8 *slot = q->pads[(u32)frame % SO_REMOTE_PAD_RING];
+		memset(slot, 0, SO_PAD_SIZE);
+		memcpy(slot, pads + i * so_pad_wire, so_pad_wire);
 		if (q->count < SO_REMOTE_PAD_RING)
 			q->count++;
 	}
 	q->head_frame = newest_frame;
 	return (int)to_copy;
+}
+
+void so_remote_pads_push(SoRemotePads *q, s32 frame, const u8 *pad)
+{
+	memcpy(q->pads[(u32)frame % SO_REMOTE_PAD_RING], pad, SO_PAD_SIZE);
+	if (q->count < SO_REMOTE_PAD_RING)
+		q->count++;
+	q->head_frame = frame;
 }
 
 int so_remote_pads_get(const SoRemotePads *q, s32 frame, u8 *out)
@@ -98,6 +110,50 @@ int so_remote_pads_get(const SoRemotePads *q, s32 frame, u8 *out)
 		return -1;
 	memcpy(out, q->pads[(u32)frame % SO_REMOTE_PAD_RING], SO_PAD_SIZE);
 	return 0;
+}
+
+void so_remote_pads_repeat(SoRemotePads *q, s32 frame)
+{
+	u8 pad[SO_PAD_SIZE];
+	memset(pad, 0, sizeof(pad));
+	if (!q->count)
+		so_remote_pads_push(q, 0, pad);
+	so_remote_pads_get(q, q->head_frame, pad);
+	while (q->head_frame < frame)
+		so_remote_pads_push(q, q->head_frame + 1, pad);
+}
+
+/* ---- a lost player's inputs ---------------------------------------------- */
+
+int so_drop_report_encode(const SoRemotePads *q, u8 *out)
+{
+	u8 pad[SO_PAD_SIZE];
+	u32 n = q->count < SO_DROP_REPORT_INPUTS ? q->count : SO_DROP_REPORT_INPUTS, i;
+	so_put_u32(out, n ? (u32)q->head_frame : 0);
+	out[4] = (u8)n;
+	for (i = 0; i < n; i++) {
+		so_remote_pads_get(q, q->head_frame - (s32)i, pad);
+		memcpy(out + 5 + i * so_pad_wire, pad, so_pad_wire);
+	}
+	return (int)(5 + n * so_pad_wire);
+}
+
+int so_drop_report_apply(SoRemotePads *q, s32 last, const u8 *inputs, u32 count)
+{
+	s32 head = q->count ? q->head_frame : 0, f;
+	u8 pad[SO_PAD_SIZE];
+	if ((s64)last - head > SO_PADS_MAX_PER_PACKET)
+		return -1;
+	for (f = head + 1; f <= last; f++) {
+		u32 i = (u32)(last - f);
+		memset(pad, 0, sizeof(pad));
+		if (i < count)
+			memcpy(pad, inputs + i * so_pad_wire, so_pad_wire);
+		else if (q->count)
+			so_remote_pads_get(q, q->head_frame, pad);
+		so_remote_pads_push(q, f, pad);
+	}
+	return last > head ? (int)(last - head) : 0;
 }
 
 /* ---- ack timers ---------------------------------------------------------- */

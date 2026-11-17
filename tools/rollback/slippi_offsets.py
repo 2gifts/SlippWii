@@ -6,6 +6,9 @@ import re
 from pathlib import Path
 
 ONLINE_S = Path(__file__).resolve().parents[2] / 'slippi-ssbm-asm/Online/Online.s'
+# Slippi's development source (what comes after 3.6.4: docs/NEXT_SLIPPI.md), a second clone
+NEXT_ONLINE_S = Path(__file__).resolve().parents[2] / 'slippi-ssbm-asm-next/Online/Online.s'
+NEXT_WANTED = ('ODB_RXB_ADDR', 'RXB_NEXT_PAD_RNG_BITS', 'PAD_RNG_BITS')
 WANTED = ('OFST_R13_ODB_ADDR', 'ODB_INPUT_SOURCE_INDEX', 'ODB_LAST_LOCAL_INPUTS', 'ODB_DELAY_FRAMES',
           'ODB_ROLLBACK_END_FRAME', 'TXB_FRAME', 'TXB_DELAY', 'TXB_PAD', 'TXB_SIZE', 'PAD_REPORT_SIZE',
           'ODB_FRAME', 'ODB_FINALIZED_FRAME', 'ODB_STABLE_FINALIZED_FRAME', 'ODB_SAVESTATE_FRAME',
@@ -15,10 +18,10 @@ WANTED = ('OFST_R13_ODB_ADDR', 'ODB_INPUT_SOURCE_INDEX', 'ODB_LAST_LOCAL_INPUTS'
           'SSCB_WRITE_INDEX', 'SSCB_SSDB_START', 'SSDB_FRAME', 'SSDB_SIZE', 'ROLLBACK_MAX_FRAME_COUNT')
 
 
-def constants():
+def constants(next_version=False):
     """{name: value} of the .set lines whose values are constant expressions."""
     values = {}
-    for line in ONLINE_S.read_text(encoding='utf-8').splitlines():
+    for line in (NEXT_ONLINE_S if next_version else ONLINE_S).read_text(encoding='utf-8').splitlines():
         m = re.match(r'\s*\.set\s+(\w+)\s*,\s*([^#]+)', line)
         if m:
             try:
@@ -28,9 +31,10 @@ def constants():
     return values
 
 
-def defines():
-    values = constants()
-    return [f'{name}={values[name]}' for name in WANTED]
+def defines(next_version=False):
+    values = constants(next_version)
+    wanted = WANTED + NEXT_WANTED if next_version else WANTED
+    return [f'{name}={values[name]}' for name in wanted] + (['RB_NEXT=1'] if next_version else [])
 
 
 if __name__ == '__main__':

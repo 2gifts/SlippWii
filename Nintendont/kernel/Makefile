@@ -43,7 +43,8 @@ OBJECTS	:= start.o common.o alloc.o GCAM.o JVSIO.o JVSIOMessage.o FST.o DI.o Rea
 	   PatchWidescreen.o ISO.o Stream.o adp.o EXI.o SRAM.o GCNCard.o SI.o HID.o diskio.o \
 	   Config.o utils_asm.o ES.o NAND.o main.o syscalls.o ReadSpeed.o vsprintf.o string.o \
 	   prs.o SDI.o usb.o usbstorage.o wdvd.o net.o
-LIBS	:= ../fatfs/libfatfs-arm.a be/libc.a be/libgcc.a
+# (BearSSL for slippi_online/so_tls.c: tools/build_bearssl.py --arm --install)
+LIBS	:= ../fatfs/libfatfs-arm.a extlibs/lib/libbearssl-arm.a be/libc.a be/libgcc.a
 ZIPFILE	:= ../loader/data/kernel.zip
 
 # Bluetooth stack
@@ -53,7 +54,7 @@ OBJECTS	+= lwbt/bte.o lwbt/btmemb.o lwbt/btmemr.o lwbt/btpbuf.o lwbt/hci.o lwbt/
 # ENet 1.3.13 on an IOS platform layer
 SO_SOURCES := $(wildcard slippi_online/*.c) $(wildcard slippi_online/enet/*.c)
 OBJECTS += $(SO_SOURCES:.c=.o)
-SO_CFLAGS := -std=gnu99 -Os -DENET_IOS -Islippi_online/enet/include
+SO_CFLAGS := -std=gnu99 -Os -DENET_IOS -Islippi_online/enet/include -I../loader/extlibs/include
 
 slippi_online/%.o : slippi_online/%.c
 	@echo  "CC	$@"

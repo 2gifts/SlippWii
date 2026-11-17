@@ -3,6 +3,8 @@
     python tools/build_bearssl.py                 # for the Wii: build/bearssl/ppc/libbearssl.a
     python tools/build_bearssl.py --install       # and into Nintendont/loader/extlibs (lib and headers; committed)
     python tools/build_bearssl.py --host          # for this PC (the updater's tests): build/bearssl/host/
+    python tools/build_bearssl.py --arm           # for the Wii's kernel (matchmaking over TLS): build/bearssl/arm/
+    python tools/build_bearssl.py --arm --install # and into Nintendont/kernel/extlibs (committed)
 
 GitHub's servers take TLS 1.2 and later; the Wii's own SSL (IOS, /dev/net/ssl) is older. BearSSL
 (https://bearssl.org, MIT licence, Thomas Pornin) is small, plain C, and needs no operating system:
@@ -11,6 +13,13 @@ in build/bearssl-dl/; nothing of it is run, only compiled.
 
 Built without an operating system's random numbers or clock (the updater seeds it and checks no
 certificate dates: what it installs is verified by SlippWii's own signature, tools/sign_update.py).
+
+The kernel's and the PC's builds check certificates (so_tls.c: Slippi's matchmaking gets the
+player's key), with one change to BearSSL's source, made on a copy as it is compiled (NO_CLOCK):
+with no time set, a certificate's dates are not checked, where BearSSL 0.6 fails the chain
+("time unknown"). A Wii's clock is often wrong by years, and a console that cannot play because its
+clock battery died is worse than one that accepts a certificate past its date: the chain, the
+signatures and the server's name are checked all the same.
 """
 import argparse
 import hashlib
@@ -32,6 +41,14 @@ PPC_BIN = ROOT / '.toolchain/opt/devkitpro/devkitPPC/bin'
 EXTLIBS = ROOT / 'Nintendont/loader/extlibs'
 # No system random numbers, no system clock: there is none to ask on a Wii.
 CONFIG = ['-DBR_USE_URANDOM=0', '-DBR_USE_WIN32_RAND=0', '-DBR_USE_UNIX_TIME=0', '-DBR_USE_WIN32_TIME=0']
+ARM_BIN = ROOT / '.toolchain/opt/devkitpro/devkitARM/bin'
+KERNEL_EXTLIBS = ROOT / 'Nintendont/kernel/extlibs'
+# x509_minimal.c, where the date to check against is fetched (once after each of a certificate's two
+# dates is read, which is then on top of the stack): with no clock, that date itself, so both
+# comparisons pass.
+NO_CLOCK = ('\t\tCTX->err = BR_ERR_X509_TIME_UNKNOWN;\n\t\tT0_CO();\n',
+            '\t\t{\n\t\t\tuint32_t no_clock_s = T0_POP(), no_clock_d = T0_POP();\n\t\t\tT0_PUSH(no_clock_d);\n'
+            '\t\t\tT0_PUSH(no_clock_s);\n\t\t\tT0_PUSH(no_clock_d);\n\t\t\tT0_PUSH(no_clock_s);\n\t\t}\n')
 
 
 def source():
@@ -53,11 +70,27 @@ def source():
     return sorted((SRC / 'src').rglob('*.c'))
 
 
-def build(name, cc, ar, flags):
+def build(name, cc, ar, flags, no_clock=False):
     out = ROOT / 'build/bearssl' / name
     obj = out / 'obj'
     obj.mkdir(parents=True, exist_ok=True)
     files = source()
+    # (objects compiled with other options are not kept)
+    stamp = obj / 'flags.txt'
+    how = ' '.join([*cc, *flags, *CONFIG])
+    if not stamp.exists() or stamp.read_text(encoding='utf-8') != how:
+        for o in obj.glob('*.o'):
+            o.unlink()
+        stamp.write_text(how, encoding='utf-8')
+    if no_clock:
+        at = next(i for i, c in enumerate(files) if c.name == 'x509_minimal.c')
+        text = files[at].read_text(encoding='utf-8')
+        if text.count(NO_CLOCK[0]) != 1:
+            sys.exit('x509_minimal.c is not as expected: the no-clock change does not apply')
+        patched = out / 'x509_minimal.c'
+        if not patched.exists() or patched.read_text(encoding='utf-8') != text.replace(*NO_CLOCK):
+            patched.write_text(text.replace(*NO_CLOCK), encoding='utf-8', newline='\n')
+        files[at] = patched
 
     def one(c):
         o = obj / (c.stem + '.o')
@@ -87,13 +120,31 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--install', action='store_true', help="copy the Wii's library and the headers into the loader's extlibs")
     ap.add_argument('--host', action='store_true', help='build for this PC instead')
+    ap.add_argument('--arm', action='store_true', help="build for the Wii's kernel instead (big-endian ARM926)")
     ap.add_argument('--cc', default=os.environ.get('CC', 'gcc'), help='the PC compiler for --host (e.g. "python -m ziglang cc")')
     ap.add_argument('--ar', default=os.environ.get('AR', ''), help='the PC archiver for --host (default: ar, or zig ar with a zig compiler)')
     args = ap.parse_args()
     if args.host:
         cc = args.cc.split()
         ar = args.ar.split() if args.ar else (cc[:-1] + ['ar'] if 'ziglang' in args.cc else ['ar'])
-        build('host', cc, ar, ['-O2', '-std=c99'])
+        build('host', cc, ar, ['-O2', '-std=c99'], no_clock=True)
+        return
+    if args.arm:
+        # (for size, as the kernel's own online code is: its code region is small; each function and
+        # table a section of its own, so the kernel links only what its TLS profile names)
+        lib = build('arm', [str(ARM_BIN / 'arm-none-eabi-gcc')], [str(ARM_BIN / 'arm-none-eabi-ar')],
+                    ['-Os', '-std=gnu99', '-mbig-endian', '-mcpu=arm926ej-s', '-msoft-float', '-mfloat-abi=soft',
+                     '-ffunction-sections', '-fdata-sections',
+                     # As the kernel's own code is compiled, and for the same reason: the kernel's memcpy
+                     # (utils_asm.S) returns the END of the destination, not its start. With the compiler's
+                     # knowledge of memcpy, BearSSL's x509_minimal.c kept the server's key at that returned
+                     # address, and every handshake failed at the server's signature (error 27) on a Wii
+                     # only. tools/check_kernel_memcpy.py watches for any such use in the linked kernel.
+                     '-fno-builtin-memcpy', '-fno-builtin-memset', '-fno-builtin-memcmp'], no_clock=True)
+        if args.install:
+            (KERNEL_EXTLIBS / 'lib').mkdir(parents=True, exist_ok=True)
+            shutil.copy(lib, KERNEL_EXTLIBS / 'lib/libbearssl-arm.a')
+            print(f'installed into {KERNEL_EXTLIBS}/lib (the headers are the loader\'s: Nintendont/loader/extlibs/include)')
         return
     lib = build('ppc', [str(PPC_BIN / 'powerpc-eabi-gcc')], [str(PPC_BIN / 'powerpc-eabi-ar')],
                 ['-O2', '-std=gnu99', '-DGEKKO', '-mrvl', '-mcpu=750', '-meabi', '-mhard-float',

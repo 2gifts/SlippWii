@@ -17,13 +17,35 @@
 #define SO_TEST_USER_PATH "/slippwii/test-user.json"	/* the dummy test account */
 #define SO_CONFIG_PATH "/slippwii/config.ini"
 
+/* Which Slippi this build is for: 0, Slippi 3.6.4; 1, the version after it (docs/NEXT_SLIPPI.md),
+ * to be set when Slippi releases it. The one switch: the tools read this line
+ * (tools/slippi_version.py) for the boot codes (the rollback engine is built for one version's
+ * codes) and for Slippi's files and codes in a release (tools/make_release.py), and the defaults
+ * below follow it. At run time the kernel goes by the version it reports (so_config_next) and by
+ * mm_url, so a test build of either kind can speak either version. */
+#ifndef SO_SLIPPI_NEXT
+#define SO_SLIPPI_NEXT 1
+#endif
+
 /* The Slippi Dolphin version this build speaks (its netplay and its
  * matchmaking), which it reports to the matchmaking server. Slippi's server
  * turns away versions it no longer supports, and that is how a SlippWii
  * that Slippi has moved on from stops queueing: so against Slippi's server
  * this is the version, whatever config.ini says (so_config_finish), and it
  * changes only with a release checked against that Slippi version. */
+#if SO_SLIPPI_NEXT
+#define SO_APP_VERSION_DEFAULT "3.7.0"	/* (Slippi 3.7.0, released 2026-11-17: the development source this was built from, 7333463b, and three commits with nothing a console speaks) */
+#else
 #define SO_APP_VERSION_DEFAULT "3.6.4"
+#endif
+/* Slippi's matchmaking: up to 3.6.4 an ENet service (mm_host, mm_port; this is ""); after it a
+ * WebSocket over TLS at this address (so_mm_ws.c). Against Slippi's server this too is the
+ * build's, not a setting (so_config_finish). */
+#if SO_SLIPPI_NEXT
+#define SO_MM_URL_DEFAULT "wss://matchmaking.slippi.gg/v1/queue"
+#else
+#define SO_MM_URL_DEFAULT ""
+#endif
 /* The file the newest version Slippi's server has named is kept in
  * (so_client.c): with one over SO_APP_VERSION_DEFAULT the game's online
  * modes are locked ("update required"), as Slippi Dolphin locks its own. */
@@ -37,6 +59,10 @@
 #define SO_CLIENT_NAME_MODE 0
 #define SO_MM_HOST_DEFAULT "mm.slippi.gg"
 #define SO_MM_PORT_DEFAULT 43113
+/* The servers Slippi Dolphin asks for the netplay socket's public address
+ * before it joins the WebSocket service's queue (SlippiMatchmaking.h, after
+ * 3.6.4), in its order; the first two that answer are used. */
+#define SO_STUN_HOSTS_DEFAULT "stun.l.google.com:19302,stun1.l.google.com:19302,stun.cloudflare.com:3478,global.stun.twilio.com:3478"
 
 typedef struct {
 	char uid[64];
@@ -50,6 +76,17 @@ typedef struct {
 	char user_path[64];	/* the account file (tests point it at a dummy) */
 	char mm_host[64];
 	u16 mm_port;
+	/* Slippi's WebSocket matchmaking service (Slippi Dolphin after 3.6.4):
+	 * "wss://host[:port]/path". "": the ENet service at mm_host, as 3.6.4. */
+	char mm_url[96];
+	char stun_hosts[112];	/* "name:port,..." (SO_STUN_HOSTS_DEFAULT); tests name their own */
+	u32 test_mm_addr;	/* tests: connect here instead of looking mm_url's host up (the certificate is still checked for the name) */
+	u8 test_tls_root[65];	/* tests: one more trusted root's P-256 key (so_tls.h), never used against Slippi's hosts */
+	u8 test_tls_root_set;
+	/* tests: a folder of the card looked in first for the codeset (netplay.gct) and for Slippi's
+	 * files (files/NAME), ahead of /slippwii: another Slippi version's, put there by the updater's
+	 * test mode, beside the player's own installed files */
+	char test_files_root[40];
 	u16 local_port;	/* 0: random in 41000-50999, as Dolphin picks */
 	char app_version[24];
 	u8 client_name_mode;	/* SO_CLIENT_NAME_MODE; tests set it (test_client_name) */
@@ -141,6 +178,9 @@ typedef struct {
 	 * late, so rollback predicts (and rolls back) every frame */
 	u8 test_lag_frames;
 	u8 multi_delay_room_ms;	/* more than one opponent: the delay's room past the one-way time (so_exi.c, lobby_delay) */
+	u8 multi_stream;	/* more than one opponent: the game's replay data goes to a mirroring PC a send a frame (1),
+				 * one send in this many ms (2 to 250), or not while the game runs (0)
+				 * (SlippiNetwork.c, streamHolds) */
 	u8 test_multi_rollback;	/* tests: roll back against more than one opponent too (so_exi.c, rollback_wanted) */
 	/* tests: every 5 s, the opponent's inputs held back this long, as in a
 	 * lag spike: the game predicts to the rollback limit, waits there, then
@@ -152,7 +192,8 @@ typedef struct {
 	u16 test_stuck_frame;
 	u16 test_hang_frame;	/* tests: at this frame the PowerPC hangs (exit.s) */
 	u8 test_logfile_dump;	/* tests: at the online CSS, the newest file of the log's folder on the card is read back and its
-				 * first lines go to the PC's log: what a boot before wrote is really there (so_exi.c, logfile_dump) */
+				 * first lines go to the PC's log: what a boot before wrote is really there (so_exi.c, logfile_dump).
+				 * 2: the rest of the file as well, without the stall profiler's lines (400 lines at most) */
 	u16 test_crash_frame;	/* tests: at this frame the kernel does what it does with a crash report, the game
 				 * going on: the crash file on the card (so_logfile.c) */
 	u16 test_start_limit_ms;	/* tests: a game set up this long ago with no poll yet counts as one that never
@@ -191,6 +232,10 @@ typedef struct {
 } SoConfig;
 
 void so_config_defaults(SoConfig *config);
+/* 1 when the version spoken (app_version) is past 3.6.4: Slippi's netplay
+ * and its game code changed with 3.6.5 (9-byte pads, larger 0xB0 and 0xB3
+ * answers, drop reports: docs/NEXT_SLIPPI.md), and the two cannot be mixed. */
+int so_config_next(const SoConfig *config);
 /* Applies config.ini text; unknown keys and bad values are logged and
  * skipped. Comment lines start with '#' or ';' (connect codes contain '#',
  * so only whole lines are comments). */

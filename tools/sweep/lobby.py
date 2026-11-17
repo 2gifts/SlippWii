@@ -87,6 +87,8 @@ def build_wii(run_dir, plan, args, ip):
         opts += ['--kernel', kv]
     for b in args.boot_arg:
         opts += [f'--boot-arg={b}']
+    if args.next:
+        opts += ['--next'] + ([] if args.wii_old_mm else ['--next-mm'])
     ns = rs.parser().parse_args(opts)
     rs.autoplay_codes = lambda *a, **k: None
     rs.build(run_dir, plan, ns, ip)
@@ -165,6 +167,26 @@ def quality(run_dir, args, names):
             cells.append(f"{t['avg_depth']:.2f}, {t['unhealthy']} of {t['intervals']}" if t and t['intervals'] else '-')
         lines.append(f'| {names[k]} | ' + ' | '.join(cells) + ' |')
     return lines
+
+
+def leave_check(run_dir, args):
+    """Party after 3.6.4, the Wii having left the game by its bot's quit: (what is wrong or None, a line
+    for the report). Each Dolphin must have settled on the same last input of the Wii's, and so on the
+    same frame its character is out of the game from (Slippi's "Settled on player" line)."""
+    seat = min(args.wii_seat, args.players) - 1
+    settled = {}
+    for k in range(1, args.players):
+        log = run_dir / f'dolphin-p{k + 1}-online.log'
+        text = log.read_text(encoding='utf-8', errors='replace') if log.exists() else ''
+        m = re.search(rf'Settled on player {seat}\. Last input frame: (-?\d+), despawn frame: (-?\d+)', text)
+        settled[f'Dolphin {k + 1}'] = (int(m.group(1)), int(m.group(2))) if m else None
+    if any(v is None for v in settled.values()):
+        return f'the Wii left the game, and not every Dolphin took its character out: {settled}', ''
+    if len(set(settled.values())) != 1:
+        return f'the Wii left the game, and the Dolphins took its character out from different frames: {settled}', ''
+    last, out = next(iter(settled.values()))
+    return None, (f"The Wii left the game by its bot's quit: every Dolphin has its last input as frame {last} and its "
+                  f'character out of the game from frame {out}, and played on.')
 
 
 def report(run_dir, args, plan, failure, cpu, returned):
@@ -278,6 +300,14 @@ def main():
     ap.add_argument('--drop', metavar='PLAYER,SECONDS',
                     help='one Dolphin copy (2 to 4) is closed this long into the first game, as a player who leaves: '
                          'the others play on (its replay ends there; the rest are compared to the end)')
+    ap.add_argument('--stages', metavar='ID,ID,...',
+                    help="the stages the lobby server allows (its own list without this): one id, and every game is "
+                         "on that stage (8: Yoshi's Story)")
+    ap.add_argument('--next', action='store_true',
+                    help="Slippi's development Dolphin (what comes after 3.6.4) and, for the Wii, a build that speaks "
+                         'that version (run_sweep.py --next)')
+    ap.add_argument('--wii-old-mm', action='store_true',
+                    help='with --next: the Wii queues the old way (ENet, no TLS session); its game is still the next version')
     ap.add_argument('--timeout-min', type=int, default=30)
     ap.add_argument('--capture', action='store_true', help="record the Wii's video output (capture.mkv)")
     ap.add_argument('--skip-build', help="reuse this run directory's build")
@@ -285,6 +315,7 @@ def main():
     ap.add_argument('--boot-arg', action='append', default=[], metavar='OPTION',
                     help='one more option for tools/build_online_boot.py')
     args = ap.parse_args()
+    args.next = args.next or rs.slippi_version.next_release()
     if args.mode == 'teams' and args.players < 3:
         args.players = 4
     if not MM.exists():
@@ -310,7 +341,7 @@ def main():
         # (--net: each copy is known to the other copies at a loopback address of its own, which the relay holds)
         dolphins[k] = dolphin_copy.make(f'dolphin-lobby-{k + 1}', CODES[k], None, gecko, '127.0.0.1',
                                         lan_ip=f'127.0.0.{11 + k}' if args.net else ip,
-                                        port=PORTS[k], teams_code=LOBBY_CODE)
+                                        port=PORTS[k], teams_code=LOBBY_CODE, next_version=args.next)
     # one external address for all: each is given the others' LAN addresses. The server sits behind
     # udp_front.py: the firewall lets Python's traffic in from the Wii, not a new program's.
     # --net with the Wii: it is elsewhere for the copies (its external address the relay's 127.0.0.2), and
@@ -323,8 +354,21 @@ def main():
             ext += ['--ext', f'{CODES[k]}={ip}:{PORTS[k]}']
     procs = [rs.start('lobby_mm', [MM, 43114, '--external-ip', '10.0.0.1', '--party-size', args.players,
                                    '--items', args.items, '--order', ','.join(seats),
-                                   '--seconds', args.timeout_min * 60 + 120, *ext], run_dir),
+                                   '--seconds', args.timeout_min * 60 + 120, *ext,
+                                   *(['--ws-port', rs.WS_PORT] if args.next else []),
+                                   *(['--stages', args.stages] if args.stages else [])], run_dir),
              rs.start('mm_front', [sys.executable, '-u', HERE / 'udp_front.py', 43113, 43114], run_dir)]
+    dolphin_env = {}
+    if args.next:
+        # Slippi's development Dolphins queue over the WebSocket service (no TLS for them), the Wii through
+        # TLS in front of it; STUN stand-ins for both (run_sweep.py --next has the same)
+        dolphin_env = {'env': dolphin_copy.next_env(f'ws://127.0.0.1:{rs.WS_PORT}/v1/queue')}
+        procs.append(rs.start('stun', [sys.executable, '-u', HERE / 'stun_fake.py', *rs.STUN_PORTS,
+                                       dolphin_copy.NEXT_STUN_PORTS[0]], run_dir))
+        if args.wii_ip:
+            procs.append(rs.start('tls_front', [sys.executable, '-u', HERE / 'tls_front.py', '--dir', run_dir, '--listen',
+                                                rs.TLS_PORT, '--backend', f'127.0.0.1:{rs.WS_PORT}', '--host', rs.NEXT_HOST],
+                                  run_dir))
     if args.net:
         # (lobby_relay.py: each copy at a loopback address for the other copies and, for the Wii, at this
         # PC's address; the Wii at 127.0.0.2 for the copies)
@@ -344,6 +388,7 @@ def main():
         procs.append(rs.start('watch', [sys.executable, '-u', ROOT / 'tools/online_selftest.py', 'watch', '--boot',
                                         '--dol', run_dir / 'loader-sweep.dol', '--wii-ip', args.wii_ip,
                                         *(['--cfg', rs.loader_cfg(run_dir, codes=args.codes)] if args.codes else []),
+                                        *(['--first-arg', 'slippwii-files-root=/slippwii-next'] if args.next else []),
                                         '--timeout', args.timeout_min * 60], run_dir))
     if args.capture and args.wii_ip:
         procs.append(rs.start('capture', [decode_marker.FFMPEG, '-y', '-f', 'dshow', '-rtbufsize', '200M', '-vcodec', 'mjpeg',
@@ -351,7 +396,7 @@ def main():
                                           '-c', 'copy', run_dir / 'capture.mkv'], run_dir))
     proc_names = [''] * len(procs)
     for k, d in dolphins.items():
-        procs.append(rs.start(f'dolphin-p{k + 1}', [d / 'Slippi Dolphin.exe', '-e', rs.ISO], run_dir))
+        procs.append(rs.start(f'dolphin-p{k + 1}', [d / 'Slippi Dolphin.exe', '-e', rs.ISO], run_dir, **dolphin_env))
         proc_names.append(f'dolphin-p{k + 1}')
         time.sleep(3)
         unthrottle.unthrottle(procs[-1][0].pid)
@@ -360,6 +405,7 @@ def main():
     print(f'lobby {run_dir.name}: {args.mode}, {args.players} players, {args.rounds} rounds'
           + (f'. Open the Homebrew Channel on the Wii ({args.wii_ip}); the test build is sent to it.' if args.wii_ip else ''))
     started, failure, done, last_change, dropped = time.time(), None, 0, time.time(), False
+    left_wanted, left = bool(args.next and args.mode == 'party' and args.wii_ip and args.lras_s), False
     try:
         while True:
             games = sorted(ref.rglob('*.slp'), key=lambda f: f.stat().st_mtime)
@@ -374,6 +420,13 @@ def main():
                         print(f'{time.strftime("%H:%M:%S")} Dolphin {k + 1} closed (--drop)', flush=True)
                 dropped = True
             if done >= args.rounds and time.time() - games[-1].stat().st_mtime > 20:
+                break
+            # Party after 3.6.4: the quit takes the Wii out of the game alone and the three Dolphins play on,
+            # for up to 8 minutes (their bots never quit). That is the test, and the end of this lobby: each
+            # Dolphin must have taken the Wii's character out, all from the same frame (leave_check).
+            if left_wanted and any('the player leaves the game' in l for l in rs.wii_lines(run_dir)):
+                time.sleep(8)
+                left = True
                 break
             if args.wii_ip:
                 bad = next((l for l in rs.wii_lines(run_dir) if rs.FAILURES.search(l)), None)
@@ -421,6 +474,10 @@ def main():
         logs = sorted((ROOT / 'build/online-selftest').glob('2026*/wii.log'), key=lambda p: p.stat().st_mtime)
         if logs and logs[-1].stat().st_mtime >= started:
             shutil.copy(logs[-1], run_dir / 'wii.log')
+    if left:
+        problem, said = leave_check(run_dir, args)
+        failure = failure or problem
+        returned = f'{returned or ""} {said}'.strip()
     if failure:
         (run_dir / 'failure.txt').write_text(failure + '\n', encoding='utf-8')
     report(run_dir, args, plan, failure, cpu, returned)

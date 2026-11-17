@@ -90,7 +90,7 @@ static int play_game(void)
 	u64 next_us, waited_from, resent_at;
 	s32 frame, speed_ppm = 0, min_offset = 0, max_offset = 0, last_head = 0;
 	int advance = 0, advances = 0, stalls = 0;
-	u8 pad[8];
+	u8 pad[SO_PAD_SIZE];
 
 	so_client_lock();
 	so_np_start_game();

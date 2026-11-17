@@ -12,6 +12,10 @@
  * Channel, or lets the player start Melee without online play. */
 void SlippWii_Prepare(unsigned int CurDICMD, u32 ISOShift);
 
+/* Tests: a folder of the card ("/name") whose slippwii/ holds Slippi's files and patches in the
+ * place of /slippwii's (slippwii.c); "" otherwise. */
+extern const char *SlippWiiFilesRoot;
+
 /* The account line for the boot screen ("" if none). */
 extern char SlippWii_AccountLine[64];
 

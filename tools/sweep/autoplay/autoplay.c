@@ -243,6 +243,9 @@ static void css(Bot *b, Pad *o)
 	u8 icon = b->plan_len ? b->plan[b->round % b->plan_len][0] : 0;
 	u32 port = rd8(0x804D6CF0) & 3;
 	u32 cursor = rd32(0x804A0BC0 + (rd8(0x804D6CF5) <= 1 ? 0 : port) * 4);	/* (one hand in a one-player CSS) */
+	/* (and one door, the first, whichever port the controller is in: a bot in port 2 read its own
+	 * port's door, saw nothing picked there, and put its character down and picked it again for good) */
+	u32 door = rd8(0x804D6CF5) <= 1 ? 0 : port;
 	if (b->scene_polls < 40)
 		return;
 	if (b->team && b->step == 0 && valid_ptr(cursor) && team_now() && team_now() != (u32)b->team + 1) {
@@ -273,7 +276,7 @@ static void css(Bot *b, Pad *o)
 	if (b->step == 1) {
 		/* A character already picked (r13 - 0x49A9) must be put down (B)
 		 * before another can be (A); B with none picked would leave. */
-		u8 picked = rd8(0x803F0DFC + port * 0x24 + 0x0E);
+		u8 picked = rd8(0x803F0DFC + door * 0x24 + 0x0E);
 		if (b->hold == 0 && rd8(0x804D6CF7) && picked != icon)
 			b->hold = 100;
 		if (b->hold >= 100 && b->hold < 102)
@@ -289,7 +292,7 @@ static void css(Bot *b, Pad *o)
 	if (b->step == 2) {
 		/* Lock in only once the planned character is the one picked
 		 * (door sel_icon at 0x803F0DFC + 0x24 * port + 0x0E); else again. */
-		u8 picked = rd8(0x803F0DFC + port * 0x24 + 0x0E);
+		u8 picked = rd8(0x803F0DFC + door * 0x24 + 0x0E);
 		b->last = (u32)picked << 24 | (u32)icon << 16 | port << 8 | b->round;
 		/* (the door shows a hovered character too: without the picked flag, an A that
 		 * missed left the bot pressing START on the CSS for good: 3 sweeps, 2026-11-08) */

@@ -32,6 +32,27 @@ PATCHES = (
     ('slippi_rust_extensions.dll', b'internal.slippi.gg', b'internal.slippi.zz'),
 )
 
+# Slippi Dolphin 3.7.0 (what came after 3.6.4): Slippi's release FM-Slippi-3.7.0-Win.zip (sha256
+# 5bf5e9d4...), unpacked by hand into build/next/dolphin-3.7.0 (docs/NEXT_SLIPPI.md; until the
+# release it was a GitHub Actions build of the `slippi` branch, in build/next/dolphin-dev). A test
+# copy of it reaches no server but this PC's: its matchmaking address comes from SLIPPI_MM_URL
+# (next_env), and every other name it knows is patched to one that does not resolve, or to this
+# PC for the STUN servers (tools/sweep/stun_fake.py answers on their ports, 19302 and 3478).
+NEXT_SRC = ROOT / 'build/next/dolphin-3.7.0'
+NEXT_PATCHES = (
+    ('slippi_rust_extensions.dll', b'internal.slippi.gg', b'internal.slippi.zz'),
+    ('slippi_rust_extensions.dll', b'users-rest-dot-slippi.uc.r.appspot.com', b'users-rest-dot-slippi.uc.r.appspot.zzz'),
+    ('slippi_rust_extensions.dll', b'matchmaking-dev.slippi.gg', b'matchmaking-dev.slippi.zz'),
+    ('slippi_rust_extensions.dll', b'matchmaking.slippi.gg', b'matchmaking.slippi.zz'),
+)
+NEXT_STUN_NAMES = (b'stun.l.google.com', b'stun1.l.google.com', b'stun.cloudflare.com', b'global.stun.twilio.com')
+NEXT_STUN_PORTS = (19302, 3478)
+
+
+def next_env(mm_url):
+    """The environment a development Dolphin is started with: where its matchmaking is."""
+    return dict(os.environ, SLIPPI_MM_URL=mm_url)
+
 
 def full_width(code):
     """A connect code as Slippi stores it in direct-codes.json (full-width)."""
@@ -70,29 +91,44 @@ def set_ini(path, section, values):
     path.write_text('\n'.join(out) + '\n', encoding='utf-8')
 
 
-def make(name, code, opponent=None, autoplay=None, mm_host='127.0.0.1', lan_ip=None, port=None, teams_code=None):
+def make(name, code, opponent=None, autoplay=None, mm_host='127.0.0.1', lan_ip=None, port=None, teams_code=None,
+         next_version=False):
     """mm_host: where the fake matchmaking server is. Use this PC's LAN
     address when the opponent is another machine (the Wii): Dolphin reports
     the address it reaches the server from as its own, and 127.0.0.1 would
     send the Wii to itself. lan_ip, port: the LAN address Dolphin gives
     matchmaking and the port it plays from (net_relay.py: its opponent then
     reaches it through the relay). teams_code: a lobby code for its Teams
-    history (teams-codes.json), as opponent is for Direct's."""
+    history (teams-codes.json), as opponent is for Direct's. next_version:
+    Slippi's development Dolphin instead (NEXT_SRC): mm_host is then where the
+    STUN servers are (this PC), and the caller starts it with next_env()."""
     if len(mm_host) >= len(MM_NAME):
         sys.exit(f'{mm_host}: at most {len(MM_NAME) - 1} characters (it replaces mm.slippi.gg in place)')
     dest = OUT / name
     if dest.exists():
         shutil.rmtree(dest)
-    shutil.copytree(SRC, dest, ignore=lambda d, names: [n for n in names if n in SKIP])
-    patch(dest / 'Slippi Dolphin.exe', MM_NAME, mm_host.encode().ljust(len(MM_NAME), b'\0'))
-    for file, old, new in PATCHES:
-        patch(dest / file, old, new)
+    if next_version:
+        if not (NEXT_SRC / 'Slippi Dolphin.exe').exists():
+            sys.exit(f'{NEXT_SRC}: no development Dolphin there (docs/NEXT_SLIPPI.md says where it comes from)')
+        shutil.copytree(NEXT_SRC, dest, ignore=lambda d, names: [n for n in names if n in SKIP])
+        for file, old, new in NEXT_PATCHES:
+            patch(dest / file, old, new)
+        for stun in NEXT_STUN_NAMES:
+            patch(dest / 'Slippi Dolphin.exe', stun + b'\0', mm_host.encode().ljust(len(stun) + 1, b'\0'))
+        for folder in ('Config', 'GC', 'Logs'):
+            (dest / 'User' / folder).mkdir(parents=True, exist_ok=True)
+    else:
+        shutil.copytree(SRC, dest, ignore=lambda d, names: [n for n in names if n in SKIP])
+        patch(dest / 'Slippi Dolphin.exe', MM_NAME, mm_host.encode().ljust(len(MM_NAME), b'\0'))
+        for file, old, new in PATCHES:
+            patch(dest / file, old, new)
     user = dest / 'User'
     (user / 'Slippi').mkdir(parents=True, exist_ok=True)
     tag = code.split('#')[0].lower()
     (user / 'Slippi/user.json').write_text(json.dumps({
         'uid': f'local-test-uid-{tag}', 'playKey': f'dummy-play-key-{tag}', 'connectCode': code,
-        'displayName': f'Test {code.split("#")[0].title()}', 'latestVersion': '3.6.4'}), encoding='utf-8')
+        'displayName': f'Test {code.split("#")[0].title()}',
+        'latestVersion': '3.7.0' if next_version else '3.6.4'}), encoding='utf-8')
     history = [{'connectCode': full_width(opponent), 'lastPlayed': int(time.time())}] if opponent else []
     (user / 'Slippi/direct-codes.json').write_text(json.dumps(history, ensure_ascii=False), encoding='utf-8')
     if teams_code:
@@ -112,6 +148,9 @@ def make(name, code, opponent=None, autoplay=None, mm_host='127.0.0.1', lan_ip=N
         'MemcardAPath': str(gc / 'MemoryCardA.USA.raw'), 'MemcardBPath': str(gc / 'MemoryCardB.USA.raw'),
     })
     set_ini(user / 'Config/Dolphin.ini', 'Display', {'Fullscreen': 'False', 'RenderToMain': 'True'})
+    # Silent: test Dolphins make no sound on this PC (the volume only: the audio backend, and with it
+    # the game's pacing, stays the player's)
+    set_ini(user / 'Config/Dolphin.ini', 'DSP', {'Volume': '0'})
     # Slippi's online log, to User/Logs/dolphin.log: what its player feels of
     # the opponent (halts at the rollback limit, time sync's skips, advances
     # and speed changes)

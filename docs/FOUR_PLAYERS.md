@@ -202,7 +202,10 @@ its player `delay` frames early has that long to arrive.
 
 At 63 ms with the Wii's replay stream on: all 9 replays match, but the PCs' depth against the Wii
 is 1.74 instead of 1.1, the Wii waited 43, 3 and 1 frames, and 21 disc commands took over half a
-second. A player's Wii sends no such stream unless console mirroring is in use. Not reduced.
+second. A player's Wii sends no such stream unless console mirroring is in use. Not reduced then.
+Since 2026-11-16 the stream goes out as one send in 100 ms in such a game, not one a frame
+(`multi_stream`), which leaves about a twentieth of the waiting: the counts are in
+[NEXT_SLIPPI.md](NEXT_SLIPPI.md), "Not proven, and open".
 
 ### 9. A player who leaves, and the Wii as host
 
@@ -374,6 +377,7 @@ with 1% loss; one lobby in six was Party.
   command took half a second; with it, 703 disc commands of over half a second in 35 lobbies (up
   to 5 s for one), and the Wii's own count by Slippi's rule went as high as 45. A player's Wii
   sends no such stream unless console mirroring is in use: with four players, better not.
+  (These runs sent it a frame at a time; see finding 8 for what it is now.)
 - **Party at 63 ms with loss, as a player's Wii is:** the PCs' depth against the Wii 1.04, 40 of
   6120 intervals unhealthy.
 
@@ -404,6 +408,8 @@ In the order of what it would give the three PC players:
    for line time. Sending them at once costs datagrams the Wii does not have (finding 1); a middle
    way was not tried. Expected: about 3 ms.
 3. **The replay stream with four players** (finding 8), for those who mirror their console.
+   Done 2026-11-16 (`multi_stream`): what is left with a mirroring PC is about 6 waited frames in
+   a 40 s game on the heaviest stage, and 10 ms on the ping.
 4. **Telling the Wii's player the delay a game got.** Today it is only in the log.
 5. **Rollback for four** only with a different engine: see "Tried and dropped".
 6. **Slippi's newer answer format.** Slippi's development source has a newer answer to the game's
@@ -417,7 +423,7 @@ In the order of what it would give the three PC players:
 |---|---|
 | The game's setup, the delay, the level-keeping, a player gone | `Nintendont/kernel/slippi_online/so_exi.c`: `build_game`, `rules_broken`, `rollback_wanted`, `lobby_delay`, `multi_level`, `fill_gone` |
 | Acknowledgements riding with pads, the lobby's ping, giving one player up | `so_netplay.c`: `held_ack`, `so_np_slowest_ping_ms`, `so_np_drop_player` |
-| Settings | `so_config.c`: `multi_delay_room_ms`; tests only: `test_multi_rollback` |
+| Settings | `so_config.c`: `multi_delay_room_ms`, `multi_stream`; tests only: `test_multi_rollback` |
 | The disc timeout, the stall profiler in every scene | `tools/build_online_boot.py` (`DVD_TIMEOUT_HANDLER`, `--stall-all`), `tools/ppc/stall.s` |
 | The tests | `tools/sweep/lobby.py`, `lobby_relay.py`, `lobby_sum.py`; `tests/pc/pc_lobby_mm.c` |
 | In the Wii's log, each game | `game quality (Slippi's rule): ... delay N, debt at most N`; `game over: ... waited N frames`; `game checksums: ... N differ`; `SHOWN ... N fine` (the level-keeping's steps) |

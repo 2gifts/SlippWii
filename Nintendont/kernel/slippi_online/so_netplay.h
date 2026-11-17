@@ -77,6 +77,7 @@ typedef struct {
 	u32 acks_sent, acks_received;
 	u32 resends;	/* pad packets sent without a new pad */
 	u32 test_dropped;
+	u32 drop_reports;	/* (Slippi 3.6.5) reports that a player dropped, from the others */
 } SoNpStats;
 
 int so_np_init(void);
@@ -161,6 +162,13 @@ const SoSyncedState *so_np_remote_synced_state(int remote);
 /* Disconnects every opponent and tells them why. */
 void so_np_force_disconnect(u32 reason);
 void so_np_drop_player(int remote);	/* one opponent of several: the game goes on with the others */
+/* (Slippi 3.6.5) The frame an opponent that has left is out of the game from:
+ * its last input's and 16, once the players have told each other which
+ * inputs they have of it; 0 before, and for one still here. */
+s32 so_np_despawn_frame(int remote);
+/* (Slippi 3.6.5) Before a frame's inputs are taken: an opponent that has
+ * left, once settled, goes on with its last input up to `frame`. */
+void so_np_fill_dropped(s32 frame);
 
 void so_np_stats(SoNpStats *out);
 

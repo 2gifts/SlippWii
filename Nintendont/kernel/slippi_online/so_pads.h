@@ -19,7 +19,14 @@
 
 #include "global.h"
 
-#define SO_PAD_SIZE 8	/* bytes of one pad on the wire */
+#define SO_PAD_INPUT 8	/* the inputs of one pad */
+/* Bytes kept of one pad: the inputs and, from Slippi 3.6.5 on, the frame's
+ * "RNG bits" (random bits that go into the game's seed when a player rolls a
+ * turnip, a Judge or a misfire); 0 where the opponent speaks 3.6.4. */
+#define SO_PAD_SIZE 9
+/* Bytes of one pad on the wire: 8 as Slippi Dolphin 3.6.4 sends them (the
+ * inputs), 9 from 3.6.5 on. Set before a connection (so_np_start). */
+extern u8 so_pad_wire;
 #define SO_PADS_MAX_PER_PACKET 128	/* Dolphin rejects packets with more */
 #define SO_FRAME_US 16683	/* one frame at 59.94 Hz */
 
@@ -74,9 +81,35 @@ void so_remote_pads_reset(SoRemotePads *q);
  * than 128. */
 int so_remote_pads_add(SoRemotePads *q, s32 newest_frame, const u8 *pads, u32 pad_bytes);
 
+/* Adds one pad (SO_PAD_SIZE bytes) as the newest: `frame` is the one after
+ * the newest queued (inputs of a player who left, from another's report, or
+ * its last one repeated). */
+void so_remote_pads_push(SoRemotePads *q, s32 frame, const u8 *pad);
+
 /* Copies the pad for `frame`; returns 0, or -1 if it has not arrived (or
  * has left the ring). */
 int so_remote_pads_get(const SoRemotePads *q, s32 frame, u8 *out);
+
+/* Repeats the newest pad up to `frame` (a player who left: its last input held; nothing queued
+ * counts as a pad of zeros at frame 0). */
+void so_remote_pads_repeat(SoRemotePads *q, s32 frame);
+
+/* ---- a lost player's inputs (Slippi 3.6.5's drop report, 0x88) ------------ */
+
+#define SO_DROP_REPORT_INPUTS 64	/* the most one report carries */
+#define SO_DROP_REPORT_MAX (5 + SO_DROP_REPORT_INPUTS * SO_PAD_SIZE)
+
+/* What a drop report says of the queue of the player that left, after its three bytes of ids: the
+ * newest frame held (s32; 0 with none), how many pads follow (u8), and those, newest first, in
+ * wire size. Returns its length (`out`: SO_DROP_REPORT_MAX bytes). */
+int so_drop_report_encode(const SoRemotePads *q, u8 *out);
+
+/* Takes from another player's report the frames past this queue's newest: `last` its newest frame,
+ * `inputs` its `count` pads, newest first (the caller has checked they are all there). Returns how
+ * many frames were added (0: it had nothing new), or -1 for a report more than 128 frames ahead,
+ * which nothing is taken from. A frame the report does not reach back to gets the pad before it
+ * (the queue has no gaps). */
+int so_drop_report_apply(SoRemotePads *q, s32 last, const u8 *inputs, u32 count);
 
 /* ---- ack timers ---------------------------------------------------------- */
 

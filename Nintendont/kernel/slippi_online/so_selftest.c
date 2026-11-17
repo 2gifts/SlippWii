@@ -110,7 +110,7 @@ static int run_frames(int frames, Results *r)
 	const u8 remote_player = so_np_remote_player_idx(0);
 	u64 next_us, start_us, stall_us = 0;
 	s32 frame;
-	u8 local_player, pad[8], want[8];
+	u8 local_player, pad[SO_PAD_SIZE], want[8];
 	static const u8 zero[8];
 
 	so_client_lock();

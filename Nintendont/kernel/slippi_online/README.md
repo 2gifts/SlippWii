@@ -23,8 +23,9 @@ Slippi's online codeset and menu files to use it; loading those is M4.
 | `so_json.[ch]` | Allocation-free JSON reader and a small writer |
 | `so_config.[ch]` | `config.ini` and the Slippi account (`user.json`) |
 | `so_mm.[ch]`, `so_mm_msg.c` | Matchmaking: the ENet state machine, and the create-ticket / get-ticket-resp messages |
-| `so_pads.[ch]` | Pad queues, acks, ping and time sync: no networking, unit-tested |
-| `so_netplay.[ch]` | Peer-to-peer netplay (`SlippiNetplayClient`): connections, messages 0x80-0x86 |
+| `so_mm_ws.c`, `so_ws*.[ch]`, `so_tls.[ch]`, `so_tcp.[ch]`, `so_stun*.[ch]` | Matchmaking as Slippi Dolphin does it after 3.6.4, used only when `mm_url` is set: a WebSocket over TLS (BearSSL) on a worker thread, after a STUN lookup. See `docs/NEXT_SLIPPI.md` |
+| `so_pads.[ch]` | Pad queues, acks, ping and time sync, and a lost player's inputs (the drop report after 3.6.4): no networking, unit-tested. A pad is 8 bytes on the wire for 3.6.4 and 9 after it |
+| `so_netplay.[ch]` | Peer-to-peer netplay (`SlippiNetplayClient`): connections, messages 0x80-0x86, and 0x87 and 0x88 of the version after 3.6.4 |
 | `so_client.[ch]` | Public entry points, the network thread, retries, the PC log sink |
 | `so_exi.[ch]` | The online EXI device: Slippi Dolphin's online commands (0xB0-0xC4, 0xD0-0xD8, 0xE1-0xE5), lockstep 0xB0 |
 | `so_text.[ch]` | Game strings, connect codes and premade text (chat, logout dialog), as Dolphin encodes them |
@@ -66,7 +67,9 @@ shares. A file is synced every 10 s, so a game cut short still leaves a readable
 | --- | --- | --- |
 | `delay` | 2 | Online input delay, 1-9 frames (the CSS buttons save `delay.txt`, which wins) |
 | `mm_host`, `mm_port` | `mm.slippi.gg`, 43113 | Matchmaking server (tests use a PC on the LAN) |
-| `app_version` | `3.6.4` | The Slippi version reported to a test server. Against Slippi's own server it is not a setting: see *Slippi's version* below |
+| `mm_url` | (none) | `wss://host[:port]/path`: the WebSocket matchmaking service of Slippi Dolphin after 3.6.4, in the place of `mm_host` (an `mm_host` line after it chooses the old service again). For tests: against Slippi's own server the service is the build's, not a setting, and no released Slippi uses the new one yet (`docs/NEXT_SLIPPI.md`) |
+| `stun_hosts` | Slippi's four | With `mm_url`: the STUN servers asked where the netplay socket is seen from, `name:port,name:port,...` |
+| `app_version` | `3.6.4` | The Slippi version reported to a test server; one over 3.6.4 also makes the kernel speak that version's netplay and EXI layouts. Against Slippi's own server it is not a setting: see *Slippi's version* below |
 | `local_port` | random 41000-50999 | Fixed UDP port, for a router port-forward |
 | `lan_ip` | this console | Forced `ipAddressLan` |
 | `user_path` | `/slippwii/user.json` | Account file; tests point it at a dummy |
@@ -103,6 +106,12 @@ then locks its online modes until it is updated. SlippWii does the same:
   ready, both off: a `client` key (`"SlippWii/1.5.1"`), or the version with build metadata
   (`"3.6.4+slippwii.1.5.1"`). Which one, if any, is for the Slippi team to say: a guess could stop
   every SlippWii from queueing, and cannot be tried without their server.
+
+The version after 3.6.4 is built too, and chosen by one switch for the whole checkout:
+`SO_SLIPPI_NEXT` in `so_config.h` (`tools/slippi_version.py`). It sets the version reported and the
+matchmaking service, and the tools build the boot codes and a release's files for the same
+version. It is 0 until Slippi releases that version: `docs/NEXT_SLIPPI.md` has what changes, what
+was proven and the steps for that day.
 
 ## Leaving
 
@@ -153,6 +162,11 @@ or `remotes > 1`: a game against one opponent takes none of these paths.
   ("fine").
 - `so_netplay.c`, `held_ack`: an ack rides in the next pad's datagram to its opponent, at most
   20 ms late.
+- `SlippiNetwork.c`, `multi_stream` (100): the replay stream to a PC that mirrors the console goes
+  out as one send in 100 ms during such a game, not one a frame. A send a frame cost the game 25
+  to 108 waited frames in 40 s and, on Slippi's next version, one game in three on the heaviest
+  stage (docs/NEXT_SLIPPI.md). `multi_stream=1` in `config.ini` is the old way, `0` holds the
+  stream until the game is over (`streamHolds`). The replay file on the card is not concerned.
 - A player who has left: `so_np_player_active` is 0 for it once its connections are closed, the
   game is not held for it, and `fill_gone` hands the game what Slippi Dolphin 3.6.4 does (its last
   pads, the newest opponent's frame and checksum, and the "take it out" byte from the first multiple

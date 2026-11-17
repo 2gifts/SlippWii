@@ -42,6 +42,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import slippi_files  # noqa: E402
+import slippi_version  # noqa: E402
 import menu_edits  # noqa: E402
 import sign_update  # noqa: E402
 
@@ -92,6 +93,26 @@ https://github.com/2gifts/SlippWii
 https://bearssl.org) and puff (Mark Adler, zlib licence).
 """
 
+# (a release for the Slippi after 3.6.4, tools/slippi_version.py: its codes and files are one source's,
+# two of the files are filled in from the disc, and matchmaking is BearSSL's too)
+NOTICE_NEXT = """SlippWii {version} - what is in this folder
+
+netplay.gct, files/, patches/*.diff and patches/*.link are Project Slippi's,
+unchanged except that netplay.gct leaves out Slippi Dolphin's music hooks and
+"Normal Lag Reduction" (Dolphin-only), as a console needs:
+  - netplay.gct: Slippi's online code (slippi-ssbm-asm, GPLv3), from
+    https://github.com/project-slippi/Ishiiruka ({source}, Data/Sys/GameSettings/GALE01r2.ini)
+  - files/, patches/: Slippi Dolphin's game files and patches (GPLv2+), from
+    the same source (Data/Sys/GameFiles/GALE01/)
+SlippWii applies the patches on the Wii to your own Melee disc, and fills the
+pictures and models the *.link files name in from it; no Melee files are
+included. SlippWii itself is GPLv2 (LICENSE.txt); source:
+https://github.com/2gifts/SlippWii
+
+Matchmaking and "Check for Updates" use BearSSL (Thomas Pornin, MIT licence,
+https://bearssl.org); "Check for Updates" also puff (Mark Adler, zlib licence).
+"""
+
 
 SLIPPWII_FILES = ('netplay.gct', 'NOTICE.txt', 'LICENSE.txt', 'PUT user.json HERE.txt', 'copy-account.ps1')
 
@@ -128,6 +149,9 @@ def main():
     ap.add_argument('version')
     ap.add_argument('--iso', required=True, help='your NTSC 1.02 Melee disc (only the patched files\' CRC-32s are kept)')
     ap.add_argument('--allow-dirty', action='store_true')
+    ap.add_argument('--trial', metavar='DIR',
+                    help='a trial (a test of the release, never one to publish): the zip is written to DIR and nothing '
+                         'is signed, so dist/ and the release key are left alone')
     ap.add_argument('--note', action='append', default=[],
                     help='a line of what is new, for "Check for Updates" on the Wii (up to 3, 63 characters each)')
     args = ap.parse_args()
@@ -168,33 +192,15 @@ def main():
     if menu_edits.HEADER.read_text() != menu_edits.header_text():
         sys.exit(f'{menu_edits.HEADER} is not what tools/menu_edits.py writes: run it and build again')
 
-    # Slippi's files, and what the patched ones must come out as.
-    ini = slippi_files.fetch(slippi_files.CODESET[0], slippi_files.CODESET[1],
-                             slippi_files.CACHE / 'GALE01r2-stable.ini', slippi_files.STABLE_RAW).decode('utf-8')
-    gct, _, _ = slippi_files.build_gct(ini)
-    disc = slippi_files.open_disc(args.iso)
-    shipped, manifest = {}, ['# SlippWii ' + v + ': what each file must be (kind, path in slippwii/, size, CRC-32).',
-                             '# "patch": made on the Wii from the disc with patches/<name>.diff; "copy": shipped.']
-    manifest.append(f'copy netplay.gct {len(gct)} {zlib.crc32(gct):08x}')
-    shipped['slippwii/netplay.gct'] = gct
-    for name, sha in slippi_files.GAME_FILES.items():
-        data = slippi_files.fetch(f'GameFiles/GALE01/{name}', sha, slippi_files.CACHE / 'GameFiles' / name)
-        if name.endswith('.diff'):
-            target = name[:-5]
-            made = slippi_files.decode(disc.file(target), data)
-            # (the loader changes a few places of these afterwards, tools/menu_edits.py: each only if it
-            # holds what Slippi's file has there today. The manifest is of Slippi's files, before that.)
-            for edit_name, offset, length, old_crc, _, what, _ in menu_edits.edits():
-                if edit_name == target and zlib.crc32(made[offset:offset + length]) != old_crc:
-                    sys.exit(f"{target}: Slippi's file is not what tools/menu_edits.py expects at its {what}")
-            manifest.append(f'patch files/{target} {len(made)} {zlib.crc32(made):08x}')
-            shipped[f'slippwii/patches/{name}'] = data
-        else:
-            manifest.append(f'copy files/{name} {len(data)} {zlib.crc32(data):08x}')
-            shipped[f'slippwii/files/{name}'] = data
-    shipped['slippwii/patches/manifest.txt'] = ('\n'.join(manifest) + '\n').encode()
+    # Slippi's files, and what the ones made on the Wii must come out as: of the Slippi version
+    # the checkout is switched to, as boot.dol is (its boot codes were checked above).
+    next_version = slippi_version.next_release()
+    shipped = slippi_files.release_files(slippi_files.open_disc(args.iso), v, next_version)
+    notice = (NOTICE_NEXT.format(version=v, source=slippi_files.NEXT_COMMIT[:10]) if next_version else
+              NOTICE.format(version=v, stable=slippi_files.STABLE_RAW.split('/')[-3], release=slippi_files.RELEASE))
 
-    out = ROOT / f'dist/SlippWii-v{v}.zip'
+    out = (Path(args.trial) if args.trial else ROOT / 'dist') / f'SlippWii-v{v}.zip'
+    out.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
         z.writestr('apps/SlippWii/boot.dol', (APP / 'boot.dol').read_bytes())
         z.writestr('apps/SlippWii/meta.xml', meta)
@@ -203,8 +209,7 @@ def main():
             z.writestr(path, data)
         z.writestr('slippwii/copy-account.ps1', crlf((REL / 'slippwii/copy-account.ps1').read_text(encoding='utf-8')))
         z.writestr('slippwii/PUT user.json HERE.txt', crlf((REL / 'slippwii/PUT user.json HERE.txt').read_text(encoding='utf-8')))
-        z.writestr('slippwii/NOTICE.txt', crlf(NOTICE.format(version=v, stable=slippi_files.STABLE_RAW.split('/')[-3],
-                                                             release=slippi_files.RELEASE)))
+        z.writestr('slippwii/NOTICE.txt', crlf(notice))
         z.writestr('slippwii/LICENSE.txt', crlf((ROOT / 'LICENSE').read_text(encoding='utf-8')))
         z.writestr('Copy my Slippi account to SD.bat', crlf((REL / 'Copy my Slippi account to SD.bat').read_text(encoding='utf-8')))
         z.writestr('SlippWii README.txt', crlf(README.format(version=v)))
@@ -215,8 +220,11 @@ def main():
     sha = hashlib.sha256(out.read_bytes()).hexdigest()
     print(f'{out} ({out.stat().st_size // 1024} KB)\n  zip sha256 {sha}\n'
           f'  boot.dol sha256 {hashlib.sha256((APP / "boot.dol").read_bytes()).hexdigest()}\n'
-          f'  source: SlippWii {git("rev-parse", "--short", "HEAD")}')
+          f'  source: SlippWii {git("rev-parse", "--short", "HEAD")}, for Slippi {slippi_version.version_default()}')
 
+    if args.trial:
+        print('  a trial: not signed, no update.txt')
+        return
     # What "Check for Updates" reads: the release's second file, signed with the release key.
     key = sign_update.default_key()
     if not key.exists():

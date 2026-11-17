@@ -40,6 +40,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from vcdiff import decode  # noqa: E402
+import hsd_links  # noqa: E402
 import menu_edits  # noqa: E402
 
 # Downloads are kept in build/slippi-release.
@@ -71,6 +72,25 @@ GAME_FILES = {
     'SdSlChr.usd.diff': 'fde2f393c405244f9100a0522a769d4fcce9e892dd9b87b0e0c38670ef132f38',
     'SlippiCSS.dat': 'f864eed3f494f1a1710760973f25a7f5be4bb3dc4fc4734c2a721ca62f4916f3',
     'slpCSS.dat': '3b1a3f254b37cf5ce4f56b38d237d9809d0b11e72d05320f0e56fa3abd7a1692',
+}
+
+# What comes after 3.6.4 (docs/NEXT_SLIPPI.md): Slippi 3.7.0, released 2026-11-17 (its tag's commit;
+# every file below is the one of the development source this was built from, 7333463b). Its codeset
+# and three of its files differ from 3.6.4's; the patches for Melee's own menu files are the same. GameSetup_gui.dat and SlippiCSS_gui.dat (which replaces slpCSS.dat)
+# no longer hold Nintendo's assets but links into the player's disc, to be resolved from it.
+NEXT_COMMIT = '07b2d287a1f074942811d13b3c990fa29401ba7c'  # v3.7.0
+NEXT_RAW = f'https://raw.githubusercontent.com/project-slippi/Ishiiruka/{NEXT_COMMIT}/Data/Sys'
+NEXT_CODESET = ('GameSettings/GALE01r2.ini', '2392fbc9da281eb8c8ceb5aa13222d45ea83e3cfd38389fec6e0705aead49609')
+NEXT_GAME_FILES = dict({name: sha for name, sha in GAME_FILES.items() if name != 'slpCSS.dat'}, **{
+    'GameSetup.dat': '7b3869a1f3097f6cce5a740f289a0278f5fdb5c55f199eab1df703d5266faa07',
+    'GameSetup_gui.dat': '824002d8835bebec42caf637b948b4da6178e4341668b30e3d3a2122c892892b',
+    'SlippiCSS_gui.dat': 'fe96bb798206d8090510292359fb65350da3f812ef5dbf44aa30b9f647d93e01',
+})
+# The two linked files, and what they must be once their links are resolved from an NTSC 1.02 disc
+# (tools/hsd_links.py; the same bytes as Slippi's own tool makes, slippi-rust-extensions' slippi-hsd)
+NEXT_LINKED = {
+    'GameSetup_gui.dat': 'e5ea24efd2b3fb654232845f68532708403d495eed0dba83d8131804e6501b92',
+    'SlippiCSS_gui.dat': '70d2ff54136e50246fae9f1ee1cbc2fe29c1c360334a3e0a487cab7500d3f0cf',
 }
 
 # Code blocks left out, by the source the codeset names for them: Dolphin
@@ -293,14 +313,21 @@ def open_disc(path):
     return disc
 
 
-def make_files(disc, root, log=print):
-    """Writes ROOT/slippwii/netplay.gct and ROOT/slippwii/files/."""
+def make_files(disc, root, log=print, next_version=False):
+    """Writes ROOT/slippwii/netplay.gct and ROOT/slippwii/files/ (next_version:
+    those of Slippi's development source, NEXT_*)."""
     out = Path(root) / 'slippwii'
     files_out = out / 'files'
     files_out.mkdir(parents=True, exist_ok=True)
+    game_files, cache, raw = GAME_FILES, CACHE / 'GameFiles', RAW
+    if next_version:
+        game_files, cache, raw = NEXT_GAME_FILES, CACHE / 'next/GameFiles', NEXT_RAW
 
     log('Slippi\'s online code (from Project Slippi\'s GitHub):')
-    ini = fetch(CODESET[0], CODESET[1], CACHE / 'GALE01r2-stable.ini', STABLE_RAW, log).decode('utf-8')
+    if next_version:
+        ini = fetch(NEXT_CODESET[0], NEXT_CODESET[1], CACHE / 'next/GALE01r2.ini', NEXT_RAW, log).decode('utf-8')
+    else:
+        ini = fetch(CODESET[0], CODESET[1], CACHE / 'GALE01r2-stable.ini', STABLE_RAW, log).decode('utf-8')
     gct, lines, dropped = build_gct(ini)
     if len(gct) >= 0x10000:
         raise SystemExit(f'the codeset is {len(gct)} bytes; the bootloader reads under 64 KiB')
@@ -309,8 +336,17 @@ def make_files(disc, root, log=print):
 
     log('Slippi\'s menu files (patched from your disc):')
     made = 0
-    for name, sha in GAME_FILES.items():
-        data = fetch(f'GameFiles/GALE01/{name}', sha, CACHE / 'GameFiles' / name, log=log)
+    for name, sha in game_files.items():
+        data = fetch(f'GameFiles/GALE01/{name}', sha, cache / name, raw, log=log)
+        if next_version and name in NEXT_LINKED:
+            try:
+                data, links, read = hsd_links.resolve_file(data, disc.file)
+            except hsd_links.LinkError as e:
+                raise SetupError(f'{name}: {e}')
+            if hashlib.sha256(data).hexdigest() != NEXT_LINKED[name]:
+                raise SetupError(f"{name}: with its {links} links resolved it is not the expected file "
+                                 '(is this an unmodified NTSC 1.02 disc?)')
+            log(f"  {name}: {links} links resolved from the disc's {', '.join(read)}")
         if name.endswith('.diff'):
             target = name[:-5]
             source = disc.file(target)
@@ -333,15 +369,62 @@ def make_files(disc, root, log=print):
     return out
 
 
+def release_files(disc, version, next_version=False):
+    """What a release of SlippWii `version` puts in the card's slippwii/ folder: {zip path: bytes}, with
+    patches/manifest.txt, which says what each file must be on the Wii (the loader makes the "patch"
+    and "link" ones from the disc and checks every one: Nintendont/loader/source/slippwii.c). The disc
+    here only gives the sizes and CRC-32s of what must come out."""
+    import zlib
+    game_files, cache, raw = GAME_FILES, CACHE / 'GameFiles', RAW
+    if next_version:
+        game_files, cache, raw = NEXT_GAME_FILES, CACHE / 'next/GameFiles', NEXT_RAW
+        ini = fetch(NEXT_CODESET[0], NEXT_CODESET[1], CACHE / 'next/GALE01r2.ini', NEXT_RAW).decode('utf-8')
+    else:
+        ini = fetch(CODESET[0], CODESET[1], CACHE / 'GALE01r2-stable.ini', STABLE_RAW).decode('utf-8')
+    gct, _, _ = build_gct(ini)
+    shipped, manifest = {}, ['# SlippWii ' + version + ': what each file must be (kind, path in slippwii/, size, CRC-32).',
+                             '# "patch": made on the Wii from the disc with patches/<name>.diff; "copy": shipped.']
+    if next_version:
+        manifest.append('# "link": made on the Wii from patches/<name>.link, its links resolved from the disc.')
+    manifest.append(f'copy netplay.gct {len(gct)} {zlib.crc32(gct):08x}')
+    shipped['slippwii/netplay.gct'] = gct
+    for name, sha in game_files.items():
+        data = fetch(f'GameFiles/GALE01/{name}', sha, cache / name, raw)
+        if name.endswith('.diff'):
+            target = name[:-5]
+            made = decode(disc.file(target), data)
+            # (the loader changes a few places of these afterwards, tools/menu_edits.py: each only if it
+            # holds what Slippi's file has there today. The manifest is of Slippi's files, before that.)
+            for edit_name, offset, length, old_crc, _, what, _ in menu_edits.edits():
+                if edit_name == target and zlib.crc32(made[offset:offset + length]) != old_crc:
+                    sys.exit(f"{target}: Slippi's file is not what tools/menu_edits.py expects at its {what}")
+            manifest.append(f'patch files/{target} {len(made)} {zlib.crc32(made):08x}')
+            shipped[f'slippwii/patches/{name}'] = data
+        elif next_version and name in NEXT_LINKED:
+            made, _, _ = hsd_links.resolve_file(data, disc.file)
+            if hashlib.sha256(made).hexdigest() != NEXT_LINKED[name]:
+                sys.exit(f'{name}: with its links resolved from this disc it is not the expected file')
+            manifest.append(f'link files/{name} {len(made)} {zlib.crc32(made):08x}')
+            shipped[f'slippwii/patches/{name}.link'] = data
+        else:
+            manifest.append(f'copy files/{name} {len(data)} {zlib.crc32(data):08x}')
+            shipped[f'slippwii/files/{name}'] = data
+    shipped['slippwii/patches/manifest.txt'] = ('\n'.join(manifest) + '\n').encode()
+    return shipped
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument('--iso', help='your NTSC 1.02 Melee disc image (.iso, .gcm or .ciso)')
     src.add_argument('--files', help='or a folder of its extracted files')
     ap.add_argument('--out', required=True, help='SD card (or USB drive) root, or a staging folder')
+    ap.add_argument('--next', action='store_true',
+                    help="the codeset and files of Slippi's development source (what comes after 3.6.4): for a "
+                         'build that speaks that version (docs/NEXT_SLIPPI.md)')
     args = ap.parse_args()
     try:
-        out = make_files(open_disc(args.iso or args.files), args.out)
+        out = make_files(open_disc(args.iso or args.files), args.out, next_version=args.next)
     except SetupError as e:
         raise SystemExit(str(e))
     print(f'done: {out}')

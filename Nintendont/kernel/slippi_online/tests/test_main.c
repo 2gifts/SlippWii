@@ -21,6 +21,7 @@ int test_failures;
 int test_checks;
 
 void test_mq(void);	/* test_mq.c */
+void test_next(void);	/* test_next.c */
 
 /* ---- so_util ------------------------------------------------------------- */
 
@@ -359,7 +360,7 @@ static void test_local_pads(void)
 static void test_remote_pads(void)
 {
 	static SoRemotePads q;
-	u8 wire[8 * 4], out[8];
+	u8 wire[8 * 4], out[SO_PAD_SIZE];
 	int i;
 	so_remote_pads_reset(&q);
 	CHECK(so_remote_pads_get(&q, 1, out) < 0);
@@ -551,7 +552,7 @@ static void test_mm_ticket(void)
 	s.connect_code_len = sizeof(code);
 	CHECK(so_mm_build_ticket(out, sizeof(out), &c, &u, &s, "10.0.0.47:41234") > 0);
 	CHECK_STR(out,
-		"{\"appVersion\":\"3.6.4\",\"ipAddressLan\":\"10.0.0.47:41234\","
+		"{\"appVersion\":\"" SO_APP_VERSION_DEFAULT "\",\"ipAddressLan\":\"10.0.0.47:41234\","
 		"\"search\":{\"connectCode\":[130,115,130,100,130,114,130,115,129,148,130,80,130,81,130,82],\"mode\":2},"
 		"\"type\":\"create-ticket\","
 		"\"user\":{\"connectCode\":\"ABCD#0\",\"displayName\":\"Ab\\\"cd\",\"playKey\":\"KEY1\",\"uid\":\"UID1\"}}");
@@ -582,10 +583,10 @@ static void test_mm_ticket(void)
 	 * place nlohmann::json's sorted keys give it, or after the version */
 	c.client_name_mode = 1;
 	CHECK(so_mm_build_ticket(out, sizeof(out), &c, &u, &s, "10.0.0.47:41234") > 0);
-	CHECK(strstr(out, "{\"appVersion\":\"3.6.4\",\"client\":\"SlippWii/" SLIPPWII_VERSION "\",\"ipAddressLan\":") == out);
+	CHECK(strstr(out, "{\"appVersion\":\"" SO_APP_VERSION_DEFAULT "\",\"client\":\"SlippWii/" SLIPPWII_VERSION "\",\"ipAddressLan\":") == out);
 	c.client_name_mode = 2;
 	CHECK(so_mm_build_ticket(out, sizeof(out), &c, &u, &s, "10.0.0.47:41234") > 0);
-	CHECK(strstr(out, "{\"appVersion\":\"3.6.4+slippwii." SLIPPWII_VERSION "\",\"ipAddressLan\":") == out);
+	CHECK(strstr(out, "{\"appVersion\":\"" SO_APP_VERSION_DEFAULT "+slippwii." SLIPPWII_VERSION "\",\"ipAddressLan\":") == out);
 	CHECK(!strstr(out, "\"client\""));
 }
 
@@ -1137,6 +1138,7 @@ int main(void)
 	RUN(test_disc_files);
 	RUN(test_logfile);
 	RUN(test_mq);
+	RUN(test_next);
 	printf("%d checks, %d failures\n", test_checks, test_failures);
 	return test_failures ? 1 : 0;
 }

@@ -227,7 +227,7 @@ The last row looks like the cheapest remaining win: fresher controller sampling 
 
 | Hazard | What could happen | Confidence |
 |---|---|---|
-| Upstream Slippi has changed format (next version, unreleased): input packets go from 8 to 9 bytes; new secure matchmaking | **The Wii may stop pairing the day it ships** | Source read by two reviewers; effect untested |
+| Upstream Slippi has changed format (next version, unreleased): input packets go from 8 to 9 bytes; new secure matchmaking | **The Wii may stop pairing the day it ships** | Built and proven against Slippi's development Dolphin (2026-11-16, [NEXT_SLIPPI.md](NEXT_SLIPPI.md)); a release needs one switch and Slippi's release to check against |
 | Lost capture when memory is short | Game silently goes wrong instead of ending | Code certain, rare |
 | Full send queue drops an input | PC gets wrong inputs; silent desync after a long network stall | Code verified, rare |
 | A controller read can nest inside another during the input wait | Desync or freeze, the same class as a bug fixed earlier | Path verified, unlikely |
@@ -252,7 +252,7 @@ Each phase ends with a measured result. A hand test from you only happens after 
 | **6. Release** | Support the next Slippi version; Teams and Party working or hidden; reliability numbers on the player build; real matches; private beta. | Every target met on the release build | Beta, real matches |
 
 **Main risks:**
-- **Slippi's next version.** Timing isn't in our control, which is why I'd talk to the Slippi team early.
+- **Slippi's next version.** Timing isn't in our control, which is why I'd talk to the Slippi team early. (2026-11-16: SlippWii's side is built and tested against the development source, [NEXT_SLIPPI.md](NEXT_SLIPPI.md).)
 - **The cost model could be off** by about one predicted frame, moving the band limits.
 - **Corrections you can see** may turn out to matter more than repeats.
 - **The Wii's network stack may have a floor** of about 2.5-3 ms reply time.

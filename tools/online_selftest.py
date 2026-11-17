@@ -58,6 +58,9 @@ DEFAULT_TOOLS = ROOT.parent / 'slippi-3ds/native-3ds/build/slippi-tools'
 OUT = ROOT / 'build/online-selftest'
 
 LOG_PORT, BROADCAST_PORT, MM_PORT = 51450, 20582, 43113
+# pc --next-mm: Slippi's WebSocket matchmaking (Dolphin after 3.6.4), all on this PC: the test
+# server's WebSocket port, TLS in front of it, two STUN servers, and the name its certificate is for
+WS_PORT, TLS_PORT, STUN_PORTS, NEXT_HOST = 8080, 8443, (3478, 3479), 'matchmaking.slippwii.test'
 CONFIG_MARKER = '# written by slippi-wii/tools/online_selftest.py'
 
 WII_USER = {'uid': 'local-test-uid-wii', 'playKey': 'dummy-play-key-wii', 'connectCode': 'WIIT#001',
@@ -486,6 +489,17 @@ def run_pc(args):
             config += f'rollback=1\ntest_lag_frames={args.rollback}\ntest_spike_ms={args.spike}\n'
         else:
             config += 'rollback=0\n'  # (on by default since 1.4.0) this game waits for inputs
+    extra = []
+    if args.next_mm:
+        # The client queues as Slippi Dolphin does after 3.6.4 (a WebSocket over TLS, after asking STUN
+        # servers where its socket is seen); the fake Dolphin peer queues the old way (ENet), and the
+        # test server (so_pc_lobby_mm.exe) pairs the two.
+        sys.path.insert(0, str(HERE / 'sweep'))
+        import tls_front
+        point = tls_front.make_chain(out / 'tls', args.cert_name or NEXT_HOST, args.chain)
+        scheme = 'ws' if args.no_tls else 'wss'
+        config += (f'mm_url={scheme}://{NEXT_HOST}:{WS_PORT if args.no_tls else TLS_PORT}/v1/queue\ntest_mm_addr=127.0.0.1\n'
+                   f'test_tls_root={args.wrong_root or point}\nstun_hosts=' + ','.join(f'127.0.0.1:{n}' for n in STUN_PORTS) + '\n')
     (out / 'wii/config.ini').write_text(config, encoding='utf-8')
     stop = threading.Event()
     responder = threading.Thread(target=probe_responder, args=(stop, plan_text(args)), daemon=True)
@@ -499,16 +513,35 @@ def run_pc(args):
     (out / 'peer/user.json').write_text(json.dumps(PEER_USER), encoding='utf-8')
     (out / 'peer/config.ini').write_text(peer_config(ip, args.delay), encoding='utf-8')
     tools = Path(args.tools)
-    logs = {name: open(out / f'{name}.log', 'w', encoding='utf-8') for name in ('fake_mm', 'peer', 'wii')}
-    mm = subprocess.Popen([str(tools / 'slippi_fake_mm.exe'), '--port', str(MM_PORT)] +
-                          (['--second-is-host'] if args.second_is_host else []),
-                          stdout=logs['fake_mm'], stderr=subprocess.STDOUT)
+    logs = {name: open(out / f'{name}.log', 'w', encoding='utf-8') for name in ('fake_mm', 'peer', 'wii', 'tls', 'stun')}
+    if args.next_mm:
+        order = f"{WII_USER['connectCode']},{PEER_USER['connectCode']}" if args.second_is_host else \
+            f"{PEER_USER['connectCode']},{WII_USER['connectCode']}"
+        mm = subprocess.Popen([str(exe.with_name('so_pc_lobby_mm.exe')), str(MM_PORT), '--ws-port', str(WS_PORT),
+                               '--order', order] + [str(a) for a in args.mm_arg],
+                              stdout=logs['fake_mm'], stderr=subprocess.STDOUT)
+        extra.append(subprocess.Popen([sys.executable, '-u', str(HERE / 'sweep/tls_front.py'), '--dir', str(out),
+                                       '--listen', str(TLS_PORT), '--backend', f'127.0.0.1:{WS_PORT}', '--host', args.cert_name or NEXT_HOST,
+                                       '--chain', args.chain] + (['--ciphers', args.ciphers] if args.ciphers else [])
+                                      + (['--tls13'] if args.tls13 else []),
+                                      stdout=logs['tls'], stderr=subprocess.STDOUT))
+        extra.append(subprocess.Popen([sys.executable, '-u', str(HERE / 'sweep/stun_fake.py')] + [str(n) for n in STUN_PORTS]
+                                      + [str(a) for a in args.stun_arg], stdout=logs['stun'], stderr=subprocess.STDOUT))
+        time.sleep(1.0)
+    else:
+        mm = subprocess.Popen([str(tools / 'slippi_fake_mm.exe'), '--port', str(MM_PORT)] +
+                              (['--second-is-host'] if args.second_is_host else []),
+                              stdout=logs['fake_mm'], stderr=subprocess.STDOUT)
     time.sleep(0.5)
+    wii_cmd = [str(exe), str(out / 'wii')] + ([str(args.frames)] if args.game else []) + [str(args.timeout)]
+    if args.peer_delay:
+        # (the client queues first and waits this long for its opponent)
+        wii = subprocess.Popen(wii_cmd, stdout=logs['wii'], stderr=subprocess.STDOUT)
+        time.sleep(args.peer_delay)
     peer = subprocess.Popen([str(tools / 'slippi_fake_peer.exe'), '--dir', str(out / 'peer'), '--frames',
                              str(args.frames), '--linger', '3'], stdout=logs['peer'], stderr=subprocess.STDOUT)
-    wii_cmd = [str(exe), str(out / 'wii')] + ([str(args.frames)] if args.game else []) + [str(args.timeout)]
-    wii = subprocess.Popen(wii_cmd, stdout=logs['wii'],
-                           stderr=subprocess.STDOUT)
+    if not args.peer_delay:
+        wii = subprocess.Popen(wii_cmd, stdout=logs['wii'], stderr=subprocess.STDOUT)
     codes = {}
     for name, p in (('wii', wii), ('peer', peer)):
         try:
@@ -517,6 +550,8 @@ def run_pc(args):
             p.kill()
             codes[name] = 'timeout'
     mm.terminate()
+    for proc in extra:
+        proc.terminate()
     stop.set()
     for f in logs.values():
         f.close()
@@ -524,6 +559,14 @@ def run_pc(args):
         lines = (out / f'{name}.log').read_text(encoding='utf-8', errors='replace').splitlines()
         for line in [l for l in lines if 'selftest:' in l or 'peer:' in l or l.startswith('game:')][-8:]:
             print(f'{name:4} | {line}')
+        if args.next_mm and name == 'wii':
+            for line in [l for l in lines if ' mm: ' in l or 'STUN' in l or 'stun:' in l][:12]:
+                print(f'{name:4} | {line}')
+    if args.next_mm:
+        for name in ('tls', 'fake_mm'):
+            lines = (out / f'{name}.log').read_text(encoding='utf-8', errors='replace').splitlines()
+            for line in [l for l in lines if 'handshake' in l or 'WebSocket' in l or 'MATCHED' in l or 'resume' in l][:8]:
+                print(f'{name:4} | {line}')
     # The fake peer expects its script's inputs from frame 16. Slippi's code, which fake
     # Melee plays as, clears them up to frame 77 (so_netplay.h, SO_NP_FROZEN_PADS_END).
     if args.game and args.rollback is not None and codes['peer'] == 1 and ', 62 bad;' in (out / 'peer.log').read_text(
@@ -569,6 +612,18 @@ def main():
     ap.add_argument('--dol', default=str(ROOT / 'Nintendont/loader/loader.dol'))
     ap.add_argument('--cfg', help='--boot: the NIN_CFG to start from (default: wii_boot.py\'s)')
     ap.add_argument('--first-arg', help="--boot: a test's launch argument for the loader, before the settings")
+    ap.add_argument('--next-mm', action='store_true',
+                    help="pc: the client queues over Slippi's WebSocket service (Dolphin after 3.6.4): TLS, STUN and "
+                         "the test server's WebSocket side, all on this PC")
+    ap.add_argument('--chain', default='rsa', choices=['rsa', 'ec'], help="--next-mm: the test certificates' kind")
+    ap.add_argument('--ciphers', help='--next-mm: the one cipher suite the test server offers (OpenSSL name)')
+    ap.add_argument('--tls13', action='store_true', help='--next-mm: the test server offers TLS 1.3 too')
+    ap.add_argument('--no-tls', action='store_true', help='--next-mm: a plain ws:// connection to the test server')
+    ap.add_argument('--wrong-root', help='--next-mm: the client is given this root key instead (it must refuse the server)')
+    ap.add_argument('--mm-arg', action='append', default=[], help='--next-mm: an option for so_pc_lobby_mm.exe')
+    ap.add_argument('--cert-name', help='--next-mm: the certificate is for this name instead (the client must refuse it)')
+    ap.add_argument('--peer-delay', type=int, default=0, help='pc: the opponent queues this many seconds after the client')
+    ap.add_argument('--stun-arg', action='append', default=[], help='--next-mm: an option for stun_fake.py')
     ap.add_argument('--tools', default=str(DEFAULT_TOOLS))
     ap.add_argument('--timeout', type=int, default=900, help='seconds to wait for a result')
     ap.add_argument('--rollback', type=int, metavar='LAG',

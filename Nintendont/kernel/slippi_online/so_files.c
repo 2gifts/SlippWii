@@ -27,6 +27,7 @@ u32 so_files_optional(void)
 static struct {
 	char name[MAX_NAME];
 	u32 size;
+	u8 overlay;	/* tests: in test_files_root's folder, not SO_FILES_DIR */
 	void *handle;	/* open from start-up: no directory lookups while the game runs */
 	const u8 *data;	/* kept in RAM (see preload), or NULL: read from the drive */
 } files[MAX_FILES];
@@ -38,18 +39,25 @@ static u32 gct_len;
  * from a cache too). */
 static u8 *bounce;
 
+static int find(const char *name);
+
+/* (ctx: not NULL for a file of a test's overlay folder, which takes the place of one of the same name) */
 static void add_file(const char *name, u32 size, void *ctx)
 {
-	(void)ctx;
-	if (file_count >= MAX_FILES || strlen(name) >= MAX_NAME || size == 0) {
+	int at = ctx ? find(name) : -1;
+	if (at < 0)
+		at = file_count;
+	if (at >= MAX_FILES || strlen(name) >= MAX_NAME || size == 0) {
 		so_log("files: %s skipped", name);
 		return;
 	}
-	strlcpy(files[file_count].name, name, MAX_NAME);
-	files[file_count].size = size;
-	files[file_count].handle = NULL;
-	files[file_count].data = NULL;
-	file_count++;
+	strlcpy(files[at].name, name, MAX_NAME);
+	files[at].size = size;
+	files[at].overlay = ctx != NULL;
+	files[at].handle = NULL;
+	files[at].data = NULL;
+	if (at == file_count)
+		file_count++;
 }
 
 /* A GCT: the header, whole 8-byte lines, a terminator line at the end. */
@@ -127,7 +135,7 @@ static u32 preload_disc_files(u8 *cache, u32 size)
 void so_files_preload(void)
 {
 	static const char *const order[] = {
-		"MnMaAll.usd", "MnExtAll.usd", "MnSlMap.usd", "slpCSS.dat", "SdMenu.usd", "SlippiCSS.dat",
+		"MnMaAll.usd", "MnExtAll.usd", "MnSlMap.usd", "slpCSS.dat", "SlippiCSS_gui.dat", "SdMenu.usd", "SlippiCSS.dat",
 		"SdSlChr.usd", "MxScn.dat", "GameSetup.dat",
 	};
 	u32 size, used = 0, n;
@@ -157,9 +165,17 @@ void so_files_preload(void)
 
 int so_files_init(void)
 {
+	const char *root = so_client_config()->test_files_root;
+	char over[sizeof(so_client_config()->test_files_root) + 16];
 	int res;
 	file_count = 0;
 	so_list_dir(SO_FILES_DIR, add_file, NULL);
+	if (root[0]) {
+		int before = file_count, n;
+		so_snprintf(over, sizeof(over), "%s/files", root);
+		n = so_list_dir(over, add_file, (void *)1);
+		so_log("files: TESTS: %d files of %s first (%d of them new names)", n, over, file_count - before);
+	}
 	if (!bounce)
 		bounce = (u8 *)so_malloc(BOUNCE_SIZE);
 	/* Open every file now. One that will not open is left out, so the game
@@ -167,9 +183,9 @@ int so_files_init(void)
 	{
 		int i, kept = 0;
 		for (i = 0; i < file_count; i++) {
-			char path[sizeof(SO_FILES_DIR) + MAX_NAME + 1];
+			char path[sizeof(over) + MAX_NAME + 1];
 			int attempt, error = 0;
-			so_snprintf(path, sizeof(path), "%s/%s", SO_FILES_DIR, files[i].name);
+			so_snprintf(path, sizeof(path), "%s/%s", files[i].overlay ? over : SO_FILES_DIR, files[i].name);
 			for (attempt = 0; attempt < ATTEMPTS && !files[i].handle; attempt++)
 				files[i].handle = so_file_open(path, &error);
 			if (!files[i].handle) {
@@ -181,7 +197,14 @@ int so_files_init(void)
 		file_count = kept;
 	}
 	gct_data = (u8 *)so_malloc(MAX_GCT);
-	res = gct_data ? so_read_file(SO_GCT_PATH, gct_data, MAX_GCT) : -1;
+	res = -1;
+	if (gct_data && root[0]) {
+		so_snprintf(over, sizeof(over), "%s/netplay.gct", root);
+		res = so_read_file(over, gct_data, MAX_GCT);
+		so_log(res > 0 ? "files: TESTS: the codeset is %s" : "files: TESTS: no %s; the installed codeset", over);
+	}
+	if (gct_data && res <= 0)
+		res = so_read_file(SO_GCT_PATH, gct_data, MAX_GCT);
 	if (res > 0 && (u32)res < MAX_GCT && gct_ok(gct_data, (u32)res)) {
 		/* "Normal Lag Reduction" is Dolphin-only: it copies frames to display
 		 * buffer -1 (harmless where the copy never reaches RAM; on a console

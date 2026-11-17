@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.7.0
+
+- **Slippi 3.7.0.** Slippi released version 3.7.0 on 2026-11-17, and from then on its matchmaking
+  turns every older version away: SlippWii 1.6.1 and earlier show only *Exit* and *Update* on the
+  Online Play menu. 1.7.0 speaks 3.7.0: its new, encrypted matchmaking, its netplay, its game
+  code and its game files (two of them are now made on the Wii from your own disc, at the first
+  start after the update). Update from the SlippWii menu with *Check for Updates*, or put the new
+  zip on the card. Tested against Slippi Dolphin 3.7.0 with one opponent, in Teams and in Party:
+  every replay the same as Dolphin's ([docs/NEXT_SLIPPI.md](docs/NEXT_SLIPPI.md)).
+- **Party as Slippi has it now**: a stock game (4 stocks, 8 minutes) that starts with two or three
+  players when no more are found, and that you can leave with L+R+A+Start; when a player leaves or
+  is lost, the others play on.
+- **Teams and Party while a PC mirrors the console** (Slippi Launcher's console mirroring): the
+  replay stream to the PC now goes out in pieces of a tenth of a second in these games. A send
+  every frame beside three opponents' made the game wait for inputs, and on the heaviest stage
+  could lose every connection.
+- A quick chat message is taken only from a player who is in the game, as Slippi Dolphin 3.7.0
+  checks it.
+- Not in this version: Slippi's new input suggestions (a Wii neither sends nor uses them, which
+  3.7.0 allows for), and Ranked.
+
 ## 1.6.1
 
 - **A desync leaves a report on the card.** When a game goes out of step with an opponent's,

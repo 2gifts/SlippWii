@@ -121,8 +121,8 @@ static void read_player(const SoJson *el, SoMmPlayer *p)
 	}
 }
 
-int so_mm_parse_match(const char *text, u32 len, SoMatchResult *result, char *error, int error_size,
-	char *latest_version, int latest_version_size)
+static int parse_match(const char *text, u32 len, const char *type, SoMatchResult *result, char *error,
+	int error_size, char *latest_version, int latest_version_size)
 {
 	static const u16 default_stages[] = { 0x3, 0x8, 0x1C, 0x1F, 0x20 };
 	SoJson doc, players, stages, el;
@@ -131,7 +131,7 @@ int so_mm_parse_match(const char *text, u32 len, SoMatchResult *result, char *er
 
 	memset(result, 0, sizeof(*result));
 	latest_version[0] = '\0';
-	res = open_reply(text, len, "get-ticket-resp", &doc, error, error_size,
+	res = open_reply(text, len, type, &doc, error, error_size,
 		"Invalid response when getting mm status");
 	if (res == -2)
 		so_json_get_string(&doc, "latestVersion", latest_version, latest_version_size, "");
@@ -210,4 +210,208 @@ int so_mm_parse_match(const char *text, u32 len, SoMatchResult *result, char *er
 
 	result->items = (u32)so_json_get_long(&doc, "items", 0);
 	return 0;
+}
+
+int so_mm_parse_match(const char *text, u32 len, SoMatchResult *result, char *error, int error_size,
+	char *latest_version, int latest_version_size)
+{
+	return parse_match(text, len, "get-ticket-resp", result, error, error_size, latest_version, latest_version_size);
+}
+
+/* ---- the WebSocket service's messages (Slippi Dolphin after 3.6.4) ---------
+ * slippi-rust-extensions, matchmaking/src/protocol.rs and client.rs. */
+
+int so_mm_parse_match_ws(const char *text, u32 len, SoMatchResult *result, char *error, int error_size)
+{
+	char latest[24];
+	/* (the service's `match` is the old get-ticket-resp under another type:
+	 * Dolphin hands it to the same parser; an error is a message of its own) */
+	return parse_match(text, len, "match", result, error, error_size, latest, sizeof(latest));
+}
+
+int so_mm_parse_url(const char *url, int *secure, char *host, int host_size, u16 *port, char *path, int path_size)
+{
+	const char *at, *slash, *colon;
+	u32 n, p = 0;
+	if (!strncmp(url, "wss://", 6)) {
+		*secure = 1;
+		at = url + 6;
+	} else if (!strncmp(url, "ws://", 5)) {
+		*secure = 0;
+		at = url + 5;
+	} else {
+		return -1;
+	}
+	slash = strchr(at, '/');
+	if (!slash)
+		slash = at + strlen(at);
+	for (colon = at; colon < slash && *colon != ':'; colon++)
+		;
+	if (colon == slash)
+		colon = NULL;
+	n = (u32)((colon ? colon : slash) - at);
+	if (!n || (int)n >= host_size)
+		return -1;
+	memcpy(host, at, n);
+	host[n] = '\0';
+	if (colon) {
+		const char *d;
+		for (d = colon + 1; d < slash; d++) {
+			if (*d < '0' || *d > '9')
+				return -1;
+			p = p * 10 + (u32)(*d - '0');
+		}
+		if (!p || p > 65535)
+			return -1;
+	}
+	*port = p ? (u16)p : (u16)(*secure ? 443 : 80);
+	if ((int)strlen(slash) >= path_size)
+		return -1;
+	strlcpy(path, *slash ? slash : "/", path_size);
+	return 0;
+}
+
+int so_mm_build_join(char *out, int size, const SoConfig *config, const SoUser *user, const SoSearch *search,
+	const char *lan_address, u16 port, const SoStun *stun)
+{
+	SoJsonWriter w;
+	char ip[16], lan_ip[24];
+	u32 lan_addr;
+	u16 lan_port;
+	int i, reflexive = stun->have[0] ? 0 : stun->have[1] ? 1 : -1;
+	int has_lan = lan_address[0] && so_parse_endpoint(lan_address, &lan_addr, &lan_port) == 0;
+
+	/* The members in the order Dolphin's client writes them. */
+	so_jw_init(&w, out, size);
+	so_jw_object_begin(&w);
+	so_jw_key(&w, "type");
+	so_jw_string(&w, "join");
+	so_jw_key(&w, "user");
+	so_jw_object_begin(&w);
+	so_jw_key(&w, "uid");
+	so_jw_string(&w, user->uid);
+	so_jw_key(&w, "playKey");
+	so_jw_string(&w, user->play_key);
+	so_jw_key(&w, "connectCode");
+	so_jw_string(&w, user->connect_code);
+	so_jw_key(&w, "displayName");
+	so_jw_string(&w, user->display_name);
+	so_jw_object_end(&w);
+	so_jw_key(&w, "search");
+	so_jw_object_begin(&w);
+	so_jw_key(&w, "mode");
+	so_jw_long(&w, search->mode);
+	so_jw_key(&w, "connectCode");
+	so_jw_array_begin(&w);
+	for (i = 0; i < search->connect_code_len; i++)
+		so_jw_long(&w, search->connect_code[i]);
+	so_jw_array_end(&w);
+	so_jw_object_end(&w);
+	so_jw_key(&w, "appVersion");
+	if (config->client_name_mode == 2) {
+		char version[sizeof(config->app_version) + 24];
+		so_snprintf(version, sizeof(version), "%s+slippwii." SLIPPWII_VERSION, config->app_version);
+		so_jw_string(&w, version);
+	} else {
+		so_jw_string(&w, config->app_version);
+	}
+	if (config->client_name_mode == 1) {
+		so_jw_key(&w, "client");
+		so_jw_string(&w, "SlippWii/" SLIPPWII_VERSION);
+	}
+	/* Where opponents send: the port a STUN server saw, when one answered. */
+	so_jw_key(&w, "port");
+	so_jw_long(&w, reflexive >= 0 ? stun->port[reflexive] : port);
+	so_jw_key(&w, "ipAddressLan");
+	so_jw_string(&w, lan_address);
+	if (reflexive >= 0 || has_lan) {
+		so_jw_key(&w, "candidates");
+		so_jw_array_begin(&w);
+		if (reflexive >= 0) {
+			so_format_ipv4(stun->addr[reflexive], ip, sizeof(ip));
+			so_jw_object_begin(&w);
+			so_jw_key(&w, "ip");
+			so_jw_string(&w, ip);
+			so_jw_key(&w, "port");
+			so_jw_long(&w, stun->port[reflexive]);
+			so_jw_key(&w, "type");
+			so_jw_string(&w, "srflx");
+			so_jw_object_end(&w);
+		}
+		if (has_lan) {
+			so_format_ipv4(lan_addr, lan_ip, sizeof(lan_ip));
+			so_jw_object_begin(&w);
+			so_jw_key(&w, "ip");
+			so_jw_string(&w, lan_ip);
+			so_jw_key(&w, "port");
+			so_jw_long(&w, lan_port);
+			so_jw_key(&w, "type");
+			so_jw_string(&w, "host");
+			so_jw_object_end(&w);
+		}
+		so_jw_array_end(&w);
+	}
+	so_jw_key(&w, "natType");
+	so_jw_string(&w, so_stun_nat_type(stun));
+	so_jw_object_end(&w);
+	return so_jw_finish(&w);
+}
+
+int so_mm_build_resume(char *out, int size, const char *ticket_id, const char *token)
+{
+	SoJsonWriter w;
+	so_jw_init(&w, out, size);
+	so_jw_object_begin(&w);
+	so_jw_key(&w, "type");
+	so_jw_string(&w, "resume");
+	so_jw_key(&w, "ticketId");
+	so_jw_string(&w, ticket_id);
+	so_jw_key(&w, "token");
+	so_jw_string(&w, token);
+	so_jw_object_end(&w);
+	return so_jw_finish(&w);
+}
+
+int so_mm_ws_kind(const char *text, u32 len)
+{
+	SoJson doc;
+	char type[16];
+	if (so_json_parse(&doc, text, len) < 0 || so_json_type(&doc) != SO_JSON_OBJECT)
+		return SO_MMWS_MALFORMED;
+	so_json_get_string(&doc, "type", type, sizeof(type), "");
+	if (!strcmp(type, "joined"))
+		return SO_MMWS_JOINED;
+	if (!strcmp(type, "status"))
+		return SO_MMWS_STATUS;
+	if (!strcmp(type, "match"))
+		return SO_MMWS_MATCH;
+	if (!strcmp(type, "error"))
+		return SO_MMWS_ERROR;
+	return SO_MMWS_OTHER;
+}
+
+int so_mm_parse_joined(const char *text, u32 len, char *ticket_id, int ticket_size, char *token, int token_size)
+{
+	SoJson doc, v;
+	if (so_json_parse(&doc, text, len) < 0)
+		return -1;
+	/* (both must be there and fit: a cut-off token would be refused at a resume) */
+	if (so_json_get(&doc, "ticketId", &v) < 0 || so_json_string(&v, ticket_id, ticket_size) < 0 ||
+	    so_json_get(&doc, "token", &v) < 0 || so_json_string(&v, token, token_size) < 0)
+		return -1;
+	return 0;
+}
+
+void so_mm_parse_ws_error(const char *text, u32 len, char *error, int error_size, char *latest_version,
+	int latest_version_size)
+{
+	SoJson doc;
+	error[0] = '\0';
+	latest_version[0] = '\0';
+	if (so_json_parse(&doc, text, len) == 0) {
+		so_json_get_string(&doc, "error", error, error_size, "");
+		so_json_get_string(&doc, "latestVersion", latest_version, latest_version_size, "");
+	}
+	if (!error[0])
+		strlcpy(error, "Received an error from the mm server", error_size);
 }

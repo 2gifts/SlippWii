@@ -13,6 +13,7 @@
 #include "debug.h"
 #include "net.h"
 #include "Config.h"
+#include "slippi_online/so_client.h"
 
 
 /* The game can transfer at most 784 bytes / frame.
@@ -467,11 +468,63 @@ void listenForClient()
 static u8 readBuf[READ_BUF_SIZE];
 static SlpGameReader reader;
 static u32 maxBufUsage = 0;
+
+/* SlippWii (multi_stream): an online game with more than one opponent, and a PC mirroring this console.
+ * One TCP send a frame beside three opponents' datagrams is more than IOS's network module carries: the
+ * opponents read this console's ping at 77 ms for 8, the game waited 108 frames in 40 s for none, and on
+ * the heaviest stage one game in three of Slippi's next version lost every connection
+ * (docs/NEXT_SLIPPI.md). The cost is the number of sends: one in 100 ms left 6 waited frames and 18 ms.
+ *   1: as it always was, a send a frame.
+ *   2 to 250: in such a game one send in that many milliseconds (handleFileTransfer).
+ *   0: such a game is not sent while it runs (below). The connection stays (the keep-alives), what came
+ *      before the game is still sent, and the game is passed over whole: after it the stream goes on from
+ *      where the buffer is, said to the client as an overflow is (its position is forced).
+ * The file on the card (SlippiFileWriter.c) is not touched, nor a game against one opponent.
+ * Returns true while the client's next byte is a held game's. */
+static bool streamHeld;
+static u64 heldBase;	/* that game's start in the buffer */
+static bool streamHolds(void)
+{
+	bool running = gameState.inGame;
+	u64 base = gameState.baseCursor;
+
+	if (running && !(streamHeld && base == heldBase) &&
+		so_np_remote_count() > 1 && !so_client_config()->multi_stream)
+	{
+		if (streamHeld && client.cursor >= heldBase)
+		{
+			// (the game held before this one never ended)
+			client.cursor = base;
+			overflowEncountered = true;
+		}
+		streamHeld = true;
+		heldBase = base;
+	}
+	if (!streamHeld || client.cursor < heldBase)
+		return false;
+	if (running && base == heldBase)
+		return true;
+
+	// It is over: on from the game that runs now, or from where the buffer is
+	streamHeld = false;
+	client.cursor = running ? base : SlippiRestoreReadPos();
+	overflowEncountered = true;
+	return false;
+}
+
 s32 handleFileTransfer()
 {
 	// Do nothing if we aren't connected to a client
 	int status = getConnectionStatus();
 	if (status != CONN_STATUS_CONNECTED)
+		return 0;
+
+	if (streamHolds())
+		return 0;
+
+	// (multi_stream above 1: more than one opponent, and the last send was less than that long ago)
+	if (so_client_config()->multi_stream > 1 && gameState.inGame && so_np_remote_count() > 1 &&
+		TimerDiffMs(client.timestamp) < so_client_config()->multi_stream)
 		return 0;
 
 	// Read some bytes into the local buffer
@@ -491,6 +544,10 @@ s32 handleFileTransfer()
 
 	// If there's no new data to send, just return
 	if (reader.lastReadResult.bytesRead == 0)
+		return 0;
+
+	// (a game that holds began between the check and the read: its first bytes are not sent)
+	if (streamHolds())
 		return 0;
 
 	// Actually send data to the client

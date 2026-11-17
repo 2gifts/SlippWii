@@ -533,6 +533,13 @@ int main(int argc, char **argv)
 		SlippWiiMenuTest = 1;
 		argc = 1;
 	}
+	if(argc > 2 && strncmp(argv[1], "slippwii-files-root=/", 21) == 0 && !strchr(argv[1] + 21, '/') && !strstr(argv[1], ".."))
+	{
+		// tests (slippwii.h): Slippi's files are made in, and read from, this folder of the card
+		SlippWiiFilesRoot = strdup(argv[1] + 20);
+		argv++;
+		argc--;
+	}
 	if(argc > 2 && strncmp(argv[1], "slippwii-update-then-boot=", 26) == 0)
 	{
 		// tests (update.h): the updater by itself first, in a test build; then the game the next argument starts

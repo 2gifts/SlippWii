@@ -27,6 +27,11 @@ make clean >/dev/null 2>&1 || true
 # One job: the upstream Makefile can compile MeleeCodes.c while the gecko
 # headers it includes are still being generated (a broken build, no error).
 make windows=1 -j1 > "$ROOT/build.log" 2>&1 || { grep -n -i "error" "$ROOT/build.log" | head -20; exit 1; }
+# The kernel's memcpy returns the end of the destination, not its start: nothing linked into the
+# kernel may use the value (a library that did failed every TLS handshake on a Wii).
+python "$ROOT/tools/check_kernel_memcpy.py" "$ROOT/Nintendont/kernel/kernel.elf" || exit 1
+# The kernel's offsets into the game's online buffers are Slippi's own (its codes' source says them).
+python "$ROOT/tools/check_exi_layout.py" || exit 1
 # The loader hangs the Wii at boot, every boot, at some places of its BSS (a black screen, nothing
 # logged; cause not found yet). Its layout moves with the kernel's compressed size. By 581 test
 # builds sent to the Wii: 6 of 6 hung whose BSS started 0x460 or 0x860 past a 4 KB boundary

@@ -26,6 +26,8 @@ def main():
     ap.add_argument('--hours', type=float, default=6)
     ap.add_argument('--keep-going', action='store_true')
     ap.add_argument('--kernel', action='append', default=[])
+    ap.add_argument('--next', action='store_true',
+                    help="against Slippi's development Dolphin, the Wii speaking that version (run_sweep.py --next)")
     args = ap.parse_args()
     out = ROOT / 'build/sweep' / f'soak-{time.strftime("%Y%m%d-%H%M%S")}.md'
     end, games, failures, late, i = time.time() + args.hours * 3600, 0, 0, 0, 0
@@ -39,6 +41,8 @@ def main():
                '--seed', str(i), '--shift', str(1 + i * 7 % 25)]
         for kv in args.kernel:
             cmd += ['--kernel', kv]
+        if args.next:
+            cmd += ['--next']
         res = subprocess.run(cmd, capture_output=True, text=True)
         new = set(RUNS.iterdir()) - before
         run = max(new, key=lambda p: p.stat().st_mtime) if new else None

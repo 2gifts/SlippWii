@@ -79,9 +79,11 @@ typedef unsigned long long u64;
 #define T_EVENTS 0x2F100		/* captures and loads, latest last (note_event): the kernel reads them */
 #define T_SLOW_FRAME (T_EVENTS + 4 + 96 * 4)	/* tests: test_slow_frame_ms, from the kernel */
 #define EVENTS 96
-#define T_REPLAY_HEAD 0x2F300		/* the replay ring (replay_queue): bytes queued, by the engine */
-#define T_REPLAY_TAIL 0x2F320		/* and bytes taken, by the kernel */
-#define T_ANSWER 0x2F340		/* the last 0xB0's answer (answer_ready): its frame, and at + 0x20 the answer */
+/* (Slippi 3.6.5's answer is 559 bytes: it takes the place the ring's two words had as well, up to
+ * T_GAME_FRAMES, and they went up past T_DSI_SAVE; the kernel's ENGINE_* are the same places) */
+#define T_REPLAY_HEAD 0x2FE00		/* the replay ring (replay_queue): bytes queued, by the engine */
+#define T_REPLAY_TAIL 0x2FE20		/* and bytes taken, by the kernel */
+#define T_ANSWER 0x2F2A0		/* the last 0xB0's answer (answer_ready): its frame, and at + 0x20 the answer */
 #define T_GAME_FRAMES 0x2F500		/* the frames this game has started: the kernel reads it */
 #define T_INPUT_WAIT (T_GAME_FRAMES + 4)	/* the longest a poll waits for a late input, in microseconds (input_wait): the kernel sets it */
 #define FIELD_US 16683	/* a refresh, in microseconds */
@@ -2380,6 +2382,13 @@ void rb_early_pad(Engine *e)
 	for (i = 0; i < 4; i++)
 		buf[TXB_FRAME + i] = (u8)((u32)frame >> (24 - 8 * i));
 	buf[TXB_DELAY] = rd8(odb + ODB_DELAY_FRAMES);
+#ifdef RB_NEXT
+	/* (Slippi 3.6.5: the random bits the last answer gave for this pad, as TriggerSendInput will put
+	 * them there: the opponent must get the very pad the game sends) */
+	pad[PAD_RNG_BITS] = rd8(rd32(odb + ODB_RXB_ADDR) + RXB_NEXT_PAD_RNG_BITS);
+	for (i = TXB_PAD + PAD_REPORT_SIZE; i < TXB_SIZE; i++)
+		buf[i] = 0;	/* (the source port and "is leaving": the kernel reads neither here) */
+#endif
 	for (i = 0; i < PAD_REPORT_SIZE; i++)
 		buf[TXB_PAD + i] = pad[i];
 	FN_EXITransferBuffer(buf, TXB_SIZE, 1);

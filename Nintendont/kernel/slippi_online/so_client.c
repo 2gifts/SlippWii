@@ -226,18 +226,47 @@ static int open_session_socket(void)
  * while the server's name resolves, since DNS blocks. */
 static void begin_search(void)
 {
-	char host[sizeof(c.config.mm_host)];
-	u32 server;
-	int res;
+	char host[sizeof(c.config.mm_url)], path[sizeof(c.config.mm_url)], stun_hosts[sizeof(c.config.stun_hosts)];
+	SoStun stun;
+	u32 server = c.config.test_mm_addr;
+	u16 url_port;
+	int res, secure, ws = c.config.mm_url[0] != 0;
 
 	c.searches++;
+	memset(&stun, 0, sizeof(stun));
 	strlcpy(host, c.config.mm_host, sizeof(host));
+	strlcpy(stun_hosts, c.config.stun_hosts, sizeof(stun_hosts));
+	if (ws) {
+		/* Slippi's WebSocket service (so_mm_ws.c): it never sees the session's
+		 * UDP socket, so that is opened first and STUN servers are asked where
+		 * opponents can reach it. */
+		if (so_mm_parse_url(c.config.mm_url, &secure, host, sizeof(host), &url_port, path, sizeof(path)) < 0) {
+			so_log("client: mm_url is not a ws:// or wss:// address");
+			set_error("Failed to create mm client");
+			return;
+		}
+		if (open_session_socket() < 0) {
+			set_error("Failed to create mm client");
+			return;
+		}
+		so_socket_flush();
+	}
 	SO_TRACE(SO_THREAD_NET);
 	SO_STEP("mm resolve");
 	so_mutex_unlock(&c.lock);
 	/* Wired only: over Wi-Fi an IOS send takes 13-18 ms, and the opponent gets
 	 * every input late (so_socket.h). */
-	res = on_wifi(0) ? -100 : so_resolve(host, &server);
+	res = on_wifi(0) ? -100 : ws && server ? 0 : so_resolve(host, &server);
+	if (ws && res == 0) {
+		int answers = so_stun_discover(stun_hosts, &stun, (volatile u8 *)&c.cancel_requested);
+		char seen[16];
+		so_format_ipv4(stun.addr[0], seen, sizeof(seen));
+		if (answers)
+			so_log_private("client: STUN: %d answers, the socket is seen at %s:%u (NAT %s)", answers, seen,
+				(unsigned)stun.port[0], so_stun_nat_type(&stun));
+		else
+			so_log("client: STUN lookup failed, the service will use the address it observes");
+	}
 	so_mutex_lock(&c.lock);
 	SO_TRACE(SO_THREAD_NET);
 	if (c.cancel_requested || c.search_requested)
@@ -258,7 +287,8 @@ static void begin_search(void)
 		return;
 	}
 	SO_TRACE(SO_THREAD_NET);
-	if (so_mm_start(&c.config, &c.user, &c.search, server, c.port) < 0) {
+	if ((ws ? so_mm_start_ws(&c.config, &c.user, &c.search, server, c.port, &stun) :
+			so_mm_start(&c.config, &c.user, &c.search, server, c.port)) < 0) {
 		set_error(so_mm_error());
 		return;
 	}

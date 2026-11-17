@@ -45,6 +45,7 @@ import tempfile
 from pathlib import Path
 
 import pic_code
+import slippi_version
 from rollback import slippi_offsets
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -161,6 +162,10 @@ def main():
     ap.add_argument('--no-ping-display', action='store_true',
                     help="tests: no ping in the game's corner (room for the latency probe beside the autoplay and "
                          "the player's engine)")
+    ap.add_argument('--next', action='store_true',
+                    help="for Slippi's development codeset (what comes after 3.6.4): the engine takes its offsets from "
+                         'slippi-ssbm-asm-next (docs/NEXT_SLIPPI.md). Without it: for the version the checkout is '
+                         'switched to (tools/slippi_version.py)')
     ap.add_argument('--test-exit', action='store_true',
                     help="tests: tools/ppc/exit.s also counts retraces and can hang on the kernel's word")
     ap.add_argument('--show-ranked', action='store_true',
@@ -170,6 +175,7 @@ def main():
                     help="tests: HSD's frame buffer wait as the game has it (without tools/ppc/xfb_wait.s), so the "
                          "visual buffer fix of Slippi's codes sets its own flag: offline timing only")
     args = ap.parse_args()
+    args.next = args.next or slippi_version.next_release()
     args.rollback = not args.no_rollback
     if args.perf and args.rollback:
         raise SystemExit('--perf hooks the place the savestate engine does: add --no-rollback')
@@ -204,7 +210,7 @@ def main():
         extra += c2(PERF_HOOK, bytes(probe))
     if args.rollback:
         engine, _ = pic_code.build(ROOT / 'tools/rollback/glue.s', [ROOT / 'tools/rollback/rollback.c'],
-                                   defines=slippi_offsets.defines() +
+                                   defines=slippi_offsets.defines(args.next) +
                                    (['RB_TRACE'] if args.rollback_trace else []) +
                                    (['RB_VERIFY'] if args.rollback_verify else []) +
                                    (['RB_VERIFY_DEEP'] if args.rollback_verify_deep else []) +
@@ -225,7 +231,7 @@ def main():
             extra += c2(GX_COPY_DST_HOOK, assemble(ROOT / 'tools/rollback/gx_copy_dst.s'))
             extra += c2(GX_COPY_TEX_HOOK, assemble(ROOT / 'tools/rollback/gx_copy_tex.s'))
     if args.latency:
-        offsets = slippi_offsets.constants()
+        offsets = slippi_offsets.constants(args.next)
         probe, _ = pic_code.build(ROOT / 'tools/latency_probe/glue.s', [ROOT / 'tools/latency_probe/latency_probe.c'],
                                   defines=[f'{n}={offsets[n]}' for n in
                                            ('OFST_R13_ODB_ADDR', 'ODB_LOCAL_PLAYER_INDEX', 'ODB_DELAY_FRAMES')])
