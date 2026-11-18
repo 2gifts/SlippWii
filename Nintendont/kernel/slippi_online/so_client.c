@@ -94,6 +94,20 @@ static volatile u32 pad_head, pad_tail;
 static u32 pad_latency_max;
 static u32 pad_send_sum, pad_send_n, pad_send_max;	/* so_np_send_pad's time, us */
 
+/* (3.7.0) An input suggestion (so_exi.c), through the same queue: its target frame in `frame`, its
+ * seq in `checksum`, its inputs in `pad`. */
+void so_client_queue_suggestion(const SoLocalPad *s)
+{
+	u32 h = pad_head;
+	if (!pad_queue || h - pad_tail >= PAD_QUEUE)
+		return;
+	pad_queue[h % PAD_QUEUE].has_pad = 2;
+	pad_queue[h % PAD_QUEUE].pad = *s;
+	pad_queue[h % PAD_QUEUE].queued_us = so_time_us();
+	pad_head = h + 1;
+	so_event_signal(&c.wake);
+}
+
 void so_client_queue_pad(const SoLocalPad *pad)
 {
 	u32 h = pad_head;
@@ -151,7 +165,11 @@ static void send_queued_pads(void)
 		if (so_np_status() == SO_NP_CONNECTED) {
 			u64 t0 = so_time_us();
 			u32 took;
-			so_np_send_pad(pad_queue[t % PAD_QUEUE].has_pad ? &pad_queue[t % PAD_QUEUE].pad : NULL);
+			if (pad_queue[t % PAD_QUEUE].has_pad == 2)
+				so_np_send_suggestion(pad_queue[t % PAD_QUEUE].pad.frame, pad_queue[t % PAD_QUEUE].pad.checksum,
+					pad_queue[t % PAD_QUEUE].pad.pad);
+			else
+				so_np_send_pad(pad_queue[t % PAD_QUEUE].has_pad ? &pad_queue[t % PAD_QUEUE].pad : NULL);
 			took = (u32)(so_time_us() - t0);
 			pad_send_sum += took;
 			pad_send_n++;

@@ -66,6 +66,8 @@ void upd_plat_close(int s) { closesocket(s); }
 
 void *upd_plat_alloc(uint32_t size) { return malloc(size ? size : 1); }
 void upd_plat_free(void *p) { free(p); }
+/* (tests: each retry on stdout, before the command's own line) */
+void upd_plat_retry(int next, int of) { printf("retry %d of %d\n", next, of); }
 
 void upd_plat_entropy(uint8_t out[32])
 {

@@ -127,6 +127,15 @@ void so_np_send_pad(const SoLocalPad *pad);
 
 /* Lockstep access to an opponent's pads. */
 int so_np_remote_pad(int remote, s32 frame, u8 *out);
+/* (3.7.0) The inputs the game is to predict the 7 frames after `latest_frame` with, from the opponent's
+ * input suggestions where one applies (so_suggest_fill); returns how many slots were filled. */
+u32 so_np_suggest_fill(int remote, s32 latest_frame, u8 *out, u32 stride);
+/* At a game's end: each opponent's suggestions, for the log. */
+void so_np_suggest_report(void);
+/* (3.7.0) Sends an input suggestion of ours (so_exi.c), unsequenced as pads are; and whether this game
+ * uses them at all (input_suggestions, no bot in it). */
+void so_np_send_suggestion(s32 target, u32 seq, const u8 *pad);
+int so_np_suggest_on(void);
 s32 so_np_remote_head_frame(int remote);
 /* 1 in the first game against this opponent (so_pads.h, so_peer_first_game). */
 int so_np_first_game(void);

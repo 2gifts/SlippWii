@@ -341,11 +341,13 @@ static int direct_fails, direct_checks;
  * against this opponent) */
 static void direct_game(Engine *e, u32 word)
 {
-	u16 carry;
+	u16 carry, early;
 	direct_end(e);	/* (the game before it: rb_frame, at its end) */
 	carry = e->deep_carry;	/* (the engine's own memory outlives a game) */
+	early = e->early_carry;
 	memset(e, 0, sizeof(*e));
 	e->deep_carry = carry;
+	e->early_carry = early;
 	e->poll_cb = 1;
 	WORD = word;
 	FLAG = 0;
@@ -408,79 +410,92 @@ static int test_direct(void)
 	FLAG = -1;
 	direct_after_load(e);
 	CHECK(FLAG == 0);
-	/* a frame late in play: behind to the game's end, no skip again */
+	/* a frame late in play: level again at once (a skip), at the same step: the timing kept */
 	direct_frame(e, 301, 1, 21);
-	CHECK(e->direct_overruns == 1 && (e->direct_is & 8) && !(e->direct_is & 1) && !e->direct_skip && e->deep_game == 1);
-	direct_frames(e, 302, 2400, 1, 6);
-	CHECK(!e->direct_skip && FLAG == 0 && e->direct_skips == 1);
+	CHECK(e->direct_overruns == 1 && (e->direct_is & DIRECT_RELEVEL) && !(e->direct_is & 8) && e->direct_step == 0x00 &&
+	      e->deep_game == 1);
+	direct_frame(e, 302, 1, 6);
+	CHECK(e->direct_skip == 1 && FLAG == -1 && e->direct_skips == 2 && !(e->direct_is & DIRECT_RELEVEL));
+	direct_take(e);
+	direct_frames(e, 303, 600, 0, 6);
+	CHECK(!e->direct_skip && e->direct_skips == 2 && (e->direct_step & 3) == 0);
+	/* a second within DIRECT_STEP_WINDOW: step 1 (the answer before), behind while the read moves, then level */
+	direct_frame(e, 601, 1, 21);
+	CHECK(e->direct_step == 0x01 && e->direct_overruns == 2);
+	direct_frames(e, 602, 625, 1, 6);
+	CHECK(!e->direct_skip && e->direct_skips == 2);
+	direct_frames(e, 626, 640, 1, 6);
+	CHECK(e->direct_skip == 1 && e->direct_skips == 3);
+	direct_take(e);
+	direct_frames(e, 641, 650, 0, 6);
+	/* passes are measured against step 1's room now: 21 ms is not too long */
+	direct_frame(e, 651, 0, 21);
+	CHECK(e->deep_game == 2);
+	/* a frame late again soon: a refresh behind to the game's end, no skip again */
+	direct_frame(e, 700, 1, 30);
+	CHECK(e->direct_step == 0x02 && (e->direct_is & 8) && e->deep_game == 3);
+	direct_frames(e, 701, 2400, 1, 6);
+	CHECK(!e->direct_skip && FLAG == 0 && e->direct_skips == 3);
 
-	/* the games after it, the same opponent: the run lost in play and its long pass are against a skip
-	 * for two games, and not in the third (none of them with such a pass) */
+	/* the games after it, the same opponent: begun at step 0 and ended behind, both numbers are against
+	 * steps 0 and 1 */
 	direct_game(e, 1);
-	CHECK(e->deep_carry == 10);
+	CHECK(e->deep_carry == 14 && e->early_carry == 8 && e->direct_step == 0x22);
 	direct_frames(e, 41, 2400, 1, 6);
 	CHECK(!e->direct_skip && e->direct_skips == 0 && e->direct_behind == 2360);
+	/* begun behind: both halve */
 	direct_game(e, 1);
-	CHECK(e->deep_carry == 5);
+	CHECK(e->deep_carry == 7 && e->early_carry == 4 && e->direct_step == 0x22);
 	direct_frames(e, 41, 2400, 1, 6);
-	CHECK(e->direct_skips == 0);
 	direct_game(e, 1);
-	CHECK(e->deep_carry == 2);
+	CHECK(e->deep_carry == 3 && e->early_carry == 2 && e->direct_step == 0x11);
+	/* step 1: the skip in the countdown all the same, the read an answer earlier */
+	direct_frames(e, 41, 49, 1, 6);
+	CHECK(e->direct_skip == 1 && (e->direct_step & 3) == 1);
+	direct_take(e);
+	direct_frames(e, 50, 2400, 0, 6);
+	/* begun at step 1 and fine: step 0's number halves, and the next game tries step 0 again */
+	direct_game(e, 1);
+	CHECK(e->deep_carry == 1 && e->early_carry == 1 && e->direct_step == 0x00);
+	/* the kernel's bit 10 (a ping over step 0's limit): step 1 at best */
+	direct_game(e, 1 | DIRECT_ANSWER_EARLY);
+	CHECK(e->direct_step == 0x11);
 	direct_frames(e, 41, 49, 1, 6);
 	CHECK(e->direct_skip == 1);
-	/* passes over DIRECT_FIT_US are counted, level or behind; shorter ones are not */
 	direct_take(e);
-	e->deep_carry = 0;
+	direct_frames(e, 50, 2400, 0, 6);
+
+	/* passes over DIRECT_FIT_US are counted, level or behind; shorter ones are not */
+	direct_game(e, 1);
+	e->deep_carry = e->early_carry = 0;
+	direct_frames(e, 41, 49, 1, 6);
+	direct_take(e);
 	direct_frames(e, 50, 60, 0, 18);
 	CHECK(e->deep_game == 0);
 	direct_frame(e, 61, 0, 20);
 	CHECK(e->deep_game == 1);
-	/* one in a game leaves the next one level (and the one the pad's read moved at is none) */
+	/* one in a game leaves the next one at step 0 (and the one the pad's read moved at is none) */
 	direct_frames(e, 62, 2400, 0, 6);
 	direct_game(e, 1);
-	CHECK(e->deep_carry == 2);
+	CHECK(e->deep_carry == 2 && e->direct_step == 0x00);
 	direct_frame(e, 40, 1, 33);
 	CHECK(e->deep_game == 0);
+	/* two do not: the next is at step 1 */
 	direct_frames(e, 41, 49, 1, 6);
-	CHECK(e->direct_skip == 1);
-	/* two do not, be it a game behind: the next is behind, and the one after it level again */
 	direct_take(e);
 	e->deep_carry = 0;
 	direct_frames(e, 50, 60, 0, 6);
 	direct_frame(e, 61, 0, 20);
-	direct_frame(e, 62, 1, 20);
-	CHECK(e->deep_game == 2 && e->direct_overruns == 1 && !(e->direct_is & 8));
-	direct_frames(e, 63, 2400, 1, 6);
-	CHECK(e->direct_skips == 1);
+	direct_frame(e, 62, 0, 20);
+	direct_frames(e, 63, 2400, 0, 6);
 	direct_game(e, 1);
-	CHECK(e->deep_carry == 4);
+	CHECK(e->deep_carry == 4 && e->direct_step == 0x11);
 	direct_frames(e, 41, 2400, 1, 6);
-	CHECK(e->direct_skips == 0);
-	direct_game(e, 1);
-	CHECK(e->deep_carry == 2);
-	direct_frames(e, 41, 49, 1, 6);
-	CHECK(e->direct_skip == 1);
-	/* a game of them, and every game after it with one: behind for as long */
-	direct_take(e);
-	direct_frames(e, 50, 2400, 0, 6);
-	e->deep_game = 12;
-	direct_game(e, 1);
-	CHECK(e->deep_carry == 25);
-	{
-		int g;
-		for (g = 0; g < 8; g++) {
-			direct_frames(e, 41, 1000, 1, 6);
-			direct_frame(e, 1001, 1, 20);
-			CHECK(e->direct_skips == 0);
-			direct_game(e, 1);
-		}
-		CHECK(e->deep_carry == 4);	/* (25, 14, 9, 6, 5, 4, and 4 from there) */
-	}
 	/* a game of deep rollbacks (1 pass in 10 of 3 loops), none of them too long and no frame late: the
-	 * next two behind all the same */
-	e->deep_carry = 0;
+	 * next at step 1 all the same */
+	direct_game(e, 1);
+	e->deep_carry = e->early_carry = 0;
 	direct_frames(e, 41, 49, 1, 6);
-	CHECK(e->direct_skip == 1);
 	direct_take(e);
 	{
 		u32 t;
@@ -489,20 +504,10 @@ static int test_direct(void)
 	}
 	CHECK(e->deep_game == 0 && e->direct_overruns == 0);
 	direct_game(e, 1);
-	CHECK(e->deep_carry == 8);
-	direct_frames(e, 41, 2400, 1, 6);
-	CHECK(e->direct_skips == 0);
-	direct_game(e, 1);
-	CHECK(e->deep_carry == 4);
-	direct_frames(e, 41, 2400, 1, 6);
-	CHECK(e->direct_skips == 0);
-	direct_game(e, 1);
-	CHECK(e->deep_carry == 2);
-	direct_frames(e, 41, 49, 1, 6);
-	CHECK(e->direct_skip == 1);
+	CHECK(e->deep_carry == 8 && e->direct_step == 0x11);
 	/* ... and 1 in 20 is not one */
-	direct_take(e);
 	e->deep_carry = 0;
+	e->direct_step = 0;
 	{
 		u32 t;
 		for (t = 50; t <= 2400; t++)
@@ -510,11 +515,13 @@ static int test_direct(void)
 	}
 	direct_game(e, 1);
 	CHECK(e->deep_carry == 0);
-	/* a game too short to say (its opponent left in the countdown): the number stays */
+	/* a game too short to say (its opponent left in the countdown): the numbers stay */
 	e->deep_carry = 6;
+	e->early_carry = 3;
 	direct_frames(e, 41, 300, 1, 6);
 	direct_game(e, 1);
-	CHECK(e->deep_carry == 6);
+	CHECK(e->deep_carry == 6 && e->early_carry == 3);
+	e->deep_carry = e->early_carry = 0;
 
 	/* a new game's first ticks, before the engine runs it (poll_early_on), are not the last game's */
 	e->poll_cb = 0;	/* (the game's end: poll_early_off) */
@@ -530,9 +537,37 @@ static int test_direct(void)
 	direct_frames(e, 100, 101, 0, 20);
 	direct_frame(e, 102, 1, 6);
 	CHECK(e->direct_overruns == 1 && !(e->direct_is & 8) && e->deep_game == 2);
-	direct_frames(e, 103, 400, 1, 6);
-	CHECK(!e->direct_skip && e->direct_skips == 1);
+	/* (no second skip at step 0: at the time sync's end, step 1, the read moved while behind, then level) */
+	direct_frames(e, 103, 125, 1, 6);
+	CHECK(!e->direct_skip && e->direct_skips == 1 && e->direct_step == 0x00);
+	direct_frame(e, 126, 1, 6);
+	CHECK(e->direct_step == 0x01 && !e->direct_skip);
+	direct_frames(e, 127, 156, 1, 6);
+	CHECK(!e->direct_skip);
+	direct_frame(e, 157, 1, 6);
+	CHECK(e->direct_skip == 1 && e->direct_skips == 2);
+	direct_take(e);
+	direct_frames(e, 158, 400, 0, 6);
+	CHECK(!e->direct_skip && e->direct_skips == 2 && !(e->direct_is & 8));
 	e->deep_carry = e->deep_game = 0;
+
+	/* a run ended in the countdown, and the ticks (a rollback's loops count) past DIRECT_LAST by the retry:
+	 * retried all the same */
+	direct_game(e, 1);
+	direct_frames(e, 41, 49, 1, 6);
+	CHECK(e->direct_skip == 1);
+	direct_take(e);
+	direct_frames(e, 50, 99, 0, 6);
+	direct_frame(e, 100, 1, 6);
+	CHECK(e->direct_overruns == 1 && (e->direct_is & DIRECT_RETRY));
+	direct_frames(e, 101, 124, 1, 6);
+	e->game_frames = 170;	/* (the ticks run ahead of the frames) */
+	direct_frames(e, 170, 171, 1, 6);
+	CHECK(e->direct_skip == 1 && e->direct_skips == 2 && !(e->direct_is & DIRECT_RETRY));
+	direct_take(e);
+	direct_frames(e, 172, 400, 0, 6);
+	CHECK(!e->direct_skip && !(e->direct_is & 8) && e->direct_step == 0x00);
+	e->deep_carry = e->early_carry = e->deep_game = 0;
 
 	/* over the ping limit, a first game against someone: counted only, whatever the games before it were */
 	e->deep_carry = 50;

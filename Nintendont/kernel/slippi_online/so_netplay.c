@@ -3,6 +3,7 @@
  * to Slippi Dolphin's SlippiNetplayClient, which this follows step by step.
  */
 #include "so_netplay.h"
+#include "so_suggest.h"
 #include "so_prefetch.h"
 #include "so_alloc.h"
 #include "so_platform.h"
@@ -112,6 +113,10 @@ typedef struct {
 	SoGamePrepStep prep[PREP_QUEUE];
 	u32 prep_head, prep_count;
 	SoSyncedState synced[SO_REMOTE_MAX];
+
+	/* (3.7.0) input suggestions: each opponent's, for the inputs the game predicts with (so_suggest.c) */
+	u8 suggest_on;
+	SoSuggestRemote suggest[SO_REMOTE_MAX];
 
 	SoNpStats stats;
 	u8 packet[16 + SO_LOCAL_PAD_RING * SO_PAD_SIZE];
@@ -462,7 +467,7 @@ static void ack_pad(ENetPeer *peer, s32 frame, u64 now_us)
  * and acks go unsequenced on channel 1; everything else reliable on 0. */
 static void send_all(const u8 *data, u32 len)
 {
-	int unreliable = data[0] == MSG_PAD || data[0] == MSG_PAD_ACK, i;
+	int unreliable = data[0] == MSG_PAD || data[0] == MSG_PAD_ACK || data[0] == MSG_PAD_SUGGESTION, i;
 	for (i = 0; i < np->remote_count; i++) {
 		Connection *c;
 		if (!np->server[i])
@@ -664,6 +669,16 @@ static void on_pad(Reader *r, ENetPeer *peer, u64 now_us)
 	np->checksum[remote] = checksum;
 	if (np->log_packets)
 		so_log("np: pad %d from player %u (+%d)", (int)frame, (unsigned)player, added);
+	if (added > 0 && np->suggest_on) {
+		/* (the suggestions are checked against the real inputs, as Slippi Dolphin does: a player whose
+		 * suggestions keep being wrong has them ignored for the game) */
+		s32 f;
+		u8 pad[SO_PAD_SIZE];
+		for (f = old_head + 1; f <= frame; f++)
+			if (so_remote_pads_get(&np->remote_pads[remote], f, pad) == 0 &&
+			    so_suggest_on_real(&np->suggest[remote], f, pad))
+				so_log("np: player %u's input suggestions are wrong too often: not used in this game", (unsigned)player);
+	}
 
 	fast_ack_publish(peer);
 
@@ -794,6 +809,19 @@ static void on_chat(Reader *r)
 	}
 	np->chat_message = id;
 	np->chat_player = player;
+}
+
+static void on_suggestion(Reader *r)
+{
+	u8 player = rd_u8(r), remote = remote_from_player(player);
+	s32 target = (s32)rd_u32(r);
+	u32 seq = rd_u32(r);
+	if (!r->ok || r->left < SO_SUGGEST_PAD || player == np->local_idx || remote >= np->remote_count) {
+		np->stats.pad_packets_bad++;
+		return;
+	}
+	if (np->suggest_on)
+		so_suggest_on_suggestion(&np->suggest[remote], target, seq, r->p);
 }
 
 static void on_game_prep_step(Reader *r)
@@ -971,8 +999,10 @@ static void on_data(const u8 *data, u32 len, ENetPeer *peer, u64 now_us)
 		on_synced_state(&r);
 		break;
 	case MSG_PAD_SUGGESTION:
-		/* What the opponent's adapter has read since its last frame's pad: Slippi Dolphin predicts
-		 * with it. Only a better guess, checked against the real input as any prediction is: not used. */
+		/* (3.7.0) What the opponent's controller has read since its last frame's pad, for the frames
+		 * from `target` on: the game predicts with it. Only a better guess, checked against the real
+		 * input as any prediction is (so_suggest.c). */
+		on_suggestion(&r);
 		break;
 	case MSG_PLAYER_DROP:
 		on_player_drop(&r);
@@ -1127,6 +1157,11 @@ int so_np_start(const SoMatchResult *match, u16 port, const SoConfig *config)
 	np->local_idx = match->local_player_index;
 	np->decider = match->is_host;
 	np->log_packets = config->log_packets;
+	/* (3.7.0: Slippi Dolphin uses and sends none in a game with a bot, a registered bot account) */
+	np->suggest_on = config->input_suggestions != 0;
+	for (i = 0; i < (int)match->player_count; i++)
+		if (match->players[i].is_bot)
+			np->suggest_on = 0;
 	np->drop_pct = config->test_drop_pct;
 	np->ack_delay_us = config->ack_delay_us;
 	np->fast_ack = config->fast_ack && !config->ack_delay_us && !config->test_drop_pct;
@@ -1325,6 +1360,8 @@ void so_np_start_game(void)
 {
 	int i;
 	so_peer_game_started(&peer);
+	for (i = 0; i < SO_REMOTE_MAX; i++)
+		so_suggest_reset(&np->suggest[i]);
 	if (!np->frozen_head)	/* (or its pads are on their way already) */
 		restart_sending();
 	for (i = 0; i < np->remote_count; i++)
@@ -1388,6 +1425,26 @@ void so_np_send_pad(const SoLocalPad *pad)
 		np->last_frame[i] = frame;
 		np->last_frame_us[i] = now;
 		so_ack_timers_push(&np->ack_timers[i], frame, now);
+	}
+}
+
+u32 so_np_suggest_fill(int remote, s32 latest_frame, u8 *out, u32 stride)
+{
+	if (!np->suggest_on || remote < 0 || remote >= np->remote_count)
+		return 0;
+	return so_suggest_fill(&np->suggest[remote], latest_frame, out, stride);
+}
+
+void so_np_suggest_report(void)
+{
+	int i;
+	if (!np || !np->suggest_on)
+		return;
+	for (i = 0; i < np->remote_count; i++) {
+		const SoSuggestRemote *s = &np->suggest[i];
+		so_log("game suggestions from player %u: %u received, %u kept, %u answers predicted with them%s",
+			(unsigned)so_np_remote_player_idx(i), (unsigned)s->received, (unsigned)s->taken, (unsigned)s->used,
+			s->ignored ? "; ignored from then on (too many wrong)" : "");
 	}
 }
 
@@ -1498,6 +1555,24 @@ const SoSelections *so_np_local_selections(void)
 const SoSelections *so_np_remote_selections(int remote)
 {
 	return &np->remote_sel[remote];
+}
+
+void so_np_send_suggestion(s32 target, u32 seq, const u8 *pad)
+{
+	u8 p[2 + 4 + 4 + SO_SUGGEST_PAD];
+	if (!np || !np->suggest_on || np->status != SO_NP_CONNECTED || !np->host)
+		return;
+	p[0] = MSG_PAD_SUGGESTION;
+	p[1] = np->local_idx;
+	so_put_u32(p + 2, (u32)target);
+	so_put_u32(p + 6, seq);
+	memcpy(p + 10, pad, SO_SUGGEST_PAD);
+	send_all(p, sizeof(p));
+}
+
+int so_np_suggest_on(void)
+{
+	return np && np->suggest_on;
 }
 
 void so_np_send_chat(int message_id)

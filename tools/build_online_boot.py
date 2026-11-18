@@ -184,6 +184,10 @@ def main():
     reporter = c2(CRASH_HOOK, assemble(ROOT / 'tools/ppc/crash_report.s'))
     # Melee's panics and OS reports (tools/ppc/text_report.s, EXI 0xDA)
     for hook, kind in TEXT_HOOKS:
+        # (a latency build leaves Melee's OSReport out, panics kept: its codes are full beside the probe,
+        # the bot and the player's engine, 2026-11-17)
+        if kind == 3 and args.latency:
+            continue
         reporter += c2(hook, assemble(ROOT / 'tools/ppc/text_report.s', KIND=kind))
     if not args.no_delay_buttons:
         css_delay, _ = pic_code.build(ROOT / 'tools/css_delay/glue.s', [ROOT / 'tools/css_delay/css_delay.c'])
@@ -216,7 +220,7 @@ def main():
                                    (['RB_VERIFY_DEEP'] if args.rollback_verify_deep else []) +
                                    (['RB_WALK'] if args.rollback_walk else []) +
                                    (['RB_HWTEST'] if args.rollback_hwtest else []) +
-                                   (['RB_DIRECT_LOG'] if args.latency else []) +
+                                   (['RB_DIRECT_LOG', 'RB_NO_DX'] if args.latency else []) +
                                    (['RB_VERIFY_ALL'] if args.rollback_verify_all else []),
                                    # (a test build's trace and autoplay fill the codes' region: its engine small)
                                    size=args.rollback_trace or args.small_engine)
@@ -234,7 +238,8 @@ def main():
         offsets = slippi_offsets.constants(args.next)
         probe, _ = pic_code.build(ROOT / 'tools/latency_probe/glue.s', [ROOT / 'tools/latency_probe/latency_probe.c'],
                                   defines=[f'{n}={offsets[n]}' for n in
-                                           ('OFST_R13_ODB_ADDR', 'ODB_LOCAL_PLAYER_INDEX', 'ODB_DELAY_FRAMES')])
+                                           ('OFST_R13_ODB_ADDR', 'ODB_LOCAL_PLAYER_INDEX', 'ODB_DELAY_FRAMES')],
+                                  size=True)  # (for room: it times, it is not timed)
         extra += c2(LATENCY_COPY_HOOK, bytes(probe))
         extra += c2(LATENCY_PAD_HOOK, assemble(ROOT / 'tools/latency_probe/pad_hook.s'))
         extra += c2(LATENCY_RETRACE_HOOK, assemble(ROOT / 'tools/latency_probe/retrace_hook.s'))

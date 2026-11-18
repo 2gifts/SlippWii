@@ -31,8 +31,9 @@ HERE = Path(__file__).resolve().parent / 'autoplay'
 HOOK = 0x803769FC  # HSD_PadRenewRawStatus entry (mflr r0)
 
 
-def build_blob():
-    return pic_code.build(HERE / 'glue.s', [HERE / 'autoplay.c'], start='.ap_start', tail='.ap_tail')
+def build_blob(small=False):
+    """`small`: built for size, 320 bytes less (it then runs a few instructions longer in each PADRead)."""
+    return pic_code.build(HERE / 'glue.s', [HERE / 'autoplay.c'], start='.ap_start', tail='.ap_tail', size=small)
 
 
 def fill(blob, offset, plan, port, lras_s, seed):
@@ -60,9 +61,12 @@ def main():
     ap.add_argument('--plan', required=True)
     ap.add_argument('--port', type=int, default=0)
     ap.add_argument('--out', required=True)
+    ap.add_argument('--small', action='store_true',
+                    help="built for size: the Wii's bot beside the latency probe and the player's engine, which "
+                         "the codes' region no longer held by 156 bytes (2026-11-17)")
     args = ap.parse_args()
     plan = json.loads(Path(args.plan).read_text())
-    blob, syms = build_blob()
+    blob, syms = build_blob(args.small)
     fill(blob, syms['bot_data'], plan, args.port, plan.get('lras_s', 90), plan.get('seed', 1))
     if blob[-4:] != bytes.fromhex('7C0802A6'):
         sys.exit('the code does not end with the replaced instruction (mflr r0)')

@@ -31,8 +31,9 @@ void so_config_defaults(SoConfig *config)
 	config->multi_stream = 100;	/* (1 in config.ini: a send a frame, as it was; 0: not while the game runs) */
 	config->rollback_bg_saves = 2;
 	config->rollback_direct = 1;	/* (on since 1.4.0-beta.3; 0 in config.ini is the off-switch) */
-	config->rollback_direct_ping_ms = 75;
+	config->rollback_direct_ping_ms = 85;
 	config->rollback_direct_try_ms = 0;
+	config->rollback_direct_early_ms = 20;
 	config->test_spike_every = 300;
 	config->rollback_bg_ping_ms = 80;
 	config->rollback_nudge_poll = 1;
@@ -40,6 +41,7 @@ void so_config_defaults(SoConfig *config)
 	config->log_port = 51450;
 	config->selftest_frames = 600;
 	config->chat = 1;
+	config->input_suggestions = 1;
 	config->rumble = 1;
 	config->ping_display = 1;
 }
@@ -149,12 +151,15 @@ static int apply(SoConfig *c, const char *key, const char *value)
 	RANGED("rollback_direct", rollback_direct, 0, 3)
 	RANGED("rollback_direct_ping_ms", rollback_direct_ping_ms, 0, 1000)
 	RANGED("rollback_direct_try_ms", rollback_direct_try_ms, 0, 1000)
+	RANGED("rollback_direct_early_ms", rollback_direct_early_ms, 0, 1000)
 	RANGED("rollback_bg_ping_ms", rollback_bg_ping_ms, 0, 500)
 	RANGED("rollback_nudge_poll", rollback_nudge_poll, 0, 2)
+	RANGED("rollback_answer_early", rollback_answer_early, 0, 1)
 	RANGED("rollback_sync_most_us", rollback_sync_most_us, 0, 12000)
 	RANGED("rollback_nudge_on_us", rollback_nudge_on_us, 0, 10000)
 	RANGED("rollback_nudge_off_us", rollback_nudge_off_us, 0, 10000)
 	RANGED("chat", chat, 0, 2)
+	RANGED("input_suggestions", input_suggestions, 0, 1)
 	RANGED("rumble", rumble, 0, 1)
 	RANGED("ping_display", ping_display, 0, 1)
 	RANGED("test_drop_pct", test_drop_pct, 0, 90)

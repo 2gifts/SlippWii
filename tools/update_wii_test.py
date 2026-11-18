@@ -15,6 +15,8 @@ Scenarios:
   github    a newer version whose zip is SlippWii 1.4.0's on GitHub: the Wii's TLS, GitHub's
             redirects, 2 MB over the internet, 27 files onto the card and read back
   local     the same zip from this PC, in chunks: no internet needed
+  flaky     the same zip from this PC, the first answer breaking off a third of the way: the Wii must try
+            again by itself and go on from where it broke off (a Range request), and install
   uptodate  the latest version is the one installed: said so, nothing downloaded
   badsig    update information signed by another key: refused
   tampered  a zip with one bit changed: refused, nothing written
@@ -96,6 +98,7 @@ def build(point, version=None):
 class Server:
     def __init__(self, host):
         self.files, self.reports, self.seen = {}, [], []
+        self.flaky, self.ranges = 0, []
         outer = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -113,6 +116,29 @@ class Server:
                 body = outer.files.get(rest)
                 if body is None:
                     return self.answer(404, b'Not Found')
+                if kind == 'flaky':
+                    n = outer.flaky = outer.flaky + 1
+                    rng = self.headers.get('Range', '')
+                    outer.ranges.append(rng)
+                    if n == 1:  # the whole length promised, a third sent, the connection closed
+                        self.send_response(200)
+                        self.send_header('Content-Length', str(len(body)))
+                        self.send_header('Connection', 'close')
+                        self.end_headers()
+                        self.wfile.write(body[:len(body) // 3])
+                        self.close_connection = True
+                        return
+                    if rng.startswith('bytes=') and rng.endswith('-'):
+                        start = int(rng[6:-1])
+                        self.send_response(206)
+                        self.send_header('Content-Range', f'bytes {start}-{len(body) - 1}/{len(body)}')
+                        self.send_header('Content-Length', str(len(body) - start))
+                        self.send_header('Connection', 'close')
+                        self.end_headers()
+                        self.wfile.write(body[start:])
+                        self.close_connection = True
+                        return
+                    return self.answer(200, body)
                 if kind == 'chunked':
                     self.send_response(200)
                     self.send_header('Transfer-Encoding', 'chunked')
@@ -181,7 +207,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--wii-ip', default=os.environ.get('SLIPPWII_WII_IP'), required=not os.environ.get('SLIPPWII_WII_IP'))
     ap.add_argument('--scenarios', nargs='+', default=['github', 'uptodate', 'badsig', 'real'],
-                    choices=['github', 'local', 'uptodate', 'badsig', 'tampered', 'replace', 'real'])
+                    choices=['github', 'local', 'flaky', 'uptodate', 'badsig', 'tampered', 'replace', 'real'])
     ap.add_argument('--production', action='store_true',
                     help="the release key and GitHub's own address, the build saying it is 0.0.1 (see above)")
     ap.add_argument('--manifest-file', help='--production: serve this update.txt from here in place of asking GitHub '
@@ -237,6 +263,8 @@ def main():
             'github.txt': sign_update.manifest(key, '9.9.9', zip_bytes, ["A test: 1.4.0's zip from GitHub"], url=GITHUB_ZIP),
             'local.txt': sign_update.manifest(key, '9.9.9', zip_bytes, ['A test: the zip from this PC, in chunks'],
                                               url=f'{srv.url}/chunked/release.zip'),
+            'flaky.txt': sign_update.manifest(key, '9.9.9', zip_bytes, ['A test: a download that breaks off once'],
+                                              url=f'{srv.url}/flaky/release.zip'),
             'uptodate.txt': sign_update.manifest(key, '0.0.1', zip_bytes, url=GITHUB_ZIP),
             'badsig.txt': sign_update.manifest(other, '9.9.9', zip_bytes, url=GITHUB_ZIP),
             'tampered.txt': sign_update.manifest(key, '9.9.9', zip_bytes, ['A test: a zip with one bit changed'],
@@ -250,6 +278,7 @@ def main():
         steps = {  # a scenario's runs: the manifest's address, what follows the folder in the argument, what the report must say
             'github': [(m + 'github.txt', '', installed)],
             'local': [(m + 'local.txt', '', installed)],
+            'flaky': [(m + 'flaky.txt', '', lambda r: installed(r) and srv.ranges == ['', f'bytes={len(zip_bytes) // 3}-'])],
             'uptodate': [(m + 'uptodate.txt', '', lambda r: r['result'] == '1' and r['files'] == '0' and r['latest'] == '0.0.1')],
             'badsig': [(m + 'badsig.txt', '', lambda r: r['result'] == '-2' and r['step'] == 'check' and r['files'] == '0')],
             'tampered': [(m + 'tampered.txt', '', lambda r: r['result'] == '-20' and r['step'] == 'download' and r['files'] == '0')],

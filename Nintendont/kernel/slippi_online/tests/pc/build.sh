@@ -21,7 +21,7 @@ build() {
 	${CC:-gcc} -std=gnu99 -O2 -g -Wall -Wno-unused-parameter -DENET_IOS \
 		-I"$HERE" -I"$HERE/../shim" -I"$SRC" -I"$SRC/enet/include" -I"$ROOT/Nintendont/loader/extlibs/include" \
 		"$main" "$HERE/so_platform_win32.c" "$HERE/so_socket_win32.c" "$HERE/so_tcp_win32.c" "$HERE/pc_ws_server.c" \
-		"$SRC/so_tls.c" "$SRC/so_ws.c" "$SRC/so_ws_frame.c" "$SRC/so_stun.c" "$SRC/so_stun_io.c" "$SRC/so_mm_ws.c" \
+		"$SRC/so_tls.c" "$SRC/so_ws.c" "$SRC/so_ws_frame.c" "$SRC/so_stun.c" "$SRC/so_stun_io.c" "$SRC/so_suggest.c" "$SRC/so_mm_ws.c" \
 		"$SRC/so_util.c" "$SRC/so_alloc.c" "$SRC/so_json.c" "$SRC/so_config.c" "$SRC/so_pads.c" \
 		"$SRC/so_mm_msg.c" "$SRC/so_mm.c" "$SRC/so_netplay.c" "$SRC/so_client.c" "$SRC/so_selftest.c" \
 		"$SRC/so_diag.c" "$SRC/so_exi.c" "$SRC/so_text.c" "$SRC/so_files.c" "$SRC/so_logfile.c" "$SRC/so_mq.c" \

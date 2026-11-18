@@ -16,10 +16,19 @@
 #include "so_socket.h"
 #include "so_platform.h"
 #include "so_selftest.h"	/* so_encode_connect_code */
+#include "so_suggest.h"
 #include "so_text.h"
 #include "so_tls.h"
 #include "so_util.h"
 #include "string.h"
+
+/* (3.7.0) input suggestions, the sending side: its state (see suggest_on_poll) */
+static SoSuggestSend suggest_send;
+static u32 suggest_poll_hw, suggest_done_hw, suggest_logged;
+static u8 suggest_port;
+static u32 snap_hw, snap_hi, snap_lo;	/* (suggest_snap) */
+static u8 snap_ok, snap_pad[8];
+static void suggest_tick(void);
 
 enum {
 	CMD_ONLINE_INPUTS = 0xB0,
@@ -581,14 +590,17 @@ static void fill_remote_inputs(u8 *r, s32 frame, s32 finalized, const s32 *heads
 	}
 	if (next_mode()) {
 		/* (3.6.5) What the game predicts with for each of the 7 frames after an opponent's newest
-		 * input: that input, the first of its block (Slippi Dolphin puts an "input suggestion" there
-		 * when it has one; SlippWii takes none). And the random bits the game sends with its next pad:
-		 * not so_random's, whose generator an opponent could read back from them. */
+		 * input: that input, the first of its block, or (3.7.0) the opponent's newest input suggestion
+		 * that applies to the frame, as Slippi Dolphin's (so_suggest.c; none for a player who has
+		 * left). And the random bits the game sends with its next pad: not so_random's, whose
+		 * generator an opponent could read back from them. */
 		for (i = 0; i < 3; i++) {
 			const u8 *latest = r + 0x2A + i * ROLLBACK_MAX_FRAMES * PAD_FULL_SIZE;
 			u8 *predicted = r + RXB_PREDICTED + i * ROLLBACK_MAX_FRAMES * PAD_FULL_SIZE;
 			for (k = 0; k < ROLLBACK_MAX_FRAMES; k++)
 				memcpy(predicted + k * PAD_FULL_SIZE, latest, PAD_FULL_SIZE);
+			if (i < remotes && !gone[i])
+				so_np_suggest_fill(i, nums[i], predicted, PAD_FULL_SIZE);
 		}
 		if (x.rng_left == 0) {
 			so_tls_random(x.rng_bits, sizeof(x.rng_bits));
@@ -881,6 +893,13 @@ static void log_game(int keep)
 			(unsigned)x.game.spacing[0], (unsigned)x.game.spacing[1], (unsigned)x.game.spacing[2],
 			(unsigned)x.game.spacing[3], (unsigned)x.game.spacing[4], (unsigned)x.game.spacing[5],
 			(unsigned)x.game.early_pads);
+	so_np_suggest_report();
+	if (next_mode() && x.game.rb && so_np_suggest_on())
+		so_log("game suggestions sent: %u; the controller's answer made the game's pad in %u of %u polls (%u not taken in "
+			"time; at the 0xB0 itself %u)", (unsigned)suggest_send.sent, (unsigned)suggest_send.agreed,
+			(unsigned)suggest_send.polls, (unsigned)suggest_send.unknown, (unsigned)suggest_send.late_agreed);
+	so_suggest_send_reset(&suggest_send);
+	suggest_poll_hw = suggest_done_hw = suggest_logged = snap_hw = 0;
 	so_log("game checksums: %u frames compared with the opponent's, %u differ%s (first at frame %d: %08x/%08x); "
 		"as Slippi sees them: %u hard (positions), %u off by 1, %u action states only",
 		(unsigned)x.game.checks, (unsigned)x.game.desyncs, x.game.hard ? " - DESYNC" : x.game.desyncs ? " - soft" : "",
@@ -1086,16 +1105,29 @@ static u32 direct_wanted(void)
 	ping = so_np_ping_us(0);
 	if (!ping)
 		return 3;
-	was = (u8)so_direct_mode(ping, (s32)c->rollback_direct_ping_ms + ((s32)x.poll_delay - 2) * 33,
-		(s32)c->rollback_direct_try_ms, was);
-	return was;
+	{
+		/* (under the limit, the engine may begin a game at its step 0, the tournament console's timing;
+		 * in rollback_direct_early_ms over it, at step 1 at best, the pad read an answer earlier: 8.3 ms
+		 * more and 8 ms more for each frame's work; DIRECT_ANSWER_EARLY, bit 10 of the word) */
+		s32 limit = (s32)c->rollback_direct_ping_ms + ((s32)x.poll_delay - 2) * 33;
+		u8 mode = (u8)so_direct_mode(ping, limit, (s32)c->rollback_direct_try_ms, was & 0xFF);
+		u32 early = 0;
+		if (!mode && c->rollback_direct_early_ms &&
+		    so_direct_mode(ping, limit + (s32)c->rollback_direct_early_ms, 0, (was & 0xFF) == 1) == 1) {
+			mode = 1;
+			early = 0x400;
+		}
+		was = mode;
+		return mode | early;
+	}
 }
 
 /* (the engine's word: how; in bit 9 the first game against this opponent, whose frames the engine has
  * not counted yet) */
 static u32 direct_word(void)
 {
-	return direct_wanted() | (so_np_first_game() ? 0x200 : 0);
+	/* (bit 10, tests: the pad read an answer earlier, rollback_answer_early) */
+	return direct_wanted() | (so_np_first_game() ? 0x200 : 0) | (so_client_config()->rollback_answer_early ? 0x400 : 0);
 }
 
 static void fine_sync(s32 offset, int countdown)
@@ -1727,6 +1759,7 @@ int so_exi_poll_due(void)
 {
 	u64 now, due;
 	u32 hw = so_ppc_word(ENGINE_POLL_HW);
+	suggest_tick();
 #ifdef HW_TIMER
 	if (hw && x.game.rb) {	/* (only this: the window by the last poll as well kept IOS's network
 				 * module waiting some 3 ms a frame, and its sends with it) */
@@ -1850,6 +1883,121 @@ static void mq_note(s32 frame, int judged)
 		(int)q->change, (int)q->debt, (unsigned)q->time_pct, (int)q->signal[SO_MQ_TIME], (unsigned)(q->depth_x100 / 100),
 		(unsigned)(q->depth_x100 % 100), (int)q->signal[SO_MQ_DEPTH], (unsigned)q->last_stalled_passes,
 		(unsigned)q->last_stall_events, (int)q->signal[SO_MQ_STALLS]);
+}
+
+/* (3.7.0) Input suggestions, the sending side (so_suggest.h). The game reads one of the SI's two answers
+ * a refresh; the other comes about 8.3 ms before the game sees it. Once a refresh, well between the
+ * answers (SUGGEST_FROM..SUGGEST_TO after the game's read, by the Hollywood timer the engine leaves at
+ * it: the answers come about 7.2-7.6 and 15.6-15.9 ms after the read, so this never reads the SI's
+ * registers as an answer comes in), the kernel takes the local controller's newest answer and, if it
+ * says something the opponents don't know yet, sends it as a suggestion for the next poll's frame, as
+ * a PC's adapter thread does. Only while the SI's answer at each poll has made exactly the pad the
+ * game sent, SO_SUGGEST_AGREE_RUN polls in a row: anything that is not a GameCube controller on the
+ * SI (the tests' bot, a USB or Bluetooth pad) sends none. */
+#define SI_HW_IN(port) (0x0D806404u + (port) * 12)	/* the SI's input words of a channel (ARM's view) */
+#define SDK_ORIGIN 0x804A89B0u		/* Origin[4] (pad.c): each controller's origin, a PADStatus */
+#define SDK_ANALOG_MODE 0x804D5C40u	/* AnalogMode */
+#define SUGGEST_FROM 15949		/* Hollywood ticks after the read: 8.4 ms */
+#define SUGGEST_TO 27721		/* 14.6 ms */
+
+#ifdef HW_TIMER
+/* The local controller's newest SI answer as the game's pad (so_suggest_pad_from_si); -1 if none. */
+static int si_pad(u8 port, u8 *pad, u32 *hi, u32 *lo)
+{
+	u8 origin[12];
+	u32 i;
+	if (port > 3)
+		return -1;
+	for (i = 0; i < 3; i++)
+		so_put_u32(origin + i * 4, so_game_word(SDK_ORIGIN + port * 12 + i * 4));
+	*hi = read32(SI_HW_IN(port));
+	*lo = read32(SI_HW_IN(port) + 4);
+	return so_suggest_pad_from_si(*hi, *lo, origin, so_game_word(SDK_ANALOG_MODE), pad);
+}
+#endif
+
+static void suggest_queue(const SoSuggestion *s)
+{
+	SoLocalPad q;
+	memset(&q, 0, sizeof(q));
+	q.frame = s->target;
+	q.checksum = s->seq;
+	memcpy(q.pad, s->pad, SO_SUGGEST_PAD);
+	so_client_queue_suggestion(&q);
+}
+
+/* The SI's answer the game read, taken from the kernel's loop soon after the read (before the next
+ * answer, SNAP_TO): a poll's 0xB0 comes after it when a rollback runs between (the pad went ahead in an
+ * 0xE0), and the SI's answer then is the next one. Compared there with the game's pad: the hand test of
+ * 2026-11-17 against a person had the controller's answer at the 0xB0 make the pad in 16 and 43% of the
+ * polls, rollbacks all the while, and so few suggestions sent. */
+#define SNAP_TO 12341			/* Hollywood ticks after the read: 6.5 ms */
+static void suggest_snap(void)
+{
+#ifdef HW_TIMER
+	u32 hw = so_ppc_word(ENGINE_POLL_HW);
+	if (!hw || hw == snap_hw)
+		return;
+	snap_hw = hw;
+	snap_ok = read32(HW_TIMER) - hw < SNAP_TO && si_pad(suggest_port, snap_pad, &snap_hi, &snap_lo) == 0;
+#endif
+}
+
+/* A poll (0xB0): its pad, as frame `frame` (the delay in), what the answer told the game, the port the
+ * controller is in. */
+static void suggest_on_poll(s32 frame, u8 resp, const u8 *pad, u8 port)
+{
+	SoSuggestion s;
+	int agree = 0;
+	if (!x.game.rb || !so_np_suggest_on())
+		return;
+	if (port != suggest_port) {
+		suggest_port = port;
+		suggest_send.agree_run = 0;
+		snap_hw = 0;
+	}
+#ifdef HW_TIMER
+	suggest_snap();
+	agree = snap_hw != so_ppc_word(ENGINE_POLL_HW) || !snap_ok ? -1 : !memcmp(snap_pad, pad, SO_SUGGEST_PAD);
+	{
+		/* (for the log: the SI's answer at the 0xB0 itself, as the first build compared) */
+		u8 now[SO_SUGGEST_PAD];
+		u32 hi, lo;
+		if (si_pad(port, now, &hi, &lo) == 0 && !memcmp(now, pad, SO_SUGGEST_PAD))
+			suggest_send.late_agreed++;
+	}
+	if (!agree && suggest_send.agree_run >= SO_SUGGEST_AGREE_RUN && suggest_logged++ < 4)
+		so_log("exi: frame %d: the SI's answer (%08x %08x, port %u) is not the game's pad: %02x%02x %02x%02x %02x%02x %02x%02x",
+			(int)frame, (unsigned)snap_hi, (unsigned)snap_lo, (unsigned)port + 1, pad[0], pad[1], pad[2], pad[3],
+			pad[4], pad[5], pad[6], pad[7]);
+#endif
+	suggest_poll_hw = so_ppc_word(ENGINE_POLL_HW);
+	if (so_suggest_send_on_poll(&suggest_send, frame, resp == RESP_SKIP ? 1 : resp == RESP_ADVANCE ? 2 : 0, pad,
+				    agree, &s))
+		suggest_queue(&s);
+}
+
+/* From the kernel's loop (so_exi_poll_due): once a refresh, between the SI's answers. */
+static void suggest_tick(void)
+{
+#ifdef HW_TIMER
+	u32 hw = suggest_poll_hw, since;
+	u8 pad[SO_SUGGEST_PAD];
+	u32 hi, lo;
+	SoSuggestion s;
+	if (x.game.rb && so_np_suggest_on())
+		suggest_snap();
+	if (!hw || hw == suggest_done_hw || suggest_send.agree_run < SO_SUGGEST_AGREE_RUN || !x.game.rb)
+		return;
+	since = read32(HW_TIMER) - hw;
+	if (since < SUGGEST_FROM)
+		return;
+	suggest_done_hw = hw;	/* (once a poll, in its window or not at all) */
+	if (since > SUGGEST_TO || hw != so_ppc_word(ENGINE_POLL_HW))
+		return;
+	if (si_pad(suggest_port, pad, &hi, &lo) == 0 && so_suggest_send_on_si(&suggest_send, pad, &s))
+		suggest_queue(&s);
+#endif
 }
 
 static void on_online_inputs(const u8 *p)
@@ -2203,6 +2351,8 @@ static void on_online_inputs(const u8 *p)
 		l->ms = (u32)(t_in / 1000);
 	}
 	so_client_unlock();
+	if (next_mode() && r[0] != RESP_DISCONNECTED)
+		suggest_on_poll(frame + delay, r[0], p + 14, p[TXB_INPUT_SOURCE_INDEX]);
 	{
 		u32 took = (u32)(so_time_us() - t_in);
 		if (took > x.game.max_answer_us)
@@ -2608,9 +2758,9 @@ static void on_set_selections(const u8 *p)
 	s.alt_stage_mode = p[9];
 	s.rng_offset = so_random() % 0xFFFF;
 	if (s.is_character_selected || s.is_stage_selected)
-		so_log("exi: our selections: char %u/%u%s, team %u, stage %u%s", (unsigned)s.character_id,
+		so_log("exi: our selections: char %u/%u%s, team %u, stage %u%s, alt %u", (unsigned)s.character_id,
 			(unsigned)s.character_color, s.is_character_selected ? " (picked)" : "", (unsigned)s.team_id,
-			(unsigned)s.stage_id, s.is_stage_selected ? " (picked)" : "");
+			(unsigned)s.stage_id, s.is_stage_selected ? " (picked)" : "", (unsigned)s.alt_stage_mode);
 	merge_selections(&x.local_sel, &s);
 	if (s.is_character_selected)
 		so_pf_want_char(0, s.character_id, s.character_color);

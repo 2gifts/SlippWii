@@ -22,7 +22,9 @@
 
 #define UPD_MANIFEST_MAX 4096		/* bytes of manifest text */
 #define UPD_ZIP_MAX (12u << 20)		/* a release's zip is 2 MB */
-#define UPD_URL_MAX 2048		/* GitHub's redirects to its file store are long */
+#define UPD_URL_MAX 2048
+#define UPD_CHECK_TRIES 3		/* the manifest: tries before the error is shown */
+#define UPD_DOWNLOAD_TRIES 5		/* the zip: tries, each going on where the last broke off */		/* GitHub's redirects to its file store are long */
 #define UPD_NOTES 3
 
 /* Where a release's zip may come from (a signed manifest naming another place is refused). */
@@ -76,13 +78,22 @@ void upd_plat_close(int s);
 void upd_plat_entropy(uint8_t out[32]);			/* what randomness the machine has */
 void *upd_plat_alloc(uint32_t size);			/* memory for a file (a Wii's drivers want it aligned) */
 void upd_plat_free(void *p);
+/* A download or check failed in a way another try may not (the connection broke, a server's 5xx):
+ * try `next` of `of` comes after this (a Wii says so on the screen and waits a moment). */
+void upd_plat_retry(int next, int of);
 
 typedef void (*UpdProgress)(void *arg, uint32_t done, uint32_t total);	/* total 0: not known */
+int upd_worth_retry(int res);	/* a result another try may get past (UPD_E_NET, UPD_E_TLS, 5xx) */
 
 /* GET `url` into `out`. Follows redirects; https only unless `flags` has UPD_TEST_URLS.
  * Returns the HTTP status (200 for a file that is in `out`, `*got` bytes of it), or UPD_E_*; `err`
  * gets a line a person can read. */
 int upd_http_get(const char *url, uint8_t *out, uint32_t max, uint32_t *got, int flags,
+	const char *agent, UpdProgress progress, void *arg, char *err, int err_size);
+/* The same from byte `from` on, the first `from` bytes in `out` already (a Range request; a server that
+ * sends the whole file instead is taken from the start). Broken off, UPD_E_NET with `got` the bytes from
+ * the start that are good: the next try can go on from there. */
+int upd_http_get_from(const char *url, uint8_t *out, uint32_t max, uint32_t *got, uint32_t from, int flags,
 	const char *agent, UpdProgress progress, void *arg, char *err, int err_size);
 
 /* The latest release's manifest, fetched from `url` and read (upd_manifest_read). Returns UPD_OK,

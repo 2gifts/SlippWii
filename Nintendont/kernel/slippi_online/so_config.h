@@ -152,17 +152,22 @@ typedef struct {
 	 * a capture card saw, at 60 ms they cost about one in 12 minutes (2026-11-07). */
 	u8 rollback_direct;	/* frames on the screen a refresh sooner (so_exi.c, direct_wanted): 0 never; 1 while the game's frames fit, with the skip in the countdown under rollback_direct_ping_ms; 2 the same, the skip in the countdown at any ping; 3 always */
 	u16 rollback_direct_ping_ms;
-	u16 rollback_direct_try_ms;	/* and up to this much over it, only against an opponent whose last game was counted and fits (so_pads.h, so_direct_mode); 0: no such band */
+	u16 rollback_direct_try_ms;
+	u16 rollback_direct_early_ms;	/* and up to this much over it, the game begun with the pad read an answer earlier (8.3 ms more: rollback.c, direct_track's step 1); 0: none */	/* and up to this much over it, only against an opponent whose last game was counted and fits (so_pads.h, so_direct_mode); 0: no such band */
 	u8 rollback_bg_saves;
 	u16 rollback_bg_ping_ms;
 	/* Rollback: staying level with the opponent (fine_sync) by reading the pad earlier first, up to
 	 * 8 ms before the retrace, and only then by frames ending a line early (rollback.c, vi_nudge).
 	 * 1 (default) so, 0 frames ending early only, 2 (tests) the pad read earlier only. */
 	u8 rollback_nudge_poll;
+	/* Tests: the pad read 15 ms before the retrace, after the SI's first answer of the field, which it
+	 * then plays (rollback.c, POLL_ANSWER_BEFORE): 8.3 ms more lag, 8 ms more for each frame's work. */
+	u8 rollback_answer_early;
 	u16 rollback_sync_most_us;
 	/* staying level: behind by this much (us, by the Wii's reckoning) it starts, ahead of
 	 * minus this it stops (0: 2500 and 1500); frames end early 2 ms past the start */
 	u16 rollback_nudge_on_us, rollback_nudge_off_us;	/* the earliest it reads the pad for that (0: the engine's 8000) */
+	u8 input_suggestions;	/* (3.7.0) predict an opponent's inputs with their input suggestions, as Slippi Dolphin: 1 (default), 0 never */
 	u8 chat;	/* quick chat: 1 on (Slippi's default), 2 in Direct only, 0 off (so_exi.c, chat_on) */
 	u8 rumble;	/* controller rumble in online play (default on; rumble.txt, set on the
 		 * online CSS, wins over config.ini) */

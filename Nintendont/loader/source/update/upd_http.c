@@ -301,6 +301,12 @@ static void body_feed(Body *b, const uint8_t *p, uint32_t n)
 int upd_http_get(const char *url0, uint8_t *out, uint32_t max, uint32_t *got, int flags,
 	const char *agent, UpdProgress progress, void *arg, char *err, int err_size)
 {
+	return upd_http_get_from(url0, out, max, got, 0, flags, agent, progress, arg, err, err_size);
+}
+
+int upd_http_get_from(const char *url0, uint8_t *out, uint32_t max, uint32_t *got, uint32_t from, int flags,
+	const char *agent, UpdProgress progress, void *arg, char *err, int err_size)
+{
 	static char url[UPD_URL_MAX], next[UPD_URL_MAX], head[16384];
 	char authority[128], host[128];
 	const char *path, *v;
@@ -310,7 +316,9 @@ int upd_http_get(const char *url0, uint8_t *out, uint32_t max, uint32_t *got, in
 	char *end;
 	Body b;
 
-	*got = 0;
+	*got = from;	/* (what a broken download leaves: the bytes from the start that came) */
+	if (from > max)
+		*got = from = 0;
 	if (err_size > 0)
 		err[0] = 0;
 	if (strlen(url0) >= sizeof(url)) {
@@ -328,7 +336,12 @@ int upd_http_get(const char *url0, uint8_t *out, uint32_t max, uint32_t *got, in
 		if (n < 0)
 			return n;
 		n = snprintf(head, sizeof(head), "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nAccept: */*\r\n"
-			"Connection: close\r\n\r\n", path, authority, agent);
+			"Connection: close\r\n", path, authority, agent);
+		/* (the rest of a download that broke off: its first bytes are here already) */
+		if (from && n < (int)sizeof(head))
+			n += snprintf(head + n, sizeof(head) - (size_t)n, "Range: bytes=%lu-\r\n", (unsigned long)from);
+		if (n < (int)sizeof(head))
+			n += snprintf(head + n, sizeof(head) - (size_t)n, "\r\n");
 		if (n >= (int)sizeof(head) || conn_write(head, n) < 0) {
 			conn_error(err, err_size, "could not send the request to", host);
 			conn_close();
@@ -379,7 +392,18 @@ int upd_http_get(const char *url0, uint8_t *out, uint32_t max, uint32_t *got, in
 			strcpy(url, next);
 			continue;
 		}
-		if (status != 200) {
+		if (status == 206) {
+			/* the rest from `from` on, as asked: "Content-Range: bytes <from>-<last>/<size>" */
+			v = header(head, "Content-Range");
+			if (!from || !v || strncmp(v, "bytes ", 6) != 0 || strtoul(v + 6, NULL, 10) != from) {
+				conn_close();
+				*got = 0;	/* (another part than asked: the next try starts again) */
+				snprintf(err, (size_t)err_size, "%s sent another part of the file than asked", host);
+				return UPD_E_NET;
+			}
+		} else if (status == 200) {
+			from = 0;	/* (the whole file: a server that takes no ranges) */
+		} else {
 			conn_close();
 			snprintf(err, (size_t)err_size, "%s answered %d", host, status);
 			return status > 0 ? status : UPD_E_HTTP;
@@ -388,13 +412,14 @@ int upd_http_get(const char *url0, uint8_t *out, uint32_t max, uint32_t *got, in
 		memset(&b, 0, sizeof(b));
 		b.out = out;
 		b.max = max;
+		b.got = from;
 		b.length = 0xFFFFFFFFu;
 		v = header(head, "Transfer-Encoding");
 		if (v && lower(v[0]) == 'c')
 			b.chunked = 1;
 		v = header(head, "Content-Length");
 		if (v && !b.chunked)
-			b.length = (uint32_t)strtoul(v, NULL, 10);
+			b.length = from + (uint32_t)strtoul(v, NULL, 10);
 		if (b.length != 0xFFFFFFFFu && b.length > max) {
 			conn_close();
 			snprintf(err, (size_t)err_size, "the file is larger than expected (%lu bytes)", (unsigned long)b.length);
@@ -402,7 +427,7 @@ int upd_http_get(const char *url0, uint8_t *out, uint32_t max, uint32_t *got, in
 		}
 		if (b.length == 0)
 			b.done = 1;
-		told = 0;
+		told = from;
 		body_feed(&b, (const uint8_t *)head + body_at, (uint32_t)have - body_at);
 		while (!b.done && !b.bad && !b.too_big) {
 			n = conn_read((uint8_t *)head, (int)sizeof(head));
@@ -423,6 +448,7 @@ int upd_http_get(const char *url0, uint8_t *out, uint32_t max, uint32_t *got, in
 		if (b.bad || (!b.done && (b.chunked || b.length != 0xFFFFFFFFu))) {
 			conn_error(err, err_size, "the download broke off from", host);
 			conn_close();
+			*got = b.bad ? 0 : b.got;	/* (a broken chunk's bytes are not to be trusted) */
 			return UPD_E_NET;
 		}
 		conn_close();

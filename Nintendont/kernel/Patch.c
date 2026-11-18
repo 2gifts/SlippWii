@@ -193,6 +193,50 @@ void so_patch_check_codes(void)
 		(unsigned)so_game_word(0x8034CAD8), (unsigned)so_game_word(0x80000000u | so_codes_base_word),
 		(unsigned)so_codes_base_word, (unsigned)so_game_word(0x80001000), (unsigned)so_game_word(0x800010A0),
 		(unsigned)so_game_word(0x80001100), (unsigned)so_game_word(0x80003100), (unsigned)so_game_word(0x80003104));
+	/* How far the game's start got (a hang before its first retrace, 2026-11-17): the OS's
+	 * interrupt handlers (0x80003040, 27 of them: __OSInterruptInit clears the table, then EXIInit
+	 * sets 9-16, SIInit 20, __OSInitMemoryProtection 0-4, and main's own the rest), and what the
+	 * game's hardware calls are answered with: Nintendont's stand-in registers (DI, SI, the
+	 * interrupts, EXI) and the SI's own (the game's SI is the hardware's in this build). */
+	for (i = 0; i < 32; i += 8)
+		so_log("diag: OS handlers %2u: %08x %08x %08x %08x %08x %08x %08x %08x", (unsigned)i,
+			(unsigned)so_game_word(0x80003040 + i * 4), (unsigned)so_game_word(0x80003044 + i * 4),
+			(unsigned)so_game_word(0x80003048 + i * 4), (unsigned)so_game_word(0x8000304C + i * 4),
+			(unsigned)so_game_word(0x80003050 + i * 4), (unsigned)so_game_word(0x80003054 + i * 4),
+			(unsigned)so_game_word(0x80003058 + i * 4), (unsigned)so_game_word(0x8000305C + i * 4));
+	sync_before_read((void *)0x13026000, 0x1000);
+	for (i = 0; i < 4; i++) {
+		static const u32 at[4] = { 0x13026000, 0x13026400, 0x13026500, 0x13026800 };
+		u32 k;
+		for (k = 0; k < 0x40; k += 0x20)
+			so_log("diag: stand-in %08x: %08x %08x %08x %08x %08x %08x %08x %08x", (unsigned)(at[i] + k),
+				(unsigned)read32(at[i] + k), (unsigned)read32(at[i] + k + 4), (unsigned)read32(at[i] + k + 8),
+				(unsigned)read32(at[i] + k + 12), (unsigned)read32(at[i] + k + 16), (unsigned)read32(at[i] + k + 20),
+				(unsigned)read32(at[i] + k + 24), (unsigned)read32(at[i] + k + 28));
+	}
+	so_log("diag: SI hardware: in0 %08x %08x poll %08x com %08x status %08x; low memory c0 %08x d4 %08x d8 %08x dc %08x e4 %08x",
+		(unsigned)read32(0x0D806404), (unsigned)read32(0x0D806408), (unsigned)read32(0x0D806430),
+		(unsigned)read32(0x0D806434), (unsigned)read32(0x0D806438), (unsigned)so_game_word(0x800000C0),
+		(unsigned)so_game_word(0x800000D4), (unsigned)so_game_word(0x800000D8), (unsigned)so_game_word(0x800000DC),
+		(unsigned)so_game_word(0x800000E4));
+	{
+		/* Where the game's thread last was when an interrupt took it (the OS keeps the registers in
+		 * the current context, 0x800000D4: r1 at +4, lr +0x84, srr0 +0x198, srr1 +0x19C), the OS's
+		 * two interrupt masks, whether the code handler has put its branches in (PADRead's end,
+		 * the frame copy), and the EXI's and the AI's own registers. */
+		u32 ctx = so_game_word(0x800000D4);
+		if (ctx >= 0x80000000u && ctx < 0x81800000u)
+			so_log("diag: context %08x: r1 %08x lr %08x srr0 %08x srr1 %08x state %08x; r3 %08x r4 %08x r5 %08x",
+				(unsigned)ctx, (unsigned)so_game_word(ctx + 4), (unsigned)so_game_word(ctx + 0x84),
+				(unsigned)so_game_word(ctx + 0x198), (unsigned)so_game_word(ctx + 0x19C),
+				(unsigned)so_game_word(ctx + 0x1A0), (unsigned)so_game_word(ctx + 0xC), (unsigned)so_game_word(ctx + 0x10),
+				(unsigned)so_game_word(ctx + 0x14));
+		so_log("diag: OS masks %08x %08x; hooks: PADRead's end %08x, the copy %08x, __init_user %08x; EXI %08x %08x %08x; AI %08x %08x",
+			(unsigned)so_game_word(0x800000C4), (unsigned)so_game_word(0x800000C8), (unsigned)so_game_word(0x8034DD94),
+			(unsigned)so_game_word(0x803762A8), (unsigned)so_game_word(0x8034CAD8), (unsigned)read32(0x0D806800),
+			(unsigned)read32(0x0D806814), (unsigned)read32(0x0D806828), (unsigned)read32(0x0D806C00),
+			(unsigned)read32(0x0D806C04));
+	}
 }
 
 #define CODELIST_TOURNAMENT_BASE	0x001910E0

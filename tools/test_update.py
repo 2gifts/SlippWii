@@ -147,6 +147,26 @@ class Server:
                     self.wfile.write(body)
                     self.close_connection = True
                     return
+                if kind in ('flaky', 'noranges', 'dead', 'busy'):
+                    # flaky: the first answer breaks off half way, the next ones take a Range; noranges: the
+                    # same, but the whole file each time; dead: every answer breaks off; busy: 503 twice
+                    n = outer.count[self.path] = outer.count.get(self.path, 0) + 1
+                    rng = self.headers.get('Range', '')
+                    outer.ranges.append(rng)
+                    if kind == 'busy' and n <= 2:
+                        return self.answer(503, b'Service Unavailable')
+                    if kind == 'dead' or (kind in ('flaky', 'noranges') and n == 1):
+                        self.send_response(200)
+                        self.send_header('Content-Length', str(len(body)))
+                        self.send_header('Connection', 'close')
+                        self.end_headers()
+                        self.wfile.write(body[:len(body) // 2 + n * 1000])
+                        self.close_connection = True
+                        return
+                    if kind == 'flaky' and rng.startswith('bytes=') and rng.endswith('-'):
+                        start = int(rng[6:-1])
+                        return self.answer(206, body[start:], {'Content-Range': f'bytes {start}-{len(body) - 1}/{len(body)}'})
+                    return self.answer(200, body)
                 if kind == 'cut':  # says the whole length, sends half
                     self.send_response(200)
                     self.send_header('Content-Length', str(len(body)))
@@ -168,6 +188,7 @@ class Server:
                 self.close_connection = True
 
         self.seen = []
+        self.count, self.ranges = {}, []
         self.httpd = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
         self.httpd.handle_error = lambda *a: None  # (a client that hangs up early is part of the tests)
         self.url = f'http://127.0.0.1:{self.httpd.server_address[1]}'
@@ -381,6 +402,36 @@ def tests(exe, work, args):
     check('no manifest on the server: said so', line.startswith('check 404'), line)
     line = update('1.4.0')
     check('an older version: the update is installed', line.endswith(f'installed 0 files {len(files1)} []') and tree(card2) == files1, line)
+
+    # ---- a connection that breaks: tried again, going on where it broke off ----
+    def update_from(kind, have='1.4.0'):
+        for f in card2.iterdir():
+            shutil.rmtree(f) if f.is_dir() else f.unlink()
+        name = f'update-{kind}.txt'
+        srv.files[name] = sign_update.manifest(key, '1.5.0', zip1, url=f'{srv.url}/to/{kind}/release.zip')
+        srv.ranges.clear()
+        return run(exe, 'update', f'{srv.url}/to/plain/{name}', pub, card2, have, 1)
+
+    line = update_from('flaky')
+    half = len(zip1) // 2 + 1000
+    check('a download that breaks off once: tried again from where it broke off, installed',
+          line.splitlines()[-1].endswith(f'installed 0 files {len(files1)} []') and 'retry 2 of 5' in line and
+          srv.ranges == ['', f'bytes={half}-'] and tree(card2) == files1, (line, srv.ranges))
+    line = update_from('noranges')
+    check('... from a server that takes no ranges: the whole file again, installed',
+          line.splitlines()[-1].endswith(f'installed 0 files {len(files1)} []') and tree(card2) == files1, line)
+    line = update_from('busy')
+    check('a server busy twice (503): tried again, installed',
+          line.splitlines()[-1].endswith(f'installed 0 files {len(files1)} []') and line.count('retry') == 2, line)
+    line = update_from('dead')
+    check('a download that breaks off every time: 5 tries, then the error, nothing installed',
+          line.splitlines()[-1].startswith('download -10') and 'retry 5 of 5' in line and 'retry 6' not in line and
+          not tree(card2), line)
+    srv.files['update-busy-check.txt'] = srv.files['update.txt']
+    srv.count.clear()
+    line = run(exe, 'update', f'{srv.url}/busy/update-busy-check.txt', pub, card2, '1.5.0', 1)
+    check('the update information from a server busy twice: tried again', line.splitlines()[-1].endswith('up to date (1.5.0, the latest is 1.5.0)')
+          and line.count('retry') == 2, line)
 
     # ---- the release key, and a release made with it ----
     import re

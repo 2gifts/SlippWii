@@ -365,6 +365,47 @@ static void progress_line(void *arg, uint32_t done, uint32_t total)
 		LoaderShutdown();
 }
 
+/* (upd_core.h) A try that failed in a way another may not: said above the progress line, which goes on
+ * under it; a moment's wait, then the next try (a download goes on where it broke off). */
+void upd_plat_retry(int next, int of)
+{
+	s64 t;
+	if (line_count > 0) {
+		if (line_count >= 2 && strncmp(lines[line_count - 2].text, "The connection dropped", 22) == 0) {
+			snprintf(lines[line_count - 2].text, sizeof(lines[0].text), "The connection dropped: trying again (%d of %d).",
+				next, of);
+		} else if (line_count < MAX_LINES) {
+			lines[line_count] = lines[line_count - 1];
+			snprintf(lines[line_count - 1].text, sizeof(lines[0].text), "The connection dropped: trying again (%d of %d).",
+				next, of);
+			lines[line_count - 1].color = MAROON;
+			line_count++;
+		}
+	}
+	screen_draw(NULL, NULL);
+	t = gettime();
+	while (ms_since(t) < 2000) {
+		usleep(50 * 1000);
+		if (Shutdown)
+			LoaderShutdown();
+	}
+}
+
+/* An error, on as many as two lines of the screen, broken at a space. */
+static void say_error(const char *err)
+{
+	int n = (int)strlen(err), cut = n;
+	if (n > 60) {
+		for (cut = 60; cut > 30 && err[cut] != ' '; cut--)
+			;
+		if (err[cut] != ' ')
+			cut = 60;
+	}
+	say(BLACK, "%.*s", cut, err);
+	if (cut < n)
+		say(BLACK, "%.60s", err + cut + (err[cut] == ' '));
+}
+
 static void step(const char *fmt, ...)
 {
 	va_list ap;
@@ -451,7 +492,7 @@ static void run(const char *url, const unsigned char *key, int flags, int stay, 
 			say(BLACK, "information. To update, get its zip with a computer:");
 		} else {
 			say(MAROON, "Could not check for updates:");
-			say(BLACK, "%.60s", o->err);
+			say_error(o->err);
 			say(BLACK, "");
 			say(BLACK, "Try again later, or get the zip with a computer:");
 		}
@@ -499,7 +540,7 @@ static void run(const char *url, const unsigned char *key, int flags, int stay, 
 		strcpy(o->step, "download");
 		screen_clear();
 		say(MAROON, "The download failed:");
-		say(BLACK, "%.60s", o->err);
+		say_error(o->err);
 		say(BLACK, "");
 		say(BLACK, "Nothing on the card was changed. Try again later.");
 		screen_ask("Back", NULL);
@@ -525,7 +566,7 @@ static void run(const char *url, const unsigned char *key, int flags, int stay, 
 		strcpy(o->step, o->verified != o->files && o->files ? "verify" : "install");
 		screen_clear();
 		say(MAROON, "The update could not be installed:");
-		say(BLACK, "%.60s", o->err);
+		say_error(o->err);
 		say(BLACK, "");
 		if (res == UPD_E_SWAP) {
 			say(BLACK, "Some files on the card are new and some are old.");

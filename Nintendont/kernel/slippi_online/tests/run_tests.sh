@@ -11,8 +11,8 @@ for NEXT in 0 1; do
 ${CC:-gcc} -std=gnu99 -O1 -g -Wall -Wextra -Wno-unused-parameter -Werror -DSO_LOGFILE_TEST -DSO_SLIPPI_NEXT=$NEXT \
 	-fsanitize=undefined -fsanitize-trap=undefined \
 	-I"$HERE/shim" -I"$HERE" -I"$SRC" \
-	"$HERE/test_main.c" "$HERE/test_mq.c" "$HERE/test_next.c" "$HERE/host_platform.c" \
-	"$SRC/so_util.c" "$SRC/so_json.c" "$SRC/so_alloc.c" "$SRC/so_config.c" "$SRC/so_pads.c" "$SRC/so_mm_msg.c" "$SRC/so_text.c" "$SRC/so_files.c" "$SRC/so_logfile.c" "$SRC/so_mq.c" "$SRC/so_stun.c" "$SRC/so_ws_frame.c" \
+	"$HERE/test_main.c" "$HERE/test_mq.c" "$HERE/test_next.c" "$HERE/test_suggest.c" "$HERE/host_platform.c" \
+	"$SRC/so_util.c" "$SRC/so_json.c" "$SRC/so_alloc.c" "$SRC/so_config.c" "$SRC/so_pads.c" "$SRC/so_mm_msg.c" "$SRC/so_text.c" "$SRC/so_files.c" "$SRC/so_logfile.c" "$SRC/so_mq.c" "$SRC/so_stun.c" "$SRC/so_suggest.c" "$SRC/so_ws_frame.c" \
 	-o "$OUT/test_main$NEXT" 2>&1
 echo "== SO_SLIPPI_NEXT=$NEXT"
 "$OUT/test_main$NEXT"

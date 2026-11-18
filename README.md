@@ -34,9 +34,13 @@ How it feels: both sides play with rollback. When your opponent's input is late,
 on with a guess and corrects it when the input arrives, as Slippi Dolphin does. A late packet no
 longer freezes the game, and to your opponent the Wii plays like another PC.
 
-- **Input lag.** At 2 delay frames (Slippi's standard), a button press reaches the middle of a
-  CRT's picture in about 75 ms while your ping is under about 75 ms, and in about 92 ms above that.
-  At 1 delay frame it is about 59 ms, the same as a Wii playing offline, under about 42 ms of ping.
+- **Input lag.** At 1 delay frame a button press reaches the screen exactly when it does on a
+  tournament console (Slippi Nintendont with the polling drift fix), under about 50 ms of ping; 8 ms
+  later up to about 70. At 2 delay frames (Slippi's standard) it is one frame more, up to about
+  85 ms of ping, and 8 ms more again up to about 105. Each game keeps its timing from start to end.
+  Details and a comparison with Slippi on PC: [`docs/INPUT_DELAY.md`](docs/INPUT_DELAY.md).
+- **Input suggestions** (Slippi 3.7.0) work both ways: a PC player's GameCube adapter sends
+  their inputs between frames and the Wii predicts with them, and the Wii sends its own.
 - **High ping.** From about 90 ms of ping the Wii is near its limit: rollback still works, but you
   may see brief hitches.
 - **Memory card.** Rollback needs memory that a very large virtual memory card also uses. With a

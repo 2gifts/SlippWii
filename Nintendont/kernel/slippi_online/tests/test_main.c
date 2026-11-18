@@ -22,6 +22,8 @@ int test_checks;
 
 void test_mq(void);	/* test_mq.c */
 void test_next(void);	/* test_next.c */
+void test_suggest(void);	/* test_suggest.c */
+void test_suggest_send(void);	/* test_suggest.c */
 
 /* ---- so_util ------------------------------------------------------------- */
 
@@ -1138,6 +1140,8 @@ int main(void)
 	RUN(test_disc_files);
 	RUN(test_logfile);
 	RUN(test_mq);
+	RUN(test_suggest);
+	RUN(test_suggest_send);
 	RUN(test_next);
 	printf("%d checks, %d failures\n", test_checks, test_failures);
 	return test_failures ? 1 : 0;

@@ -223,7 +223,10 @@ typedef struct {
 	u32 video_through;	/* how many: retraces and draws let through a load or capture << 16 | frames ending early */
 	u32 vi_saved;		/* vi_nudge: the blanking while a frame is ending early */
 	u32 poll_cb;		/* HSD's post-retrace callback, the pad's renewal, while it runs from there instead */
-	u32 si_rate;		/* the SI's sampling rate, while it is changed for that */
+	u8 direct_step;		/* the timing step (direct_track): 0 the tournament console's, 1 the answer before (8.3 ms
+				 * more), 2 a refresh behind; << 4 the one the game began at */
+	u8 direct_spare;
+	u16 early_carry;	/* as deep_carry, for games begun at step 1 (direct_end) */
 	u32 last_retrace_tb;	/* when the last retrace was handled */
 	u32 in_poll;		/* in rb_vi_interrupt's poll */
 	u32 poll_tb;		/* when the last poll came */
@@ -2642,6 +2645,15 @@ static void vb_keep_only_if_behind(Engine *e)
  * middle of a game four times, the first three at an 83 ms ping. It was a cable in an Ethernet
  * splitter.) */
 #define DIRECT_FIT_US 19000
+#define DIRECT_FIT_EARLY_US 27000	/* with the pad read an answer earlier (POLL_ANSWER_BEFORE): 8 ms more */
+#define DIRECT_ANSWER_EARLY 0x400u	/* the kernel's word, bit 10: no game at step 0 (a ping over its limit, or tests) */
+#define DIRECT_STEP_WINDOW 600	/* frames: a second frame late within this of the last skip is a step down */
+#define DIRECT_STEP_RAMP 30	/* frames behind, after a step down, while the pad's read moves 8 ms earlier */
+#define DIRECT_RELEVEL 0x10u	/* direct_is: a frame late in play, the game to be put level again */
+#define DIRECT_RETRY 0x20u	/* direct_is: a run ended in the countdown, to be tried once more at DIRECT_SETTLED. (By
+				 * a flag, not by the tick: ticks count a rollback's loops, and on a heavy connection
+				 * they passed DIRECT_LAST before the retry, which was then never made: a game a
+				 * refresh behind to its end, 2 in 8 at 2 delay frames and 83 ms, 2026-11-17.) */
 #define DIRECT_FIT_MOST 2	/* of the opponent's number */
 #define DIRECT_FIT_ENDED 8
 #define DIRECT_FIT_DEEP 16	/* a game of deep rollbacks: more than one pass in this many of 3 loops or more */
@@ -2655,7 +2667,7 @@ static void vb_keep_only_if_behind(Engine *e)
 				 * ends before this is tried again here, once */
 #define DIRECT_LAST 160		/* no skip is asked from here on: the game is being played */
 
-#ifdef RB_DIRECT_LOG
+#if defined(RB_DIRECT_LOG) && !defined(RB_NO_DX)
 /* Tests (build_online_boot.py --latency): what the first runs level ended on, for the report
  * (tools/latency/analyze.py reads it). T_DIRECT_LOG: how many, then 4 words each: what (1 a run
  * level ended, 2 a skip asked, 5 a pass over DIRECT_FIT_US; 3 and 4 were a test's)
@@ -2685,13 +2697,14 @@ static void direct_track(Engine *e)
 {
 	u32 mode = e->poll_cb ? *SCRATCH_WORD(T_DIRECT) & 0xFF : 0;	/* (poll_cb: in a game the engine runs) */
 	/* (in a game the engine runs, after the tick its pad's read moved at) */
-	if (e->poll_cb && e->game_frames > DIRECT_FROM && ((u32)timebase() - e->pass_start) / 61 > DIRECT_FIT_US) {
+	if (e->poll_cb && e->game_frames > DIRECT_FROM && ((u32)timebase() - e->pass_start) / 61 >
+	    ((e->direct_step & 3) == 1 ? DIRECT_FIT_EARLY_US : DIRECT_FIT_US)) {
 		if (e->deep_game < 0xFFFF)
 			e->deep_game++;
 		direct_log(e, 5);
 	}
 	/* (the last frame drawn: level, or a refresh behind) */
-	e->direct_is = (u8)((e->direct_is & 9) | (e->poll_cb && (u16)(rd32(RETRACE_COUNT) - e->pass_poll_rc) < 2 ? 4 : 0));
+	e->direct_is = (u8)((e->direct_is & 0x39) | (e->poll_cb && (u16)(rd32(RETRACE_COUNT) - e->pass_poll_rc) < 2 ? 4 : 0));
 	if (!mode) {
 		/* (the kernel's word gone to 0 with a skip asked and not taken: the ping, measured in the
 		 * countdown, is too far over its limit. Not asked any more.) */
@@ -2708,7 +2721,7 @@ static void direct_track(Engine *e)
 		 * left to leave out: a second frame not drawn would only be a frame not drawn. */
 		if (e->direct_is & 4) {
 			e->direct_skip = 0;
-			e->direct_run = 0;
+			e->direct_run = e->game_frames >= DIRECT_LAST ? 0 : DIRECT_STEP_WINDOW;
 			*(volatile u32 *)VB_FLAG = 0;
 			return;
 		}
@@ -2732,20 +2745,54 @@ static void direct_track(Engine *e)
 		e->direct_is &= 0xE;
 		if (e->game_frames < DIRECT_SETTLED) {	/* (the start's time sync: once more, there) */
 			e->direct_hold = (u16)(DIRECT_SETTLED - e->game_frames);
+			e->direct_is |= DIRECT_RETRY;
 			return;
 		}
-		e->direct_is |= 8;	/* behind to the game's end */
+		/* In play. The first frame late in a while: level again at once, the timing the player has
+		 * kept (one frame shown twice, the next not shown). A second within DIRECT_STEP_WINDOW: a step
+		 * down for the rest of the game, the pad read an answer earlier (8.3 ms more, the same in every
+		 * frame, and 8 ms more for each frame's work), its read moved while the game stays behind for
+		 * DIRECT_STEP_RAMP frames; from there, a refresh behind. Never back up in a game: the lag a
+		 * player's hands have settled on moves at most twice, and only ever by one step. */
+		if (e->direct_run < DIRECT_STEP_WINDOW) {
+			if ((e->direct_step & 3) == 0) {
+				e->direct_step++;
+				e->direct_hold = DIRECT_STEP_RAMP;
+			} else {
+				e->direct_step = (u8)((e->direct_step & 0xF0) | 2);
+				e->direct_is |= 8;	/* behind to the game's end */
+				return;
+			}
+		}
+		e->direct_is |= DIRECT_RELEVEL;
 		return;
 	}
 	/* (the word as it is now: a new connection's ping is first measured as the game starts, and the
 	 * kernel's 3 may be 1 a few frames on) */
-	if (mode != 2 && ((e->direct_is & 8) || e->game_frames >= DIRECT_LAST || e->deep_carry > DIRECT_FIT_MOST || e->deep_game > DIRECT_FIT_GAME ||
-	                  (mode == 3 && (*SCRATCH_WORD(T_DIRECT) & 0x200))))
-		return;	/* (behind, this game, or not yet) */
+	if (mode != 2) {
+		if ((e->direct_is & 8) || (e->direct_step & 3) >= 2 || (mode == 3 && (*SCRATCH_WORD(T_DIRECT) & 0x200)))
+			return;	/* (behind, this game) */
+		if (!(e->direct_is & DIRECT_RELEVEL)) {
+			if (e->game_frames >= DIRECT_LAST && !(e->direct_is & DIRECT_RETRY))
+				return;	/* (in play, behind by itself: the countdown's skip was never taken) */
+			if (e->deep_game > DIRECT_FIT_GAME) {
+				/* Frames too long for step 0 already, by the start's time sync's end: step 1, as for a
+				 * second frame late in play, rather than a refresh behind for the whole game. */
+				if ((e->direct_step & 3) == 0 && e->game_frames >= DIRECT_SETTLED) {
+					e->direct_step++;
+					e->direct_hold = DIRECT_STEP_RAMP;
+					e->direct_is |= DIRECT_RELEVEL;
+				}
+				e->direct_is &= ~DIRECT_RETRY;
+				return;
+			}
+		}
+	}
 	direct_log(e, 2);
 	e->direct_skip = 1;
-	e->direct_is |= 1;
-	e->direct_run = 0;
+	e->direct_is = (u8)((e->direct_is & ~(DIRECT_RELEVEL | DIRECT_RETRY)) | 1);
+	/* (a skip in play starts DIRECT_STEP_WINDOW; one in the countdown is none of play's) */
+	e->direct_run = e->game_frames >= DIRECT_LAST ? 0 : DIRECT_STEP_WINDOW;
 	if (e->direct_skips < 0xFF)
 		e->direct_skips++;
 	*(volatile u32 *)VB_FLAG = 0xFFFFFFFFu;
@@ -2762,8 +2809,16 @@ static void direct_track(Engine *e)
  * another opponent's games say nothing about this one's. */
 static void direct_begin(Engine *e)
 {
+	u32 step = (*SCRATCH_WORD(T_DIRECT) & DIRECT_ANSWER_EARLY) ? 1 : 0;
 	if (*SCRATCH_WORD(T_DIRECT) & 0x200)
-		e->deep_carry = 0;
+		e->deep_carry = e->early_carry = 0;
+	/* The step this game begins at: the tournament console's unless the opponent's last games at it
+	 * had frames too long for it, the answer before unless those had too, then a refresh behind. */
+	if (e->deep_carry > DIRECT_FIT_MOST && step < 1)
+		step = 1;
+	if (step == 1 && e->early_carry > DIRECT_FIT_MOST)
+		step = 2;
+	e->direct_step = (u8)(step << 4 | step);
 	e->direct_skip = e->direct_is = 0;
 	e->direct_hold = DIRECT_START;
 	e->deep_game = e->direct_run = e->direct_skips = e->direct_overruns = e->direct_behind = 0;
@@ -2778,9 +2833,22 @@ static void direct_end(Engine *e)
 	for (i = 0; i < 5; i++)
 		all += e->pass_n[i];
 	if (all >= DIRECT_FIT_LEAST) {
-		carry = (e->deep_carry >> 1) + 2 * (u32)e->deep_game + ((e->direct_is & 8) ? DIRECT_FIT_ENDED : 0) +
-		        (deep * DIRECT_FIT_DEEP > all ? DIRECT_FIT_ENDED : 0);
+		u32 began = e->direct_step >> 4, now_at = e->direct_step & 3, early;
+		/* (begun at step 0: its passes and a step down count for step 0; begun at 1, for step 1, and step 0's
+		 * number halves, so that it is tried again after games that fit; begun behind, both halve) */
+		if (began == 0) {
+			carry = (e->deep_carry >> 1) + 2 * (u32)e->deep_game + (now_at ? DIRECT_FIT_ENDED : 0) +
+			        (deep * DIRECT_FIT_DEEP > all ? DIRECT_FIT_ENDED : 0);
+			early = (e->early_carry >> 1) + (now_at >= 2 ? DIRECT_FIT_ENDED : 0);
+		} else if (began == 1) {
+			carry = e->deep_carry >> 1;
+			early = (e->early_carry >> 1) + 2 * (u32)e->deep_game + (now_at >= 2 ? DIRECT_FIT_ENDED : 0);
+		} else {
+			carry = e->deep_carry >> 1;
+			early = e->early_carry >> 1;
+		}
 		e->deep_carry = carry > 0xFFFF ? 0xFFFF : (u16)carry;
+		e->early_carry = early > 0xFFFF ? 0xFFFF : (u16)early;
 	}
 	e->deep_game = 0;
 	e->direct_is = 0;
@@ -2865,11 +2933,21 @@ static void poll_line_pair(u32 second, u32 us, u32 *first_read, u32 *second_read
  * 1.5.0 480p was taken for one field a count, with one read: a player's 480p games ran at half
  * speed, a frame every other refresh, 2026-11-11.)
  *
- * The controller answers the SI when the SI polls it, not when the game reads. Melee's setting
- * polls twice a field, at lines 131 and 262, so a read before the retrace gets an answer about
- * 8 ms old. Moving the SI's lines doesn't last: every frame flip sets them again from the sampling
- * rate (__VIRetraceHandler, SIRefreshSamplingRate). So that's what changes: the SDK's 1 ms setting,
- * 18 polls a field, an answer never more than a millisecond old whenever the game reads.
+ * The controller answers the SI when the SI polls it, not when the game reads, and that is the moment
+ * a press is taken: the read only fetches the SI's last answer. Melee's setting (131 lines, twice a
+ * field) has the answers in about 9 and 140 lines after each retrace: 16.1 and 7.8 ms before the
+ * next (2026-11-17: the hardware's own register, 0x00830280 with a controller in port 1, and a look
+ * at when its answers come). So any read less than 7.8 ms before the retrace plays the answer of
+ * 7.8 ms before it, the one Slippi Nintendont's polling drift fix plays with its read at the
+ * retrace: a frame level with 1 delay frame is on the screen as soon after the press as a
+ * tournament console's (docs/INPUT_DELAY.md), whatever the read's lead. A read EARLIER than that
+ * answer plays the one before it, 8.3 ms older: POLL_BEFORE_ANSWER keeps every read after it.
+ * (Until then the lead went to 8.0 ms in deep rollbacks and for the time sync, 0.2 ms too early: a
+ * player's lag half a frame up in the middle of a game. And the engine set the SDK's 1 ms sampling
+ * rate for its games, to have a fresh answer at any read: that never reached the hardware, since
+ * SISetXY changes the SDK's copy only and the register is written when a controller's polling is
+ * turned on or off. Had one been plugged in during a game it would have: an answer a millisecond
+ * old from then on, the lag down by up to 5 ms and moving with the lead. Left as Melee has it.)
  *
  * From frame 40, in the frozen countdown, as the change of timing costs a repeat (at frame 120, one in every game; players can move from 84). The first frames, the kernel's first time sync, are as ever. Neither the
  * handler's table nor HSD_VIData is in the savestates. */
@@ -2877,8 +2955,9 @@ static void poll_line_pair(u32 second, u32 us, u32 *first_read, u32 *second_read
 #define VI_DI0 ((volatile u16 *)0xCC002030u)
 #define VI_DI2 ((volatile u16 *)0xCC002038u)
 #define VI_DI3 ((volatile u16 *)0xCC00203Cu)
-#define SI_SAMPLING_RATE 0x804D740Cu	/* SamplingRate (in the savestates' excludes: pad .sbss) */
-#define SI_SAMPLING_FRESH 1		/* ms */
+#define POLL_BEFORE_ANSWER 7000u	/* us: no read earlier than this before the retrace (the answer is in 7.8 ms before
+				 * it by the look above, 7.4 by Dolphin's count of the SI's lines with a transfer's
+				 * own time: this side of both) */
 #define VI_INT 0x8000u
 #define VI_INT_ENABLE 0x1000u
 #define OS_INTERRUPT_PI_VI 24
@@ -2946,8 +3025,6 @@ static void poll_early_on(Engine *e)
 	}
 	e->poll_cb = rd32(VI_POST_CB);
 	*(volatile u32 *)VI_POST_CB = 0;
-	e->si_rate = rd32(SI_SAMPLING_RATE);
-	*(volatile u32 *)SI_SAMPLING_RATE = SI_SAMPLING_FRESH;
 	e->poll_us = e->poll_next = POLL_EARLY_LEAST;
 	e->sync_lead = e->vi_burst = 0;
 	e->poll_need = e->poll_calm = e->poll_loaded = e->vb_cleared = 0;
@@ -2967,7 +3044,6 @@ static void poll_early_off(Engine *e)
 		VI_DI2[0] = 0;
 		VI_DI3[0] = 0;
 		vi_nudge_end(e);
-		*(volatile u32 *)SI_SAMPLING_RATE = e->si_rate;
 		*(volatile u32 *)VI_POST_CB = e->poll_cb;
 		e->poll_cb = 0;
 	}
@@ -3046,9 +3122,24 @@ static void vi_nudge_end(Engine *e)
 #define POLL_SYNC_MOST 8000	/* us, unless the kernel says (a read 10 ms early: rb LOST, once) */
 #define POLL_SYNC_STEP 64	/* us: a line of 480i */
 
+/* Or, by the kernel's word (T_DIRECT, DIRECT_ANSWER_EARLY: tests, rollback_answer_early), 15 ms before
+ * the retrace: after the field's FIRST answer (in 16.1 ms before the retrace, 0.6 ms after the one
+ * before), which the read then plays. The player's lag is 8.3 ms more, the same in every frame, and
+ * every frame has 8 ms more for its work: for a connection whose rollbacks do not fit otherwise, where
+ * the game is a whole refresh behind today. Not between the two: a read in the 0.8 ms around the
+ * second answer would play one or the other. */
+#define POLL_ANSWER_BEFORE 15000u
+#define POLL_STEP_UP 500u
+
 static u32 poll_target(Engine *e)
 {
-	return e->poll_next > e->sync_lead ? e->poll_next : e->sync_lead;
+	u32 us = e->poll_next > e->sync_lead ? e->poll_next : e->sync_lead;
+	/* (direct_track's step 1: the answer before; only in a game the kernel lets be level at all. Over its
+	 * limits a game is what it was before the steps: a game read that early and left to itself is level
+	 * by nature, its late frames unmanaged: 27 a minute at 1 delay frame and 100 ms, 2026-11-17) */
+	if ((e->direct_step & 3) == 1 && (*SCRATCH_WORD(T_DIRECT) & 0xFF))
+		return POLL_ANSWER_BEFORE;
+	return us < POLL_BEFORE_ANSWER ? us : POLL_BEFORE_ANSWER;
 }
 
 static void vi_nudge(Engine *e)
@@ -3066,7 +3157,8 @@ static void vi_nudge(Engine *e)
 	if (!(want & 1))
 		return;
 	lead = poll_target(e);
-	if ((want & 2) && lead + POLL_SYNC_STEP <= (want >> 16 ? want >> 16 : POLL_SYNC_MOST)) {
+	if ((want & 2) && lead + POLL_SYNC_STEP <= (want >> 16 ? want >> 16 : POLL_SYNC_MOST) &&
+	    lead + POLL_SYNC_STEP <= POLL_BEFORE_ANSWER) {
 		e->sync_lead = (u16)(lead + POLL_SYNC_STEP);
 		return;
 	}
@@ -3116,7 +3208,9 @@ static void vi_retrace(Engine *e, s32 exception, void *context)
 	if (e->poll_cb && poll_target(e) != e->poll_us) {
 		if (e->poll_next >= e->sync_lead)
 			TR(0, 0xF4, e->poll_next);	/* (not each line of a sync lead's: 0xF3 has it) */
-		e->poll_us = poll_target(e);
+		/* (to the answer before: half a millisecond a refresh, as the time sync's read moves) */
+		e->poll_us = poll_target(e) == POLL_ANSWER_BEFORE && e->poll_us + POLL_STEP_UP < POLL_ANSWER_BEFORE ?
+		             e->poll_us + POLL_STEP_UP : poll_target(e);
 		poll_lines(e);
 	}
 }
@@ -4161,9 +4255,11 @@ static void report(Engine *e)
 		put_u(&o, e->deep_game);
 		put_c(&o, '/');
 		put_u(&o, e->deep_carry);
+		put_c(&o, '/');
+		put_x(&o, e->direct_step);	/* (direct_track's step: began << 4 | ended) */
 		*o.p = 0;
 		send(a, b);
-#ifdef RB_DIRECT_LOG
+#if defined(RB_DIRECT_LOG) && !defined(RB_NO_DX)
 		{
 			u32 *log = t32(T_DIRECT_LOG), i, k;
 			a[5] = 0;	/* "rb dx": direct_log's records, as they are */

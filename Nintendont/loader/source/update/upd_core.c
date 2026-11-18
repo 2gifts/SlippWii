@@ -207,12 +207,24 @@ int upd_version_cmp(const char *a, const char *b)
 	return 0;
 }
 
+/* What another try may get past: a connection that broke or never came, a server's passing trouble. */
+int upd_worth_retry(int res)
+{
+	return res == UPD_E_NET || res == UPD_E_TLS || (res >= 500 && res <= 599);
+}
+
 int upd_check(const char *url, const uint8_t *pubkey, int flags, const char *agent, UpdManifest *m,
 	char *err, int err_size)
 {
 	static uint8_t text[UPD_MANIFEST_MAX];
 	uint32_t got = 0;
-	int res = upd_http_get(url, text, sizeof(text), &got, flags, agent, NULL, NULL, err, err_size);
+	int res, tries;
+	for (tries = 1;; tries++) {
+		res = upd_http_get(url, text, sizeof(text), &got, flags, agent, NULL, NULL, err, err_size);
+		if (res == 200 || !upd_worth_retry(res) || tries == UPD_CHECK_TRIES)
+			break;
+		upd_plat_retry(tries + 1, UPD_CHECK_TRIES);
+	}
 	if (res != 200)
 		return res;
 	res = upd_manifest_read(text, got, pubkey, flags, m);
@@ -228,14 +240,21 @@ int upd_download(const UpdManifest *m, int flags, const char *agent, uint8_t **z
 {
 	uint8_t hash[32], *buf;
 	uint32_t got = 0;
-	int res;
+	int res, tries;
 	*zip = NULL;
 	buf = (uint8_t *)upd_plat_alloc(m->zip_size);
 	if (!buf) {
 		snprintf(err, (size_t)err_size, "out of memory");
 		return UPD_E_MEMORY;
 	}
-	res = upd_http_get(m->zip_url, buf, m->zip_size, &got, flags, agent, progress, arg, err, err_size);
+	/* (a broken download goes on where it broke off: GitHub's file store takes ranges; the SHA-256
+	 * below checks the whole of it either way) */
+	for (tries = 1;; tries++) {
+		res = upd_http_get_from(m->zip_url, buf, m->zip_size, &got, got, flags, agent, progress, arg, err, err_size);
+		if (res == 200 || !upd_worth_retry(res) || tries == UPD_DOWNLOAD_TRIES)
+			break;
+		upd_plat_retry(tries + 1, UPD_DOWNLOAD_TRIES);
+	}
 	if (res != 200) {
 		upd_plat_free(buf);
 		return res < 0 ? res : UPD_E_HTTP;

@@ -107,6 +107,7 @@ extern volatile u32 so_main_loop_quick;	/* the next pass comes at once: the game
  * acked), so the EXI device, on the kernel's main thread, never does
  * network I/O. Never blocks. */
 void so_client_queue_pad(const SoLocalPad *pad);
+void so_client_queue_suggestion(const SoLocalPad *s);
 /* The longest a queued pad waited to be sent since the last call, in us. */
 u32 so_client_take_pad_latency_us(void);
 void so_client_take_pad_send_us(u32 *avg, u32 *max);

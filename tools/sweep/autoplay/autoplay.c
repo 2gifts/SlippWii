@@ -332,18 +332,22 @@ static void sss(Bot *b, Pad *o)
 {
 	/* stage icons: 0x803F06D0, 0x1C each, JObj first; 30 icons */
 	u8 target = b->plan_len ? b->plan[b->round % b->plan_len][1] : 24;
-	u8 hovered = rd8(0x804D6CAE);
+	u8 hovered = rd8(0x804D6CAE), frozen = target & 0x40;	/* (0x40: Z on it first, Slippi's frozen Stadium) */
 	u32 icon;
+	target &= 0x3F;
 	if (target >= 30)
 		target = 24;	/* Battlefield */
 	if (b->scene_polls < 90)
 		return;	/* the icons slide in first: placing the cursor during it misses */
 	if (hovered == target) {
-		/* settled on it (several polls running): A */
-		if (++b->hold > 8 && b->hold < 11)
+		/* settled on it (several polls running): A; Z once before it for a frozen Stadium (its
+		 * cycle then starts again past the Z: a second would unfreeze it) */
+		if (++b->hold == 4 && frozen)
+			o->button = B_Z;
+		if (b->hold > 8 && b->hold < 11)
 			o->button = B_A;
 		if (b->hold > 40)
-			b->hold = 0;
+			b->hold = frozen ? 5 : 0;
 		return;
 	}
 	b->hold = 0;

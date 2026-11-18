@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.8.0
+
+- **1 delay frame is now exactly a tournament console's input delay.** A SlippWii game at 1 delay
+  frame shows your press on screen when a Wii running Slippi Nintendont with the polling drift fix
+  does (about 50 ms), up to about 50 ms of ping. Earlier versions could read the controller a
+  fraction of a millisecond too early in some games and add 8 ms of lag that came and went.
+  [docs/INPUT_DELAY.md](docs/INPUT_DELAY.md) compares the delay with consoles and Slippi on PC.
+- **Steadier timing on slower connections.** When a connection is too heavy for the console's
+  timing, a game now starts one step back (8 ms more) instead of a whole frame, and keeps the same
+  timing through the game: at most one change, never back and forth. Up to about 70 ms of ping at
+  1 delay frame and 105 ms at 2.
+- **Input suggestions, both ways** (Slippi 3.7.0). A PC player with a GameCube adapter sends their
+  inputs between frames, and SlippWii now predicts with them, as Slippi Dolphin does. SlippWii
+  sends its own too: the console reads the controller twice a frame, and the newer reading goes out
+  early, so a PC player facing a Wii gets the same benefit as against another PC.
+- **Check for Updates tries again by itself** when the connection drops, and carries on where the
+  download broke off. Errors are shown in full.
+
 ## 1.7.0
 
 - **Slippi 3.7.0.** Slippi released version 3.7.0 on 2026-11-17, and from then on its matchmaking

@@ -72,6 +72,9 @@ GCAM.o JVSIO.o JVSIOMessage.o TRI.o: CFLAGS += -Os
 # SlippWii: so is the patcher of the game's timers, which runs once as the game loads (12 KB at -O3,
 # the code region's last room: a test build's kernel was 40 bytes over it, 2026-11-15).
 PatchTimers.o: CFLAGS += -Os
+# (and Patch.o, for room in the code region: it patches the game at its start, nothing in play;
+# input suggestions for Slippi 3.7.0 left it 1.8 KB short at -O3, 2026-11-17)
+Patch.o: CFLAGS += -Os
 
 # When make is invoked with `make SLIPPI_DEBUG=1`: compile SlippiDebug.o and
 # let GCC define SLIPPI_PROFILE as a macro. Use this for some profiling code.

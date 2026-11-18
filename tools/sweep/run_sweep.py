@@ -55,7 +55,8 @@ CHARS = {0: 'Dr. Mario', 1: 'Mario', 2: 'Luigi', 3: 'Bowser', 4: 'Peach', 5: 'Yo
          22: 'Game & Watch', 23: 'Marth', 24: 'Roy'}
 # SSS icon index -> (name, stage id in replays)
 STAGES = {24: ('Battlefield', 31), 25: ('Final Destination', 32), 26: ('Dreamland', 28),
-          18: ('Pokemon Stadium', 3), 8: ('Fountain of Dreams', 2), 6: ("Yoshi's Story", 8)}
+          18: ('Pokemon Stadium', 3), 8: ('Fountain of Dreams', 2), 6: ("Yoshi's Story", 8),
+          0x40 | 18: ('Pokemon Stadium (frozen)', 3)}  # (0x40: the bot presses Z on it first: Slippi's toggle)
 # Characters with randomness or extra state first: they matter most.
 ORDER = [12, 4, 22, 2, 14, 5, 19, 10, 9, 23, 15, 20, 7, 8, 0, 1, 6, 3, 16, 17, 11, 13, 18, 21, 24]
 WII_CODE, DOLPHIN_CODE = 'WIIT#001', 'PEER#002'
@@ -111,13 +112,17 @@ def autoplay_codes(run_dir, plan, args):
     menu_seed = {'exit': 0xEB, 'update': 0xEA}.get(args.menu_exit)
     for side, col, seed in (('wii', 0, 0xEC if args.menu_latency else menu_seed or args.seed * 2 + 1),
                             ('dolphin', 1, args.seed * 2 + 2)):
-        spec = {'rounds': [[r[col], r[2]] for r in plan], 'lras_s': args.lras_s, 'seed': seed,
+        # (--wii-quits-first: the Wii's bot quits 3 s sooner, so it loses each game and picks the next stage)
+        lras = max(1, args.lras_s - 3) if args.wii_quits_first and side == 'wii' and args.lras_s else args.lras_s
+        spec = {'rounds': [[r[col], r[2]] for r in plan], 'lras_s': lras, 'seed': seed,
                 'timer_s': args.timer_s, 'timer_rounds': args.timer_rounds, 'idle_rounds': args.idle_rounds,
                 'over_limit': (args.over_limit_p1, args.over_limit_p2),
                 'no_text_fix_rounds': args.no_text_fix_rounds, 'person': 0 if args.plain_bot else 1}
         (run_dir / f'plan-{side}.json').write_text(json.dumps(spec))
         run(sys.executable, HERE / 'build_autoplay.py', '--plan', run_dir / f'plan-{side}.json',
-            '--out', run_dir / f'autoplay-{side}', '--port', (args.wii_port - 1) if side == 'wii' else 0)
+            '--out', run_dir / f'autoplay-{side}', '--port', (args.wii_port - 1) if side == 'wii' else 0,
+            # (with the latency probe the Wii's codes are full: its bot built for size)
+            *(['--small'] if side == 'wii' and args.latency else []))
 
 
 def put_back(path, data):
@@ -548,6 +553,8 @@ def parser():
                     help="every round is the plan's round N (1 on): its characters and stage, as a set between two "
                          'players is (the engine goes by the last game against the same opponent)')
     ap.add_argument('--lras-s', type=int, default=40, help='seconds of play before each game is quit (0: never)')
+    ap.add_argument('--wii-quits-first', action='store_true',
+                    help="the Wii's bot quits each game 3 s before the PC's: it loses, and picks the next game's stage")
     ap.add_argument('--timer-s', type=int, default=0, help='games reach the timer in this many seconds')
     ap.add_argument('--timer-rounds', type=int, default=0, help='bit mask: the rounds --timer-s is for (1: the first)')
     ap.add_argument('--idle-rounds', type=int, default=0, help='bit mask: rounds with no inputs (nobody is KO\'d)')
