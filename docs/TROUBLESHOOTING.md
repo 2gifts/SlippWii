@@ -60,7 +60,7 @@ That is checked again before each 2 KB written. The one exception is a crash's o
 written at once: that game has stopped. The writes are made by the kernel's lowest-priority thread,
 not the network thread. So a report can never cost a frame or an input; the price is that a report
 from a match reaches the card after it. Measured on the Wii (2026-11-18, 8 games at 60 ms of ping):
-no frame halted in play with the Diagnostic Log on (1.8.1: 10, one write of 648 ms in a match), and
+no frame halted in play with the Diagnostic Log on (1.8.0: 10, one write of 648 ms in a match), and
 the PC's wait for each game's start the same as without it (5.1 frames a game).
 
 ## Reading a freeze or a hang

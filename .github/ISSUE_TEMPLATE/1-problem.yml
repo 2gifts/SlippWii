@@ -1,5 +1,5 @@
 name: Problem report
-description: Something doesn't work in SlippWii or its installer
+description: Something doesn't work in SlippWii
 labels: []
 body:
   - type: markdown
@@ -11,7 +11,7 @@ body:
     id: version
     attributes:
       label: SlippWii version
-      description: Shown at the top of the SlippWii screen, e.g. 0.1.0
+      description: Shown at the top of the SlippWii screen, e.g. 1.8.1
     validations:
       required: true
   - type: dropdown
@@ -19,7 +19,7 @@ body:
     attributes:
       label: Where did it happen?
       options:
-        - Installer (on the computer)
+        - Installing or updating (the SD card, Check for Updates)
         - Starting SlippWii / loading Melee
         - Online menus (searching, connecting)
         - During a game (lag, desync, freeze)
@@ -35,13 +35,14 @@ body:
         - Direct
         - Unranked
         - Teams
+        - Party
         - Not online / not applicable
   - type: input
     id: setup
     attributes:
       label: Your setup
       description: Wii model, LAN adapter, and your opponent's setup (Slippi Dolphin on PC, another Wii, ...) and rough distance/ping
-      placeholder: Wii RVL-001, USB LAN adapter; opponent on Slippi Dolphin 3.6.4, same city
+      placeholder: Wii RVL-001, USB LAN adapter; opponent on Slippi Dolphin 3.7.0, same city
   - type: textarea
     id: what
     attributes:
@@ -53,4 +54,4 @@ body:
     id: logs
     attributes:
       label: Logs and replays
-      description: For installer problems, attach `installer/install-log.txt`. For desyncs, the opponent's Slippi replay (.slp) of that game helps a lot.
+      description: Attach the zipped `slippwii/logs` folder from the SD card (or from the USB drive your game is on). SlippWii saves a report there by itself when something goes wrong. For a problem that keeps happening, turn on Diagnostic Log in Slippi Settings first and play until it happens again. For desyncs, the opponent's Slippi replay (.slp) of that game helps a lot. IP addresses and connect codes are masked in the logs; your play key is never written.
