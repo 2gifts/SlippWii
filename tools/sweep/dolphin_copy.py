@@ -23,7 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SRC = Path(os.environ['APPDATA']) / 'Slippi Launcher/netplay'
 OUT = ROOT / 'build/sweep'
-ISO_DIR = Path.home() / 'Downloads/SSB'
+ISO_DIR = Path(os.environ.get('SLIPPWII_ISO', Path.home() / 'Downloads/SSB/SSBMv102.iso')).parent  # (as run_sweep.py's ISO)
 SKIP = {'user.json', 'direct-codes.json', 'Logs', 'ScreenShots', 'StateSaves', 'Dump', 'Cache'}
 
 MM_NAME = b'mm.slippi.gg\0'

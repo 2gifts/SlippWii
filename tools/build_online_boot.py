@@ -50,6 +50,9 @@ from rollback import slippi_offsets
 
 ROOT = Path(__file__).resolve().parent.parent
 GECKO_TOOLS = ROOT / '.toolchain/gecko'
+if not (GECKO_TOOLS / 'powerpc-eabi-as.exe').exists():
+    # (devkitPPC's own assembler, from tools/fetch_devkitpro.py: it builds the same bytes, checked 2026-11-20)
+    GECKO_TOOLS = ROOT / '.toolchain/opt/devkitpro/devkitPPC/bin'
 BOOTLOADER = ROOT / 'slippi-ssbm-asm/Output/Bootloader/bootloader.gct'
 OUT = ROOT / 'Nintendont/kernel/gecko/g_online_boot.bin'
 CODES_REGION = 0x19AF4C - 0x1910E0  # Patch.c: CODELIST_TOURNAMENT_END, _BASE

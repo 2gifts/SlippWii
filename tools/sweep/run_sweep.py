@@ -40,7 +40,7 @@ ROOT = HERE.parents[1]
 NIN = ROOT / 'Nintendont'
 OUT = ROOT / 'build/sweep'
 TOOLS = Path(os.environ.get('SLIPPWII_TEST_TOOLS', ROOT.parent / 'slippi-3ds/native-3ds/build/slippi-tools'))
-ISO = Path.home() / 'Downloads/SSB/SSBMv102.iso'
+ISO = Path(os.environ.get('SLIPPWII_ISO', Path.home() / 'Downloads/SSB/SSBMv102.iso'))  # the NTSC 1.02 disc image
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / 'tools'))
 import dolphin_copy  # noqa: E402
