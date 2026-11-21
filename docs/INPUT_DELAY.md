@@ -1,7 +1,8 @@
 # Input delay: tournament console, SlippWii online, Slippi on PC
 
-The SlippWii rows describe SlippWii 1.8.0 (see "What changed"); two things are still to be
-confirmed (see "How this was measured").
+The SlippWii rows describe SlippWii 1.8.0 and later (see "What changed"). A player confirmed them
+independently with a light-sensor adapter on a CRT; only the sound is still to be measured (see
+"How this was measured").
 
 How long a button press takes to reach the screen, and the speakers, in the three ways Melee is
 played competitively. The reference is the console a tournament puts on its tables.
@@ -169,9 +170,11 @@ a late frame is put right at once, and the ping limits are higher (above).
   on average (42.4 to 66.8); this page's, at the top of the picture, 55.8 (47.5 to 64.1). A
   player with a light-sensor adapter found 1 delay frame on SlippWii 1.6.1 3.7 ms faster than a
   console with the polling drift fix off; this page says 4.7.
-- **Still to confirm**: the SlippWii rows with a real controller's presses timed from the
-  controller itself (the probe's presses so far are a bot's, written in at the reading); and the
-  sound, with a recording of the console's output.
+- **Independent confirmation**: the same player measured 1.8.0 the same way (real presses, a
+  sensor at the middle of a CRT, against the same test on offline Melee) and found 1 delay frame
+  "perfectly in line" with their offline results (2026-11-19). This is the figure every change
+  must keep ([TESTING.md](TESTING.md)).
+- **Still to confirm**: the sound, with a recording of the console's output.
 
 ## Sources
 

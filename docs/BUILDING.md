@@ -74,6 +74,9 @@ setup --real` writes). Release builds log nothing.
 
 ## A release
 
+Changes reach `main` by pull request (squash-merged); a release is made from `main` by the
+maintainer, who holds the release key.
+
 1. Bump `SLIPPWII_VERSION` in `Nintendont/common/include/Metadata.h` and `<version>` in
    `release/apps/SlippWii/meta.xml`, and add a `CHANGELOG.md` entry.
 2. `python tools/build_online_boot.py`, `sh tools/build.sh`, then commit.

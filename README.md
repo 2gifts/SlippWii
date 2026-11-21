@@ -220,12 +220,19 @@ opponent's setup. A Slippi replay (`.slp`) from the opponent's side helps with d
    happens again. If the console hangs, wait ten seconds before you switch it off.
 3. Put the SD card (or the USB drive your game is on) in a computer and attach the whole
    `slippwii/logs` folder to your report, zipped.
-4. Set **Diagnostic Log** back to **No**: while it is on, a match can hitch now and then when the
-   log is written.
+4. You can leave **Diagnostic Log** on: since 1.8.1 nothing is written to the card during a match,
+   so it costs a game nothing.
 
 The log is plain text, so you can read it first. It has your SlippWii version, console type, settings
 and what the game and the network did. IP addresses and connect codes are masked, and names and your
 Slippi play key are never written.
+
+## Contributing
+
+SlippWii aims to be what an official Slippi port to the Wii would be: online play that feels
+exactly like offline, and a Wii a PC player can't tell from a PC, with no features beyond Slippi's
+own. Fixes and measured netcode improvements are very welcome; please read
+[CONTRIBUTING.md](CONTRIBUTING.md) first. AI agents: start at [AGENTS.md](AGENTS.md).
 
 ## How it works
 

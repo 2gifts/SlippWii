@@ -1,15 +1,14 @@
 # Slippi Online in the Nintendont kernel
 
 This module lets a Wii running Slippi Nintendont play Slippi online against
-Slippi Dolphin. It speaks the same protocols as Slippi Dolphin (Ishiiruka
-v3.6.4) on the wire: matchmaking at `mm.slippi.gg`, and the peer-to-peer pad
-exchange. The Wii never rolls back. It plays in lockstep: a frame runs once
-the opponent's pad for that frame has arrived. The PC side keeps its usual
-rollback.
+Slippi Dolphin. It speaks the same protocols as Slippi Dolphin on the wire:
+Slippi's matchmaking, and the peer-to-peer pad exchange.
 
-Status: milestones M2 (the network client, tested on hardware) and M3 (the
-online EXI device, tested on the PC with a fake Melee). The game needs
-Slippi's online codeset and menu files to use it; loading those is M4.
+*Parts of this page date from before rollback, when the Wii played in
+lockstep. For how online play works now (rollback against one opponent,
+waiting for inputs in Teams and Party), see
+[docs/HOW_IT_WORKS.md](../../../docs/HOW_IT_WORKS.md) and
+[docs/ROLLBACK.md](../../../docs/ROLLBACK.md).*
 
 ## Layout
 
