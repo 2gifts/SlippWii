@@ -137,6 +137,12 @@ void so_np_suggest_report(void);
 void so_np_send_suggestion(s32 target, u32 seq, const u8 *pad);
 int so_np_suggest_on(void);
 s32 so_np_remote_head_frame(int remote);
+/* More than one opponent, waiting: when the input of `frame` came from `remote`, so_np_watched_us
+ * (0: not yet). The client lock held. */
+/* tests (test_mute_frame): no pad sent from now on */
+void so_np_test_mute(void);
+void so_np_watch(int remote, s32 frame);
+u64 so_np_watched_us(int remote);
 /* 1 in the first game against this opponent (so_pads.h, so_peer_first_game). */
 int so_np_first_game(void);
 /* These PowerPC words (head_word 0: none) follow opponent 0's newest input frame, and the

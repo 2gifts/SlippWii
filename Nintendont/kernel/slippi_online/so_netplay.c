@@ -90,6 +90,9 @@ typedef struct {
 	u32 drop_ms[SO_MAX_PLAYERS];
 	s32 despawn_frame[SO_MAX_PLAYERS];
 	s32 newest_offset_us;
+	/* so_np_watch: the frame an input is waited for, per opponent, and when it came (0: not yet) */
+	s32 watch_frame[SO_REMOTE_MAX];
+	u64 watch_us[SO_REMOTE_MAX];
 	u32 head_word, changed_word;	/* so_np_publish_head */
 	SoLocalPads local_pads;
 	SoRemotePads remote_pads[SO_REMOTE_MAX];
@@ -684,6 +687,10 @@ static void on_pad(Reader *r, ENetPeer *peer, u64 now_us)
 
 	/* Ack only packets that brought new frames. */
 	if (added > 0) {
+		if (np->watch_frame[remote] && np->remote_pads[remote].head_frame >= np->watch_frame[remote]) {
+			np->watch_us[remote] = now_us;
+			np->watch_frame[remote] = 0;
+		}
 		if (remote == 0 && np->head_word) {
 			/* (before the head: what the head brings is known by the time it is seen) */
 			s32 f, changed = 0;
@@ -1459,6 +1466,22 @@ void so_np_publish_head(u32 head_word, u32 changed_word)
 {
 	np->head_word = head_word;
 	np->changed_word = changed_word;
+}
+
+void so_np_test_mute(void)
+{
+	np->drop_pct = 100;
+}
+
+void so_np_watch(int remote, s32 frame)
+{
+	np->watch_frame[remote] = frame;
+	np->watch_us[remote] = 0;
+}
+
+u64 so_np_watched_us(int remote)
+{
+	return np->watch_us[remote];
 }
 
 s32 so_np_remote_head_frame(int remote)

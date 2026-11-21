@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.8.1
+
+- **No more crashes between games after a bad moment of the SD card.** When the card failed a
+  read, SlippWii went on as if it had worked: the game got garbage, and from then on every file it
+  loaded was garbage too, so the next load between games crashed or froze it. Now a read the card
+  fails is tried again, and the Diagnostic Log notes it ("disc: a read failed").
+- **Boot hang with the game on USB, Cheats and the Diagnostic Log on.** Three of Nintendont's own
+  uses of the drive (the cheat file's lookup, the memory card's save, USB's keep-alive read) did not
+  wait for the log's writes. They do now. A likely cause of a reported hang at boot; the hang itself
+  did not happen on our USB stick, before or after.
+- **Problem reports, always on.** A crash, a hang, a freeze, a desync, a lost or dropped connection,
+  a game that never started, a matchmaking error and SD card trouble each leave a short report in
+  `slippwii/logs` (listed in `reports.txt`), so the folder alone can explain what went wrong.
+- **The Diagnostic Log costs a game nothing.** Nothing is written to the SD card during a match or
+  while the next game loads, the log included; it waits for the menus. Before, its writes could
+  cost a game a frame now and then.
+- **Teams and Party: fewer waits on slow connections.** When a game had to wait for the other
+  players' inputs more than now and then, the lobby's next game uses one more delay frame (up to
+  8); a new lobby starts again from its ping. At 144 ms of ping, waits fell from 5-91 a game to
+  2-6. Only the Wii's player has the extra frame. One-on-one games are unchanged.
+
 ## 1.8.0
 
 - **1 delay frame is now exactly a tournament console's input delay.** A SlippWii game at 1 delay

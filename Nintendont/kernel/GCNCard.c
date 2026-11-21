@@ -5,6 +5,7 @@
 #include "Config.h"
 #include "debug.h"
 #include "ff_utf8.h"
+#include "slippi_online/so_platform.h"
 
 // Triforce variables.
 extern vu32 TRIGame;
@@ -321,6 +322,7 @@ void GCNCard_Save(void)
 			//dbgprintf("EXI: Saving memory card in Slot %c...", (slot+'A'));
 //#endif
 			FIL fd;
+			so_fs_lock();	// Slippi Online: FatFS is shared with the kernel's report and log writer
 			int ret = f_open_main_drive(&fd, ctx->filename, FA_WRITE|FA_OPEN_EXISTING);
 			if (ret == FR_OK)
 			{
@@ -351,6 +353,7 @@ void GCNCard_Save(void)
 			{
 				dbgprintf("\r\nEXI: Unable to open Slot %c memory card file: %u\r\n", (slot+'A'), ret);
 			}
+			so_fs_unlock();
 
 			// Reset the low/high offsets to indicate that everything has been saved.
 			ctx->BlockOffLow = 0xFFFFFFFF;

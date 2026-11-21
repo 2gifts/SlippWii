@@ -117,4 +117,8 @@ void so_client_lock(void);
 void so_client_unlock(void);
 void so_client_log_holds(void);	/* (with the lock) a line on how long it was held, since the last */
 
+/* The SD card's log and the problems it reports: from the kernel's low-priority watcher, every 100 ms
+ * (so_diag.c) */
+void so_client_log_tick(void);
+
 #endif

@@ -231,6 +231,13 @@ static int open_locked(void)
 	return 1;
 }
 
+static volatile u32 pf_last_ms;	/* (its last read: so_pf_idle_ms) */
+
+u32 so_pf_idle_ms(void)
+{
+	return pf_last_ms ? so_time_ms() - pf_last_ms : 0xFFFFFFFFu;
+}
+
 static u32 pf_thread(void *arg)
 {
 	(void)arg;
@@ -267,6 +274,7 @@ static u32 pf_thread(void *arg)
 			f->size = f->done;	/* (no disc: give up on it) */
 		}
 		pf.read_ms += so_time_ms() - t0;
+		pf_last_ms = so_time_ms();
 		so_fs_unlock();
 		so_sleep_us(1000);
 	}

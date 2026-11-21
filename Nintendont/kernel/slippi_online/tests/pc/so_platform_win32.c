@@ -266,8 +266,10 @@ int so_disc_read(u32 offset, void *buf, u32 len)
 void so_fs_lock(void) {}
 void so_fs_diag(void) {}
 void so_pf_diag(void) {}
+u32 so_pf_idle_ms(void) { return 0xFFFFFFFFu; }
 void DIDiag(void) {}
 void so_fs_unlock(void) {}
+int so_fs_wanted(void) { return 0; }
 
 void *so_file_open(const char *path, int *error)
 {
@@ -334,6 +336,8 @@ int so_append_file(const char *path, const void *buf, u32 size, int create)
 
 void so_make_dir(const char *path) { (void)path; }
 int so_platform_info(char *out, int size) { return so_snprintf(out, size, "a PC\n"); }
+u32 so_disc_idle_ms(void) { return 1000; }
+void so_disc_counters(u32 *failed, u32 *slow) { *failed = *slow = 0; }
 int so_diag_log_setting(void) { return 0; }
 int so_quick_chat_setting(void) { return 1; }
 

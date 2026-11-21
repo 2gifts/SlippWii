@@ -67,6 +67,7 @@ typedef struct {
 	s32 played;		/* 0xC0 the game's frames in_game has made inputs for */
 	s8 jx, jy;		/* 0xC4 the stick's unsteadiness this frame */
 	u8 team;		/* 0xC6 (build_autoplay.py) Teams: the team to pick with Slippi's button: 0 red, 1 blue, 2 green */
+	u8 grabby;		/* 0xC7 (build_autoplay.py) the bot grabs: goes to its opponent, grabs, pummels, throws, mashes */
 } Bot;
 
 #define B_LEFT 0x0001
@@ -443,6 +444,84 @@ static void next_frame(Bot *b)
 	b->last = r;
 }
 
+/* A player's fighter data (Melee 1.02: the static player block's entity at +0xB0, its user data at
+ * +0x2C; in the fighter, the action state at +0x10, the position at +0xB0/+0xB4), or 0 */
+static u32 fighter_of(u32 port)
+{
+	u32 g = rd32(0x80453080u + port * 0xE90u + 0xB0u), d;
+	if (!valid_ptr(g))
+		return 0;
+	d = rd32(g + 0x2C);
+	return valid_ptr(d) ? d : 0;
+}
+
+/* grabby: grabs, and what follows one, again and again. A grab is where rollbacks are thickest in a
+ * real game (the one held mashes: a new input every frame, every prediction wrong) and where the
+ * plain bot hardly ever is (it presses Z once in 16 actions, wherever it stands). A field report:
+ * a freeze and a lost game "both times in a grab", 2026-11-18. Action states: 0xD4-0xDE catching
+ * (0xD8 CatchWait holds), 0xDF-0xE8 being caught. */
+static void grabby(Bot *b, s32 f, Pad *o)
+{
+	u32 odb = rd32(0x804DB6A0 - 0x49E4), mine = valid_ptr(odb) ? rd8(odb) : b->port, port, me, op = 0, act, r;
+	s32 mx, my, ox, oy, dx;
+	if (mine > 3 || !(me = fighter_of(mine)))
+		return;
+	for (port = 0; port < 4 && !op; port++)
+		if (port != mine)
+			op = fighter_of(port);
+	if (!op)
+		return;
+	act = rd32(me + 0x10);
+	mx = (s32)rdf(me + 0xB0);
+	my = (s32)rdf(me + 0xB4);
+	ox = (s32)rdf(op + 0xB0);
+	oy = (s32)rdf(op + 0xB4);
+	dx = ox - mx;
+	r = next_rand(b);
+	if (act != 0xD8 && act != 0xD9)
+		b->hold = 0;	/* (the frames this bot has held its grab) */
+	if (act >= 0xDF && act <= 0xE8) {
+		/* held: mash, the stick and a button changing every frame */
+		o->sx = (f & 1) ? 127 : -127;
+		o->sy = (f & 2) ? 60 : -60;
+		o->button = (r & 1) ? B_A : (r & 2) ? B_B : 0;
+	} else if (act == 0xD8 || act == 0xD9) {
+		/* holding: a few pummels, then a throw one way or another */
+		if (b->hold < 255)
+			b->hold++;
+		if (b->hold < 4 + (b->seed & 7)) {	/* (a throw before the mash gets out) */
+			if (f % 8 < 2)
+				o->button = B_A;
+		} else {
+			u32 way = (b->rng >> 24) & 3;
+			o->sx = way == 0 ? 127 : way == 1 ? -127 : 0;
+			o->sy = way == 2 ? 127 : way == 3 ? -127 : 0;
+		}
+	} else if (my < -8) {
+		/* off the stage, below it: jump, then up and B */
+		o->sx = mx > 0 ? -127 : 127;
+		if (f % 20 < 2)
+			o->button = B_X;
+		else if (f % 20 > 10) {
+			o->sy = 127;
+			o->button = B_B;
+		}
+	} else if (dx < 14 && dx > -14 && oy - my < 12 && my - oy < 12) {
+		/* in reach: grab (Z pressed afresh), now and then a jab or a shield */
+		u32 k = (u32)f % 12;
+		if (k < 1)
+			o->button = (r & 7) == 0 ? B_A : B_Z;
+		else if (k > 8 && (r & 3) == 0) {
+			o->button = B_R;
+			o->r = 255;
+		}
+	} else {
+		o->sx = dx > 0 ? 127 : -127;	/* (to the opponent; a jump if it is above) */
+		if (oy - my > 20 && f % 30 < 2)
+			o->button = B_X;
+	}
+}
+
 static s8 stick_plus(s8 stick, s8 by)
 {
 	s32 v = (s32)stick + by;
@@ -489,6 +568,10 @@ static void in_game(Bot *b, Pad *o)
 	}
 	if (f < 60)
 		return;
+	if (b->grabby) {
+		grabby(b, f, o);
+		return;
+	}
 	if (b->played < 60) {
 		b->played = 60;
 		b->rng = 0x9E3779B9u ^ b->seed ^ ((u32)b->round << 8);

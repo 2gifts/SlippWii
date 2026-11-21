@@ -3590,6 +3590,10 @@ void DoPatches( char *Buffer, u32 Length, u32 DiscOffset )
 		}
 
 		FIL CodeFD;
+		/* Slippi Online: FatFS is shared with the kernel's report and log writer (another thread, and
+		 * FatFS here is not reentrant): the cheat file's lookups and read take the lock as every other
+		 * access does. A diagnostic log written in the same moment could hang the boot. */
+		so_fs_lock();
 		if (Check_Cheats() == 0 && f_open_main_drive(&CodeFD, cheatPath, FA_OPEN_EXISTING|FA_READ) == FR_OK)
 		{
 			u32 gct_len = CodeFD.obj.objsize;
@@ -3618,6 +3622,7 @@ void DoPatches( char *Buffer, u32 Length, u32 DiscOffset )
 			dbgprintf("Patch:Apply GCT footer 0x%08x\r\n", gct_cursor);
 		}
 		else { dbgprintf("Patch:Failed to open/find GCT:\"%s\"\r\n", cheatPath ); }
+		so_fs_unlock();
 
 		// Apply GCT footer
 		memcpy((void*)gct_cursor, GCT_FOOTER, sizeof(GCT_FOOTER));

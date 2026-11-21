@@ -28,6 +28,7 @@ void so_config_defaults(SoConfig *config)
 	config->online_main_priority = 0x7C;
 	config->online_loop_us = 500;
 	config->multi_delay_room_ms = 20;
+	config->multi_hold_ms = 4;	/* (2026-11-19, 64 Teams games: 30% fewer frames waited at 144 ms, the same elsewhere) */
 	config->multi_stream = 100;	/* (1 in config.ini: a send a frame, as it was; 0: not while the game runs) */
 	config->rollback_bg_saves = 2;
 	config->rollback_direct = 1;	/* (on since 1.4.0-beta.3; 0 in config.ini is the off-switch) */
@@ -167,11 +168,14 @@ static int apply(SoConfig *c, const char *key, const char *value)
 	RANGED("test_lag_frames", test_lag_frames, 0, 6)
 	RANGED("test_multi_rollback", test_multi_rollback, 0, 1)
 	RANGED("multi_delay_room_ms", multi_delay_room_ms, 0, 60)
+	RANGED("multi_hold_ms", multi_hold_ms, 0, 8)
 	RANGED("multi_stream", multi_stream, 0, 250)
 	RANGED("test_spike_ms", test_spike_ms, 0, 2000)
 	RANGED("test_spike_every", test_spike_every, 20, 3000)
 	RANGED("test_stuck_frame", test_stuck_frame, 0, 60000)
 	RANGED("test_hang_frame", test_hang_frame, 0, 60000)
+	RANGED("test_freeze_frame", test_freeze_frame, 0, 60000)
+	RANGED("test_mute_frame", test_mute_frame, 0, 60000)
 	RANGED("test_crash_frame", test_crash_frame, 0, 60000)
 	RANGED("test_desync_frame", test_desync_frame, 0, 60000)
 	RANGED("test_start_limit_ms", test_start_limit_ms, 0, 60000)
@@ -185,6 +189,8 @@ static int apply(SoConfig *c, const char *key, const char *value)
 	RANGED("test_scratch_junk", test_scratch_junk, 0, 1)
 	RANGED("test_mark_page", test_mark_page, 0, 0x17FF)
 	RANGED("test_no_scratch", test_no_scratch, 0, 1)
+	RANGED("test_disc_fail", test_disc_fail, 0, 10000)
+	RANGED("test_disc_no_retry", test_disc_no_retry, 0, 1)
 	RANGED("rollback_wait_ms", rollback_wait_ms, 0, 16)
 	RANGED("rollback_poll_early_us", rollback_poll_early_us, 0, 12000)
 	RANGED("rollback_poll_deep_us", rollback_poll_deep_us, 0, 6000)

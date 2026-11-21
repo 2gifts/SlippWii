@@ -19,11 +19,20 @@ void so_logfile_crash(void);
 void so_logfile_desync(void);
 /* The game is over: a desync's file ends here (a later game's is a new one); a crash's goes on */
 void so_logfile_report_end(void);
-/* What is pending is written at the next service, in a game or not */
+/* What is pending is written at the next service the card may be written at */
 void so_logfile_now(void);
-/* The writes (the network thread: not the game's loop). in_game: only every 5 s
- * then; now_anyway: whatever is pending. Returns the bytes written. */
-int so_logfile_service(int in_game, int now_anyway);
+/* A problem, for the reports: `kind` one word (crash, hang, freeze, desync, lost, dropped, never-started,
+ * connect, disc), `text` one line. Said in the log as "REPORT kind: text"; the first one before a file is
+ * opened is that file's verdict (its first lines) and names it (kind-N.txt); each goes into
+ * /slippwii/logs/reports.txt with the file it is in. Starts a report as so_logfile_desync does (written
+ * when the card may be; ended at the game's end, or at once with `ended`). */
+void so_logfile_event(const char *kind, const char *text, int ended);
+/* Whether the card may be written now (no match, the disc idle): so_client.c's, called before each
+ * write; none (tests): always. A crash's file is written whatever it says: that game has stopped. */
+extern int (*so_logfile_quiet)(void);
+/* The writes: from the kernel's low-priority watcher (so_diag.c), never the network thread's loop.
+ * quiet: so_logfile_quiet's answer now; now_anyway: whatever is pending. Returns the bytes written. */
+int so_logfile_service(int quiet, int now_anyway);
 /* The file being written, or NULL */
 const char *so_logfile_path(void);
 /* The card's writes this boot, the longest of them, and all of them together */

@@ -479,6 +479,19 @@ void so_make_dir(const char *path)
 	so_fs_unlock();
 }
 
+u32 DIIdleMs(void);	/* DI.c */
+extern u32 di_slow_commands, iso_read_errors;	/* DI.c, ISO.c */
+u32 so_disc_idle_ms(void)
+{
+	return DIIdleMs();
+}
+
+void so_disc_counters(u32 *failed, u32 *slow)
+{
+	*failed = iso_read_errors;
+	*slow = di_slow_commands;
+}
+
 int so_platform_info(char *out, int size)
 {
 	/* (0x0D8005A0: the Wii U's mark in its Wii mode, as Nintendont's own check reads it) */
@@ -535,6 +548,11 @@ void so_fs_unlock(void)
 		fs_holder = 0;
 		so_mutex_unlock(&fs_mutex);
 	}
+}
+
+int so_fs_wanted(void)
+{
+	return fs_waiter != 0;
 }
 
 void so_fs_diag(void)

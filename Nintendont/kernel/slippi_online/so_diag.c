@@ -15,13 +15,14 @@ extern char __slippi_online_diag_stack_addr, __slippi_online_diag_stack_size;
 
 #define WATCH_PRIORITY 0x20	/* below the main loop online too (online_main_priority): the scan of the heap takes
 				 * milliseconds, and the game waits for the main loop to answer its polls */
-#define WATCH_PERIOD_US 1000000
+#define WATCH_PERIOD_US 100000	/* (so_client_log_tick's; the rest once a second) */
 
 volatile u32 so_kernel_loops;
 const char *volatile so_phase = "boot";
 volatile u32 so_step_pause_us;
 
 static u32 start_ticks;
+static u8 beacon_on;
 static u32 beacons;
 static char text[32];
 
@@ -32,11 +33,26 @@ void DIDiag(void);	/* DI.c */
 /* A game that has stopped with its interrupts going on: what the kernel holds that it could be waiting
  * for. (Not the game's own memory: its newest writes are in the PPC's cache, and what the kernel reads
  * of its threads is seconds old. tools/ppc/stall.s, with --stall-all, says where the game is.) */
+static int checkpoint(char *out, int size, int thread);
+static void game_line(void);
 void so_diag_where(void)
 {
+	char where[48];
+	int n = 0, i;
+	SoSocketStats st;
 	DIDiag();
 	so_fs_diag();
 	so_pf_diag();
+	/* each thread's last checkpoint (net, receive, send completion, test) and how long ago, the game's
+	 * main thread as the kernel can see it (the PPC's newest writes may still be in its cache), and the
+	 * network's counts: a stop on the network thread, or with nothing received, is told from the disc's */
+	for (i = 0; i < SO_THREAD_COUNT && n < (int)sizeof(where) - 12; i++)
+		n += checkpoint(where + n, (int)sizeof(where) - n, i);
+	game_line();
+	so_socket_stats_peek(&st);
+	so_log("where: threads%s, the net one %u ms ago; game %s; network: received %u, sent %u, errors %u/%u, dropped %u",
+		where, (unsigned)so_ticks_to_ms(so_ticks() - so_traces[SO_THREAD_NET].ticks), text, (unsigned)st.received,
+		(unsigned)st.sent, (unsigned)st.send_errors, (unsigned)st.receive_errors, (unsigned)st.send_dropped);
 }
 #define SILENT_S 3
 #define BOOT_HUNG_S 45
@@ -49,7 +65,7 @@ static u8 exit_asked;	/* so_diag_request_exit: the kernel starts the Homebrew Ch
  * kernel sees them. */
 static u32 WatchThread(void *unused)
 {
-	u32 n = 0, retraces = 0, still = 0, booting = 0, polls = 0, stuck = 0, received = 0, silent = 0, versus = 0;
+	u32 n = 0, retraces = 0, still = 0, booting = 0, polls = 0, stuck = 0, received = 0, silent = 0, versus = 0, tick = 0;
 	/* (this word outlives a reboot: last run's count, standing still until the game's first
 	 * retrace, would look like a hung PowerPC if the game takes over 10 s to get there) */
 	if (test_control)
@@ -57,10 +73,14 @@ static u32 WatchThread(void *unused)
 	(void)unused;
 	for (;;) {
 		so_sleep_us(WATCH_PERIOD_US);
+		/* (every build: the card's log and the problem reports, below the main loop and the network) */
+		so_client_log_tick();
+		if (++tick % 10)
+			continue;
 		/* (not in a game: it holds the heap's lock for ms, and the network thread, needing
 		 * that with the lock the game's polls wait for, holds up a poll: a player's build
-		 * has no such thing, and a test should not measure it) */
-		if (!so_client_online_game())
+		 * has no such thing (beacon off), and a test should not measure it) */
+		if (beacon_on && !so_client_online_game())
 			so_alloc_check();
 		if (!test_control)
 			continue;
@@ -212,13 +232,16 @@ void so_diag_start(const SoConfig *config)
 		so_set_ppc_word(SO_TEST_EXIT_WORD, SO_TEST_ARMED);
 		so_socket_set_control(config->log_host, request_exit);
 	}
-	if (!config->status_beacon)
-		return;
-	so_alloc_fill_free();
-	so_alloc_check();
+	/* (the watcher runs in every build: the problem reports are its own; the heap's checks and the
+	 * beacon only with status_beacon) */
+	if (config->status_beacon) {
+		beacon_on = 1;
+		so_alloc_fill_free();
+		so_alloc_check();
+	}
 	if (so_thread_start(WatchThread, NULL, &__slippi_online_diag_stack_addr,
 			(u32)(size_t)&__slippi_online_diag_stack_size, WATCH_PRIORITY) < 0)
-		so_log("diag: could not start the heap watcher");
+		so_log("diag: could not start the watcher");
 }
 
 /* "cl212": the first two letters of the checkpoint's file, and its line. */

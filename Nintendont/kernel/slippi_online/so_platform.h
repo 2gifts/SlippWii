@@ -148,6 +148,10 @@ void so_make_dir(const char *path);
 /* A line or two about the console and the loader's settings, each ended by a
  * newline, for a log file's head (so_logfile.c). Returns the characters. */
 int so_platform_info(char *out, int size);
+/* The disc (the game's image on the card): ms since its last command ended (0: one is in progress); the
+ * card's failed reads and the commands over half a second, this boot (ISO.c, DI.c) */
+u32 so_disc_idle_ms(void);
+void so_disc_counters(u32 *failed, u32 *slow);
 /* The loader's Diagnostic Log switch */
 int so_diag_log_setting(void);
 /* The loader's Quick Chat setting: 1 on (as without one), 2 in Direct only, 0 off */
@@ -163,6 +167,9 @@ int so_read_file_bounced(const char *path, u8 *out, u32 size, u8 *bounce, u32 bo
  * (an overlap failed an open on hardware). No-ops until so_platform_init. */
 void so_fs_lock(void);
 void so_fs_unlock(void);
+/* Someone waits for the FatFS lock now (the disc, the prefetch, a save): the problem reports's writes
+ * give way (so_logfile.c) */
+int so_fs_wanted(void);
 void so_fs_diag(void);
 
 /* A file of the boot drive kept open (for reads while the game runs, with

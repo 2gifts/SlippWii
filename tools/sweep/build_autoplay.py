@@ -47,6 +47,7 @@ def fill(blob, offset, plan, port, lras_s, seed):
                                                plan.get('no_text_fix_rounds', 0), plan.get('person', 0),
                                                plan.get('mode', 0)))
     blob[offset + 0xC6] = plan.get('team', 0)
+    blob[offset + 0xC7] = plan.get('grabby', 0)
 
 
 def c2(code):

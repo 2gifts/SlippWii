@@ -53,7 +53,7 @@ __slippi_online_done_stack_addr = __slippi_online_rx_stack_addr + __slippi_onlin
 __slippi_online_test_stack_size = 0x1000;
 __slippi_online_test_stack_addr = __slippi_online_done_stack_addr + __slippi_online_test_stack_size;
 
-__slippi_online_diag_stack_size = 0x800;
+__slippi_online_diag_stack_size = 0x1800;	/* (the problem reports: the card's writes, FatFS, are made on it) */
 __slippi_online_diag_stack_addr = __slippi_online_test_stack_addr + __slippi_online_diag_stack_size;
 
 __slippi_online_stack_size = 0x2000;

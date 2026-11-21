@@ -117,7 +117,7 @@ def autoplay_codes(run_dir, plan, args):
         spec = {'rounds': [[r[col], r[2]] for r in plan], 'lras_s': lras, 'seed': seed,
                 'timer_s': args.timer_s, 'timer_rounds': args.timer_rounds, 'idle_rounds': args.idle_rounds,
                 'over_limit': (args.over_limit_p1, args.over_limit_p2),
-                'no_text_fix_rounds': args.no_text_fix_rounds, 'person': 0 if args.plain_bot else 1}
+                'no_text_fix_rounds': args.no_text_fix_rounds, 'person': 0 if args.plain_bot else 1, 'grabby': 1 if args.grabby else 0}
         (run_dir / f'plan-{side}.json').write_text(json.dumps(spec))
         run(sys.executable, HERE / 'build_autoplay.py', '--plan', run_dir / f'plan-{side}.json',
             '--out', run_dir / f'autoplay-{side}', '--port', (args.wii_port - 1) if side == 'wii' else 0,
@@ -189,7 +189,7 @@ def build(run_dir, plan, args, ip):
         run(sys.executable, ROOT / 'tools/build_online_boot.py',
             # (the deep check's build has neither the probe nor the stall profiler: its engine is the player's, and full)
             *(['--rollback-trace'] if args.trace else ['--latency'] if args.latency
-              else [] if args.verify_deep or args.walk or args.hwtest else ['--stall']),
+              else [] if args.verify_deep or args.walk or args.hwtest or args.no_profiler else ['--stall']),
             '--test-exit', *([] if args.human else ['--autoplay', run_dir / 'autoplay-wii.c2.bin']),
             *(['--next'] if args.next else []),
             *(['--no-delay-buttons'] if args.no_delay_buttons else []),
@@ -253,7 +253,7 @@ def wii_lines(run_dir):
     return [l[6:] for l in path.read_text(encoding='utf-8', errors='replace').splitlines() if l.startswith('wii | ')]
 
 
-def loader_cfg(run_dir, replays=False, codes=0, screen=0, diag_log=False, force_480p=False):
+def loader_cfg(run_dir, replays=False, codes=0, screen=0, diag_log=False, force_480p=False, usb=False, cheats=False):
     """The Wii's loader settings for a run (a NIN_CFG, CommonConfig.h): Slippi Replays on (it saves each game
     on the other drive), SlippWii's switches (bits 16-19: Slippi Dolphin's optional codes; 20: the log on the
     SD card) and the Screen setting (1 default, 2 16:9 to 73:60, 3 widescreen)."""
@@ -267,8 +267,11 @@ def loader_cfg(run_dir, replays=False, codes=0, screen=0, diag_log=False, force_
              # Force Progressive (and Force Widescreen with it, as the player's settings were whose 480p games
              # ran at half speed, 2026-11-11): the kernel then patches Melee's video modes to 480p whatever
              # cable is in. Over composite there is no picture to capture; the logs have the timing.
-             | (0x30 if force_480p else 0))
+             | (0x30 if force_480p else 0)
+             | (1 if cheats else 0))  # (Nintendont's Cheats: the kernel looks for a .gct as it patches the game)
     cfg[8:12] = flags.to_bytes(4, 'big')
+    if usb:
+        cfg[284:288] = (1).to_bytes(4, 'big')  # UseUSB: the game from the USB drive (the same path)
     if screen:
         cfg[288 + 6 * 4:288 + 7 * 4] = screen.to_bytes(4, 'big')  # MeleeCodeOptions[MELEE_CODES_SCREEN_OPTION_ID]
     path = run_dir / 'nincfg-run.bin'
@@ -568,6 +571,9 @@ def parser():
                          "32 Quick Chat off; 64 Quick Chat in Direct only; 128 Team Indicators")
     ap.add_argument('--screen', type=int, default=0, choices=[0, 1, 2, 3],
                     help="the loader's Screen setting: 1 default, 2 16:9 to 73:60, 3 widescreen (0: as the base settings)")
+    ap.add_argument('--no-profiler', action='store_true', help="no stall profiler (tools/ppc/stall.s) in the test build: its report every 300 refreshes, and the reports a rollback sets off, delay the game's next frame (2026-11-20: a third of the slow frames came right after one)")
+    ap.add_argument('--usb', action='store_true', help="the game from the USB drive (the SD card's game path)")
+    ap.add_argument('--cheats', action='store_true', help="Nintendont's Cheats switch on (the kernel looks for a .gct)")
     ap.add_argument('--diag-log', action='store_true',
                     help="the loader's Diagnostic Log switch: the kernel's log goes to the SD card (/slippwii/logs/)")
     ap.add_argument('--wii-ip', default=os.environ.get('SLIPPWII_WII_IP'),
@@ -611,6 +617,7 @@ def parser():
     ap.add_argument('--release-engine', action='store_true',
                     help="with --human: the player's engine (-O2, no record), as in the beta, not the traced one")
     ap.add_argument('--no-delay-buttons', action='store_true', help='no delay buttons on the CSS (blind.py)')
+    ap.add_argument('--grabby', action='store_true', help='both bots grab: go to the opponent, grab, pummel, throw, mash out')
     ap.add_argument('--plain-bot', action='store_true', help="the bot's stick is still: about a third of a person's input changes")
     ap.add_argument('--capture', action='store_true', help='record the video output of the Wii (decode_marker.py reads it)')
     ap.add_argument('--no-mirror', action='store_true',
@@ -748,8 +755,9 @@ def main():
         # the loader makes the next version's menu files from the disc in their own folder of the card, as a
         # release's does in /slippwii (tools/sweep/push_next_files.py put the release's files there)
         boot += ['--first-arg', 'slippwii-files-root=/slippwii-next']
-    if (args.replays or args.codes or args.screen or args.diag_log or args.force_480p) and not args.no_boot:
-        boot += ['--cfg', loader_cfg(run_dir, args.replays, args.codes, args.screen, args.diag_log, args.force_480p)]
+    if (args.replays or args.codes or args.screen or args.diag_log or args.force_480p or args.usb or args.cheats) and not args.no_boot:
+        boot += ['--cfg', loader_cfg(run_dir, args.replays, args.codes, args.screen, args.diag_log, args.force_480p,
+                                     args.usb, args.cheats)]
     procs.append(start('watch', [sys.executable, '-u', ROOT / 'tools/online_selftest.py', 'watch', *boot,
                                  '--wii-ip', args.wii_ip, '--timeout', args.timeout_min * 60], run_dir))
     if args.capture:

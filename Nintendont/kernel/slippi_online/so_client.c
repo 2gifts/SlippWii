@@ -207,8 +207,15 @@ static void set_state(SoClientState state)
 
 static void set_error(const char *text)
 {
+	static u8 reported;
 	strlcpy(c.error, text, sizeof(c.error));
 	set_state(SO_CLIENT_ERROR);
+	/* (a report: written now, out of a game, and ended; three a boot at most, a player may try again
+	 * and again) */
+	if (reported < 3) {
+		reported++;
+		so_logfile_event("connect", text, 1);
+	}
 }
 
 static void stop_all(void)
@@ -403,62 +410,94 @@ static void update_status(void)
 		so_set_status("SO %s", so_client_state_name(c.state));
 }
 
-/* The log on the SD card (so_logfile.c): what is pending is written here, off the game's loop. A match
- * with no pad poll for 5 s has hung (Slippi's own waits keep polling): it leaves a file as a crash does,
- * which sends a report where a hang sends none. With the Diagnostic Log on, a match also says every 5 s
- * how it goes, and after 1 s that it has stopped: a game that hangs or is switched off leaves its last
- * seconds on the card. */
-#define STOPPED_MS 1000		/* said, with the Diagnostic Log on */
-#define HUNG_MS 5000		/* a file, with it on or off */
-static void logfile_tick(int now_anyway)
+/* The log on the SD card (so_logfile.c) and the problems it reports, looked at by the kernel's lowest
+ * thread (so_diag.c, every 100 ms), never the network thread: a card's write cannot hold up an input.
+ * Nothing is written in a match or while the disc is busy (logfile_quiet), but a crash's file. In a
+ * match, by the game's polls (one a frame; Slippi's own waits keep polling):
+ *  - none for FREEZE_MS: where the kernel stands is said at once (so_diag_where: the disc, the card's
+ *    lock, the threads, the network), and when the game goes on, a freeze report;
+ *  - none for HUNG_MS: a hang, its file at once (a hang sends no report: the game has stopped).
+ * And at any time: the card's failed reads (ISO.c) or a disc command over half a second, a report. */
+#define FREEZE_MS 1000
+#define HUNG_MS 5000
+/* (a freeze's start, given; or how long ago it was) */
+static u32 frozen_ms(u32 since)
 {
-	static u32 checked_ms, said_ms, polls, skips;
-	static u8 stopped, hung, polled;	/* (polled: this match has had polls) */
-	u32 age = so_exi_poll_age_ms(), now = so_time_ms();
-	if (now - checked_ms >= 100) {
-		int diag = so_logfile_diag();
-		checked_ms = now;
-		if (age < 300)
-			stopped = hung = 0;
-		if (so_exi_in_match()) {
-			/* (a match's scene is there before its first poll, and the last poll then is the game
-			 * before's: only a match that has had polls can have stopped) */
-			if (age < 300)
-				polled = 1;
-			if (diag && polled && age >= STOPPED_MS && !stopped) {
-				stopped = 1;
-				so_log("diag: the game has stopped: no pad poll for %u ms in a match", (unsigned)age);
-				so_logfile_now();
+	static u32 start;
+	if (since)
+		start = since;
+	return since ? 0 : so_time_ms() - start;
+}
+
+static int logfile_quiet(void)
+{
+	/* (not from the moment every player has picked: the versus screen and the game load next, and a
+	 * write held them up, 3.5 frames of the PC's wait a game with the Diagnostic Log, 2026-11-18) */
+	/* (nor while the prefetch reads the next game's files: a write held it up, and the game's load then
+	 * read from the card what it would have found in the scratch: 13 frames of the PC's wait a game) */
+	return !so_exi_in_match() && !so_exi_game_coming() && so_exi_poll_age_ms() >= 300 && so_disc_idle_ms() >= 300 &&
+		so_pf_idle_ms() >= 300 && !so_fs_wanted();
+}
+
+void so_client_log_tick(void)
+{
+	static u32 said_ms, polls, skips, failed_seen, slow_seen, disc_said;
+	static u8 frozen, hung, polled;	/* (polled: this match has had polls) */
+	u32 age = so_exi_poll_age_ms(), now = so_time_ms(), failed, slow;
+	char text[100];
+	so_logfile_quiet = logfile_quiet;
+	if (so_exi_in_match()) {
+		/* (a match's scene is there before its first poll, and the last poll then is the game
+		 * before's: only a match that has had polls can have stopped) */
+		if (age < 300) {
+			polled = 1;
+			if (frozen && !hung) {
+				so_snprintf(text, sizeof(text), "the game stopped for %u ms in a match, then went on", (unsigned)frozen_ms(0));
+				so_logfile_event("freeze", text, 0);	/* (the report ends with the game) */
 			}
-			if (polled && age >= HUNG_MS && !hung) {
-				hung = 1;
-				so_log("the game has hung: no pad poll for %u ms in a match", (unsigned)age);
-				so_exi_report_last();	/* (its last polls, and the engine's last captures and loads) */
-				so_logfile_crash();
-			}
-			if (diag && now - said_ms >= 5000) {
-				SoExiStats st;
-				so_exi_stats(&st);
-				if (said_ms && now - said_ms < 6000) {
-					u32 writes, longest, all;
-					so_logfile_stats(&writes, &longest, &all);
-					so_log("diag: a match's last 5 s: %u polls, %u of them held for the opponent's input, ping %u ms; "
-						"the card's writes so far %u, the longest %u ms, %u ms in all", (unsigned)(st.b0_polls - polls),
-						(unsigned)(st.b0_skips - skips), (unsigned)(so_np_ping_us(0) / 1000), (unsigned)writes,
-						(unsigned)(longest / 1000), (unsigned)(all / 1000));
-				}
-				polls = st.b0_polls;
-				skips = st.b0_skips;
-				said_ms = now;
-			}
-		} else {
-			said_ms = 0;
-			polled = 0;
+			frozen = hung = 0;
 		}
+		if (polled && age >= FREEZE_MS && !frozen && so_exi_game_running()) {
+			frozen = 1;
+			frozen_ms(now - age);
+			so_log("the game has stopped: no pad poll for %u ms in a match; where things stand:", (unsigned)age);
+			so_diag_where();
+		}
+		if (polled && age >= HUNG_MS && !hung && so_exi_game_running()) {
+			hung = 1;
+			so_exi_report_last();	/* (its last polls, and the engine's last captures and loads) */
+			so_snprintf(text, sizeof(text), "no pad poll for %u ms in a match: the game has hung", (unsigned)age);
+			so_logfile_crash();
+			so_logfile_event("hang", text, 0);
+		}
+		if (so_logfile_diag() && now - said_ms >= 5000) {
+			SoExiStats st;
+			so_exi_stats(&st);
+			if (said_ms && now - said_ms < 6000)
+				so_log("diag: a match's last 5 s: %u polls, %u of them held for the opponent's input, ping %u ms",
+					(unsigned)(st.b0_polls - polls), (unsigned)(st.b0_skips - skips), (unsigned)(so_np_ping_us(0) / 1000));
+			polls = st.b0_polls;
+			skips = st.b0_skips;
+			said_ms = now;
+		}
+	} else {
+		said_ms = 0;
+		polled = frozen = hung = 0;
 	}
-	so_exi_desync_service();
-	so_exi_start_watch();
-	so_logfile_service(age < 300, now_anyway);
+	/* (one report a boot, at the first; after it a line at most every 10 s: a dying card fails often) */
+	so_disc_counters(&failed, &slow);
+	if ((failed != failed_seen || slow != slow_seen) && (!disc_said || now - disc_said >= 10000)) {
+		so_snprintf(text, sizeof(text), "%u reads of the card failed, %u disc commands took over half a second (this boot)",
+			(unsigned)failed, (unsigned)slow);
+		failed_seen = failed;
+		slow_seen = slow;
+		if (!disc_said)
+			so_logfile_event("disc", text, !so_exi_in_match());
+		else
+			so_log("disc: %s", text);
+		disc_said = now | 1;
+	}
+	so_logfile_service(logfile_quiet(), 0);
 }
 
 /* The kernel is closing down: no more SD card writes (so_client_stop), then
@@ -471,13 +510,13 @@ static u32 NetworkThread(void *unused)
 	(void)unused;
 	for (;;) {
 		if (stopping && !stopped_io) {
-			logfile_tick(1);	/* (the card's last write) */
+			so_logfile_service(1, 1);	/* (the card's last write: the game is over) */
 			stopped_io = 1;
 		}
 		if (flush_asked) {
 			forward_logs(1);
 			if (!stopped_io)
-				logfile_tick(1);
+				so_logfile_service(1, 1);
 			flush_asked = 0;
 		}
 		if (closing) {
@@ -541,7 +580,8 @@ static u32 NetworkThread(void *unused)
 		save_rumble();
 		save_ping_display();
 		save_latest_version();
-		logfile_tick(0);
+		so_exi_desync_service();	/* (its lines; the card's writes are so_client_log_tick's) */
+		so_exi_start_watch();
 	}
 	return 0;
 }

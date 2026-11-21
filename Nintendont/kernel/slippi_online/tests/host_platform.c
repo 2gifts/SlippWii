@@ -154,6 +154,8 @@ int so_append_file(const char *path, const void *buf, u32 size, int create)
 
 void so_make_dir(const char *path) { (void)path; }
 int so_platform_info(char *out, int size) { return so_snprintf(out, size, "a test's console\n"); }
+u32 so_disc_idle_ms(void) { return 1000; }
+void so_disc_counters(u32 *failed, u32 *slow) { *failed = 2; *slow = 1; }
 int so_diag_log_setting(void) { return host_diag_log; }
 int so_quick_chat_setting(void) { return 1; }
 

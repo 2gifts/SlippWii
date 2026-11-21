@@ -58,6 +58,8 @@ u32 DI_MessageQueue = 0xFFFFFFFF;
 static u8 *DI_MessageHeap = NULL;
 bool DI_IRQ = false;
 static u32 di_started;	// Slippi Online: when the command in progress was taken (HW_TIMER)
+static u32 di_done;	// Slippi Online: when the last one ended (DIIdleMs)
+u32 di_slow_commands;	// Slippi Online: commands that took over half a second (the problem reports)
 u32 DI_Thread = 0;
 s32 DI_Handle = -1;
 u64 ISOShift64 = 0;
@@ -355,10 +357,11 @@ void DIInterrupt()
 	// Slippi Online: Melee's disc library gives a command 10 s, then masks the disc's interrupt for
 	// good (its AlarmHandlerForTimeout): the next file never loads. A command that took a good part
 	// of that is worth a line.
-	if (DI_IRQ == true && TimerDiffTicks(di_started) > 1898437 / 2)
+	if (DI_IRQ == true && TimerDiffTicks(di_started) > 1898437 / 2 && ++di_slow_commands)
 		so_log("di: a command took %u ms (command %08x, %u bytes)", (unsigned)(TimerDiffTicks(di_started) / 1898),
 			(unsigned)read32(DI_CMD_0), (unsigned)read32(DI_CMD_0 + 8));
 	DI_IRQ = false;
+	di_done = read32(HW_TIMER);
 }
 
 static void TRIReadMediaBoard( u32 Buffer, u32 Offset, u32 Length )
@@ -879,7 +882,9 @@ u32 DIReadThread(void *arg)
 			case IOS_IOCTL:
 				if(di_msg->ioctl.command == 2)
 				{
+					so_fs_lock();	// Slippi Online: the drive is shared with the EXI device's file writes
 					USBStorage_ReadSectors(read32(HW_TIMER) % usb_s_cnt, 1, DummyBuffer);
+					so_fs_unlock();
 					mqueue_ack( di_msg, 0 );
 					break;
 				}
@@ -929,6 +934,15 @@ u32 DIReadThread(void *arg)
 }
 
 /* (diagnostics, so_diag.c: where a disc read stands, for a game that waits on one for good) */
+/* (Slippi Online: the problem reports' writes to the card wait for the disc to be idle this long, so they
+ * never hold up a load: 0 while a command is in progress) */
+u32 DIIdleMs(void)
+{
+	if (DI_IRQ == true)
+		return 0;
+	return TimerDiffTicks(di_done) / 1898;
+}
+
 void DIDiag(void)
 {
 	u32 elapsed, left = ReadSpeed_Left(&elapsed);

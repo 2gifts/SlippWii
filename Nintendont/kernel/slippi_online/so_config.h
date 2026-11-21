@@ -186,6 +186,8 @@ typedef struct {
 	u8 multi_stream;	/* more than one opponent: the game's replay data goes to a mirroring PC a send a frame (1),
 				 * one send in this many ms (2 to 250), or not while the game runs (0)
 				 * (SlippiNetwork.c, streamHolds) */
+	u8 multi_hold_ms;	/* more than one opponent, waiting: an input late by up to this is waited for within
+				 * the refresh, not a refresh later (so_exi.c, multi_hold) */
 	u8 test_multi_rollback;	/* tests: roll back against more than one opponent too (so_exi.c, rollback_wanted) */
 	/* tests: every 5 s, the opponent's inputs held back this long, as in a
 	 * lag spike: the game predicts to the rollback limit, waits there, then
@@ -195,6 +197,9 @@ typedef struct {
 	/* tests: at this frame the sender thread sticks, as a sendto that never
 	 * returns has been seen to; the spare must carry the game on */
 	u16 test_stuck_frame;
+	u16 test_mute_frame;	/* tests: from this frame no pad is sent: the opponent gives the game up (a lost connection) */
+	u16 test_freeze_frame;	/* tests: at this frame the kernel's main loop stops for 2 s (a freeze: no poll answered,
+				 * no disc read; so_client_log_tick's report) */
 	u16 test_hang_frame;	/* tests: at this frame the PowerPC hangs (exit.s) */
 	u8 test_logfile_dump;	/* tests: at the online CSS, the newest file of the log's folder on the card is read back and its
 				 * first lines go to the PC's log: what a boot before wrote is really there (so_exi.c, logfile_dump).
@@ -217,6 +222,10 @@ typedef struct {
 	u8 test_scratch_junk;	/* tests: the engine's part of the PPC scratch filled with junk at boot, as MEM2
 				 * may hold after a power cut or another app (so_exi_scratch_boot) */
 	u8 test_no_scratch;	/* tests: the disc cache keeps the scratch, as next to a big memory card */
+	u16 test_disc_fail;	/* tests: every Nth read of the game's file from the card fails once, as a card's
+				 * bad moment does (ISO.c: the read is tried again) */
+	u8 test_disc_no_retry;	/* tests: with test_disc_fail, a failed read as before 1.8.1: not tried again, FatFS's
+				 * error kept, the next read from where this one should have ended */
 	u16 test_mark_page;	/* tests: this MEM1 page's mark is set at boot, as a session before may have left it
 				 * (so_exi_scratch_boot; 1017, 0x803F9: the HUD's table, written at the countdown's end) */
 	/* How long a poll waits for an input not here yet before the game predicts it:

@@ -920,7 +920,7 @@ static void test_disc_files(void)
 
 static void test_logfile(void)
 {
-	static u8 arena[0x8000] __attribute__((aligned(32)));
+	static u8 arena[0x10000] __attribute__((aligned(32)));
 	char line[160];
 	const char *f;
 	int i;
@@ -948,23 +948,23 @@ static void test_logfile(void)
 	test_set_time_us(0);
 	so_logfile_init(0);
 	CHECK(!so_logfile_diag());
-	for (i = 0; i < 400; i++) {
+	for (i = 0; i < 900; i++) {
 		so_snprintf(line, sizeof(line), "%d.000 line %d of the boot, with 10.0.0.%d in it", i, i, i % 250);
 		so_logfile_line(line);
 	}
-	CHECK_INT(so_logfile_service(0, 1), 0);	/* (no crash, no switch: no file) */
+	CHECK_INT(so_logfile_service(1, 1), 0);	/* (no crash, no switch: no file) */
 	CHECK(test_log_file("/slippwii/logs/number.txt", NULL) == NULL);
-	so_logfile_line("400.000 CRASH: exception 2 at 8005bc70");
+	so_logfile_line("900.000 CRASH: exception 2 at 8005bc70");
 	so_logfile_crash();
-	CHECK(so_logfile_service(1, 0) > 0);
+	CHECK(so_logfile_service(0, 0) > 0);
 	f = test_log_file("/slippwii/logs/crash-1.txt", NULL);
 	CHECK(f != NULL);
 	if (f) {
 		const char *body = strstr(f, "\n\n");
 		CHECK(strstr(f, "SlippWii crash report, number 1 on this card\n") == f);
 		CHECK(strstr(f, "a test's console\n") != NULL);
-		CHECK(strstr(f, "400.000 CRASH: exception 2 at 8005bc70\n") != NULL);
-		CHECK(strstr(f, "399.000 line 399 of the boot, with 10.0.x.x in it\n") != NULL);
+		CHECK(strstr(f, "900.000 CRASH: exception 2 at 8005bc70\n") != NULL);
+		CHECK(strstr(f, "899.000 line 899 of the boot, with 10.0.x.x in it\n") != NULL);
 		CHECK(strstr(f, "line 0 of the boot") == NULL);	/* (older than the ring) */
 		CHECK(strstr(f, "10.0.0.") == NULL);
 		CHECK(strstr(f, "lines are missing") == NULL);
@@ -973,41 +973,43 @@ static void test_logfile(void)
 	}
 	CHECK_STR(test_log_file("/slippwii/logs/number.txt", NULL), "1\n");
 	CHECK(strstr(test_log_file("/slippwii/logs/newest.txt", NULL), "crash-1.txt (number 1)") != NULL);
-	so_logfile_line("401.000 exit: done");	/* (what comes after goes on into it) */
-	CHECK(so_logfile_service(1, 1) > 0);
-	CHECK(strstr(test_log_file("/slippwii/logs/crash-1.txt", NULL), "401.000 exit: done\n") != NULL);
+	so_logfile_line("901.000 exit: done");	/* (what comes after goes on into it) */
+	CHECK(so_logfile_service(0, 1) > 0);
+	CHECK(strstr(test_log_file("/slippwii/logs/crash-1.txt", NULL), "901.000 exit: done\n") != NULL);
 
-	/* the switch on: every line; between games a write a second, in one every 5 s, at once when asked */
+	/* the switch on: every line; between games a write a second (at once when asked), never in a game */
 	so_logfile_test_reset();
 	CHECK_INT(so_alloc_init(arena, sizeof(arena)), 0);
 	test_set_time_us(0);
 	so_logfile_init(1);
 	CHECK(so_logfile_diag());
 	so_logfile_line("0.100 first");
-	CHECK(so_logfile_service(0, 0) > 0);
+	CHECK(so_logfile_service(1, 0) > 0);
 	f = test_log_file("/slippwii/logs/log-2.txt", NULL);
 	CHECK(f && strstr(f, "SlippWii diagnostic log, number 2 on this card\n") == f && strstr(f, "0.100 first\n"));
 	so_logfile_line("0.200 second");
-	CHECK_INT(so_logfile_service(0, 0), 0);
-	test_advance_us(1100000);
-	CHECK(so_logfile_service(0, 0) > 0);
-	so_logfile_line("1.300 in a game");
-	test_advance_us(1100000);
 	CHECK_INT(so_logfile_service(1, 0), 0);
-	test_advance_us(4000000);
+	test_advance_us(1100000);
 	CHECK(so_logfile_service(1, 0) > 0);
+	so_logfile_line("1.300 in a game");
+	test_advance_us(6000000);
+	CHECK_INT(so_logfile_service(0, 0), 0);
+	CHECK_INT(so_logfile_service(0, 1), 0);
 	so_logfile_line("6.500 poll gap");
 	so_logfile_now();
-	CHECK(so_logfile_service(1, 0) > 0);
-	CHECK(strstr(test_log_file("/slippwii/logs/log-2.txt", NULL), "6.500 poll gap\n") != NULL);
+	CHECK_INT(so_logfile_service(0, 0), 0);
+	CHECK(strstr(test_log_file("/slippwii/logs/log-2.txt", NULL), "1.300 in a game") == NULL);
+	CHECK(so_logfile_service(1, 0) > 0);	/* (the game over: what it asked for, still wanted) */
+	f = test_log_file("/slippwii/logs/log-2.txt", NULL);
+	CHECK(f && strstr(f, "1.300 in a game\n") && strstr(f, "6.500 poll gap\n"));
 	/* more than the ring holds between two writes: said, and on from a whole line */
-	for (i = 0; i < 900; i++) {
+	for (i = 0; i < 1600; i++) {
 		so_snprintf(line, sizeof(line), "7.%03d a burst's line %d", i, i);
 		so_logfile_line(line);
 	}
 	CHECK(so_logfile_service(1, 1) > 0);
 	f = test_log_file("/slippwii/logs/log-2.txt", NULL);
-	CHECK(f && strstr(f, "(lines are missing here") != NULL && strstr(f, "a burst's line 899\n") != NULL);
+	CHECK(f && strstr(f, "(lines are missing here") != NULL && strstr(f, "a burst's line 1599\n") != NULL);
 	CHECK(f && strstr(f, "a burst's line 0\n") == NULL);
 
 	/* no card: nothing more is tried, and nothing breaks */
@@ -1016,7 +1018,7 @@ static void test_logfile(void)
 	host_log_files_fail = 1;
 	so_logfile_init(1);
 	so_logfile_line("0.100 no card");
-	CHECK_INT(so_logfile_service(0, 1), 0);
+	CHECK_INT(so_logfile_service(1, 1), 0);
 	CHECK(!so_logfile_diag());
 	host_log_files_fail = 0;
 
@@ -1028,7 +1030,7 @@ static void test_logfile(void)
 	so_logfile_init(0);
 	so_logfile_line("0.100 PANIC");
 	so_logfile_crash();
-	CHECK(so_logfile_service(0, 0) > 0);
+	CHECK(so_logfile_service(1, 0) > 0);
 	f = test_log_file("/slippwii/logs/crash-1.txt", NULL);
 	CHECK(f && strstr(f, "number 9 on this card") != NULL);
 
@@ -1042,9 +1044,15 @@ static void test_logfile(void)
 	so_logfile_line("10.000 np: selections from player 0: char 2/1 (picked), team 1, stage 31");
 	so_logfile_line("20.000 exi: checksum differs at frame 500: ours 00010002, player 2's 00010040");
 	so_logfile_report_end();	/* (no desync: nothing to end, and no file) */
-	CHECK_INT(so_logfile_service(1, 1), 0);
+	CHECK_INT(so_logfile_service(0, 1), 0);
 	so_logfile_desync();
-	CHECK(so_logfile_service(1, 0) > 0);	/* (at once, in the game) */
+	/* (not in the game: its writes would hold the network and the disc for as long as the card takes) */
+	CHECK_INT(so_logfile_service(0, 0), 0);
+	test_advance_us(6000000);
+	CHECK_INT(so_logfile_service(0, 0), 0);
+	CHECK(test_log_file("/slippwii/logs/desync-1.txt", NULL) == NULL);
+	CHECK(so_logfile_path() == NULL);
+	CHECK(so_logfile_service(1, 0) > 0);	/* (the game's polls have stopped: now) */
 	f = test_log_file("/slippwii/logs/desync-1.txt", NULL);
 	CHECK(f && strstr(f, "SlippWii desync report, number 1 on this card\n") == f);
 	CHECK(f && strstr(f, "team 1, stage 31\n") && strstr(f, "checksum differs at frame 500"));
@@ -1053,16 +1061,18 @@ static void test_logfile(void)
 	CHECK(so_logfile_path() != NULL);
 	so_logfile_line("30.000 game over: 900 frames");
 	so_logfile_report_end();
-	CHECK(so_logfile_service(1, 0) > 0);	/* (the game's last lines, at once) */
+	CHECK_INT(so_logfile_service(0, 0), 0);	/* (still in the game's scene) */
+	CHECK(so_logfile_service(1, 0) > 0);	/* (the game's last lines) */
 	CHECK(strstr(test_log_file("/slippwii/logs/desync-1.txt", NULL), "30.000 game over: 900 frames\n") != NULL);
 	CHECK(so_logfile_path() == NULL);
 	so_logfile_line("40.000 the next game's line");
 	test_advance_us(6000000);
-	CHECK_INT(so_logfile_service(1, 1), 0);
+	CHECK_INT(so_logfile_service(0, 1), 0);
 	CHECK(strstr(test_log_file("/slippwii/logs/desync-1.txt", NULL), "the next game") == NULL);
 	/* a second desync: a new file, from the lines after the first one's */
 	so_logfile_line("50.000 exi: checksum differs at frame 77");
 	so_logfile_desync();
+	CHECK_INT(so_logfile_service(0, 0), 0);	/* (in the game: not yet) */
 	CHECK(so_logfile_service(1, 0) > 0);
 	f = test_log_file("/slippwii/logs/desync-2.txt", NULL);
 	CHECK(f && strstr(f, "number 2 on this card") && strstr(f, "40.000 the next game's line\n") && strstr(f, "frame 77\n"));
@@ -1071,9 +1081,9 @@ static void test_logfile(void)
 	so_logfile_line("60.000 CRASH: exception 2");
 	so_logfile_crash();
 	so_logfile_report_end();
-	CHECK(so_logfile_service(1, 0) > 0);
+	CHECK(so_logfile_service(0, 0) > 0);
 	so_logfile_line("61.000 exit: done");
-	CHECK(so_logfile_service(1, 1) > 0);
+	CHECK(so_logfile_service(0, 1) > 0);
 	f = test_log_file("/slippwii/logs/desync-2.txt", NULL);
 	CHECK(f && strstr(f, "60.000 CRASH: exception 2\n") && strstr(f, "61.000 exit: done\n"));
 	CHECK(test_log_file("/slippwii/logs/crash-3.txt", NULL) == NULL);
@@ -1086,14 +1096,14 @@ static void test_logfile(void)
 	so_logfile_desync();
 	so_logfile_line("2.000 game over");
 	so_logfile_report_end();
-	CHECK(so_logfile_service(0, 0) > 0);
+	CHECK(so_logfile_service(1, 0) > 0);
 	f = test_log_file("/slippwii/logs/desync-1.txt", NULL);
 	CHECK(f && strstr(f, "frame 9\n") && strstr(f, "2.000 game over\n"));
 	CHECK(so_logfile_path() == NULL);
 	/* a crash after a desync's file is done: a crash file of its own */
 	so_logfile_line("3.000 PANIC");
 	so_logfile_crash();
-	CHECK(so_logfile_service(0, 0) > 0);
+	CHECK(so_logfile_service(1, 0) > 0);
 	f = test_log_file("/slippwii/logs/crash-2.txt", NULL);
 	CHECK(f && strstr(f, "SlippWii crash report, number 2") == f && strstr(f, "3.000 PANIC\n") && !strstr(f, "frame 9"));
 	/* the switch on: a desync's lines are in the log's file, and it goes on after the game */
@@ -1103,6 +1113,7 @@ static void test_logfile(void)
 	so_logfile_init(1);
 	so_logfile_line("1.000 exi: checksum differs at frame 9");
 	so_logfile_desync();
+	CHECK_INT(so_logfile_service(0, 0), 0);
 	CHECK(so_logfile_service(1, 0) > 0);
 	so_logfile_report_end();
 	so_logfile_line("2.000 the next game's line");
@@ -1110,6 +1121,45 @@ static void test_logfile(void)
 	f = test_log_file("/slippwii/logs/log-1.txt", NULL);
 	CHECK(f && strstr(f, "frame 9\n") && strstr(f, "2.000 the next game's line\n"));
 	CHECK(test_log_file("/slippwii/logs/desync-1.txt", NULL) == NULL);
+	so_logfile_event("freeze", "the game stopped for 1200 ms in a match, then went on", 0);
+	so_logfile_service(1, 1);	/* (the lines are the host log's, not the ring's: the file and the index are what count) */
+	CHECK(strstr(test_log_file("/slippwii/logs/reports.txt", NULL), "1 log-1.txt freeze: the game stopped for 1200 ms") != NULL);
+	CHECK(test_log_file("/slippwii/logs/freeze-2.txt", NULL) == NULL);	/* (the log's file has it) */
+
+	/* a problem's report: its kind names the file, its verdict leads it, reports.txt lists it */
+	test_log_files_reset();
+	so_logfile_test_reset();
+	CHECK_INT(so_alloc_init(arena, sizeof(arena)), 0);
+	so_logfile_init(0);
+	so_logfile_line("5.000 the game has stopped: no pad poll for 1000 ms in a match");
+	so_logfile_event("freeze", "the game stopped for 2400 ms in a match, then went on", 0);
+	CHECK_INT(so_logfile_service(0, 1), 0);	/* (in a match: not yet) */
+	CHECK(so_logfile_service(1, 0) > 0);
+	f = test_log_file("/slippwii/logs/freeze-1.txt", NULL);
+	CHECK(f && strstr(f, "SlippWii freeze report, number 1 on this card\n") == f);
+	CHECK(f && strstr(f, "VERDICT freeze: the game stopped for 2400 ms in a match, then went on\n"));
+	CHECK(f && strstr(f, "its failed reads 2, disc commands over half a second 1"));
+	CHECK(f && strstr(f, "5.000 the game has stopped"));
+	CHECK(strstr(test_log_file("/slippwii/logs/reports.txt", NULL), "1 freeze-1.txt freeze: the game stopped for 2400 ms") != NULL);
+	so_logfile_line("9.000 game over");
+	so_logfile_report_end();
+	CHECK(so_logfile_service(1, 0) > 0);
+	CHECK(so_logfile_path() == NULL);
+	/* a connection that failed: out of a game, written and ended at once; codes masked */
+	so_logfile_event("connect", "Could not reach the Slippi server as ABCD#123", 1);
+	so_logfile_service(1, 0);	/* (the lines are the host log's, not the ring's: the file and the index are what count) */
+	f = test_log_file("/slippwii/logs/connect-2.txt", NULL);
+	CHECK(f && strstr(f, "VERDICT connect: Could not reach the Slippi server as A***#***\n"));
+	CHECK(so_logfile_path() == NULL);
+	f = test_log_file("/slippwii/logs/reports.txt", NULL);
+	CHECK(f && strstr(f, "1 freeze-1.txt freeze:") && strstr(f, "2 connect-2.txt connect: Could not reach"));
+	CHECK(f && !strstr(f, "ABCD"));
+	/* a hang: a crash's file, at once, in the match; named a crash, the hang its verdict */
+	so_logfile_crash();
+	so_logfile_event("hang", "no pad poll for 5000 ms in a match: the game has hung", 0);
+	so_logfile_service(0, 0);	/* (the lines are the host log's, not the ring's: the file and the index are what count) */
+	f = test_log_file("/slippwii/logs/crash-3.txt", NULL);
+	CHECK(f && strstr(f, "SlippWii crash report, number 3") == f && strstr(f, "VERDICT hang: no pad poll for 5000 ms"));
 	test_log_files_reset();
 	so_logfile_test_reset();
 }

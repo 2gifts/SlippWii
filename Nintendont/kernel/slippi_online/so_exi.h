@@ -92,6 +92,10 @@ u32 so_exi_poll_count(void);
 /* How long ago the last one was, in ms (0xFFFFFFFF: there has been none) */
 u32 so_exi_poll_age_ms(void);
 /* 1 while the game is in an online match's scene (a word of its memory) */
+/* A game's frames have begun and its end is not logged yet (the scene of a match lasts past it) */
+int so_exi_game_running(void);
+/* Every player has picked: the game's files are about to load (until its first poll) */
+int so_exi_game_coming(void);
 int so_exi_in_match(void);
 
 #endif

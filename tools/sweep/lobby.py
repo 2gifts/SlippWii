@@ -74,7 +74,8 @@ def autoplay_codes(run_dir, plan, args):
 
 def build_wii(run_dir, plan, args, ip):
     """The Wii's test build, as run_sweep.py makes it (its bot is ours)."""
-    opts = ['--wii-ip', args.wii_ip, '--kernel', f'selftest_code={LOBBY_CODE}']
+    opts = ['--wii-ip', args.wii_ip, '--kernel', f'selftest_code={LOBBY_CODE}', '--no-profiler']
+    # (no stall profiler: a player's build has none, and with it the boot codes no longer fit, 2026-11-20)
     if args.net:
         opts += ['--kernel', 'lan_ip=127.0.0.2']  # the address the others are given for it: the relay's
     if args.delay != 2:
@@ -85,6 +86,8 @@ def build_wii(run_dir, plan, args, ip):
         opts += ['--kernel', 'test_multi_rollback=1']
     for kv in args.kernel:
         opts += ['--kernel', kv]
+    if args.human:  # (a person plays the Wii: no bot, the player's engine; the lobby code is in its history)
+        opts += ['--human', '--release-engine']
     for b in args.boot_arg:
         opts += [f'--boot-arg={b}']
     if args.next:
@@ -272,6 +275,9 @@ def main():
     ap.add_argument('--rounds', type=int, default=3)
     ap.add_argument('--lras-s', type=int, default=40, help='seconds of play before each game is quit (0: never)')
     ap.add_argument('--seed', type=int, default=0)
+    ap.add_argument('--human', action='store_true',
+                    help="a person plays the Wii (Online Play, then the lobby's code from the history): the run lasts "
+                         "until --timeout-min or a file 'stop' in the run's folder, and quiet menus are no failure")
     ap.add_argument('--plain-bot', action='store_true', help="the bots' sticks are still")
     ap.add_argument('--wii-ip', default=None, help="the Wii's address; without it a fourth Dolphin copy plays its part")
     ap.add_argument('--wii-seat', type=int, default=4, choices=[1, 2, 3, 4], help='the port the first account gets')
@@ -439,7 +445,7 @@ def main():
                 break
             # (Party's games have no pause, so none is quit: each runs its 5 minutes)
             quiet = (330 if args.mode == 'party' else args.lras_s) + 240
-            if time.time() - last_change > quiet:
+            if time.time() - last_change > quiet and not args.human:
                 failure = f'no game started for {quiet} s (stuck in the menus?)'
                 break
             if (run_dir / 'stop').exists():

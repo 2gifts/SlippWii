@@ -84,6 +84,9 @@ static bool ISO_IsCISO = false;	// Set to 1 for CISO mode.
 /* (Slippi Online: how much the game reads from the drive, and how long it takes: the
  * kernel logs it at each game's start, so_exi.c) */
 u32 iso_reads, iso_read_bytes, iso_read_ticks, iso_cache_hits;
+u32 iso_read_errors;	/* Slippi Online: reads the card failed, each try (ISOReadDirectTimed) */
+#define ISO_READ_TRIES 4
+static bool iso_last_ok;	/* the last ISOReadDirect had all its bytes (ISOReadInto) */
 static void ISOReadDirectTimed(void *Buffer, u32 Length, u64 Offset64);
 extern u64 ISOShift64;
 IsoExtent iso_ext[ISO_EXTENTS];
@@ -126,6 +129,7 @@ static inline void ISOReadDirect(void *Buffer, u32 Length, u64 Offset64)
 
 static void ISOReadDirectTimed(void *Buffer, u32 Length, u64 Offset64)
 {
+	iso_last_ok = false;
 	if(ISOFileOpen == 0)
 		return;
 
@@ -133,20 +137,65 @@ static void ISOReadDirectTimed(void *Buffer, u32 Length, u64 Offset64)
 	if (!ISO_IsCISO)
 	{
 		// Standard ISO/GCM file.
-		if(LastOffset64 != Offset64)
+		/* Slippi Online: a read the card failed is tried again. FatFS keeps a file's
+		 * first error (FIL.err) and fails every later read of it at once, and the next
+		 * read went on from where this one should have ended (LastOffset64): one bad
+		 * read on the SD card, and every file the game loaded after it was garbage (a
+		 * player's logs, 1.7.0: HSD_ArchiveParse's "byte-order mismatch" between games,
+		 * three times, with the Diagnostic Log writing to the same card). */
+		int tries;
+		for (tries = 0; ; tries++)
 		{
+			FRESULT res = FR_OK;
+			if(LastOffset64 != Offset64 || tries)
+			{
+				if(wiiVCInternal)
+					WDVD_FST_LSeek( Offset64 );
+				else
+				{
+					if (!so_client_config() || !so_client_config()->test_disc_no_retry)
+						GameFile.err = 0;
+					res = f_lseek( &GameFile, Offset64 );
+				}
+			}
+			read = 0;
 			if(wiiVCInternal)
-				WDVD_FST_LSeek( Offset64 );
-			else
-				f_lseek( &GameFile, Offset64 );
+			{
+				sync_before_read( Buffer, Length );
+				read = WDVD_FST_Read( Buffer, Length );
+			}
+			else if (res == FR_OK)
+				res = f_read( &GameFile, Buffer, Length, &read );
+			{	/* tests: test_disc_fail, a read the card failed (half its bytes, then an error) */
+				static u32 n;
+				const SoConfig *config = so_client_config();
+				if (!wiiVCInternal && res == FR_OK && !tries && config && config->test_disc_fail &&
+				    ++n % config->test_disc_fail == 0)
+				{
+					read /= 2;
+					res = FR_DISK_ERR;
+					GameFile.err = (BYTE)FR_DISK_ERR;	/* (as FatFS's ABORT leaves it) */
+				}
+			}
+			if (res == FR_OK && read == Length)
+				break;
+			iso_read_errors++;
+			if (so_client_config() && so_client_config()->test_disc_no_retry)
+			{	/* tests: as before (the file's error kept, its place taken as reached) */
+				so_log("disc: a read failed: %u bytes at %08x, %u read, error %d (test: not tried again)",
+					(unsigned)Length, (unsigned)(Offset64 - ISOShift64), (unsigned)read, (int)res);
+				break;
+			}
+			so_log("disc: a read failed (try %d of %d): %u bytes at %08x, %u read, error %d",
+				tries + 1, ISO_READ_TRIES, (unsigned)Length, (unsigned)(Offset64 - ISOShift64),
+				(unsigned)read, (int)res);
+			if (tries + 1 >= ISO_READ_TRIES)
+			{
+				LastOffset64 = ~0ULL;	/* (where the file stands is not known: the next read seeks) */
+				return;
+			}
+			udelay(2000);
 		}
-		if(wiiVCInternal)
-		{
-			sync_before_read( Buffer, Length );
-			read = WDVD_FST_Read( Buffer, Length );
-		}
-		else
-			f_read( &GameFile, Buffer, Length, &read );
 	}
 	else
 	{
@@ -295,6 +344,7 @@ static void ISOReadDirectTimed(void *Buffer, u32 Length, u64 Offset64)
 	}
 
 	LastOffset64 = Offset64 + Length;
+	iso_last_ok = true;
 	//refresh read timeout
 	USBReadTimer = read32(HW_TIMER);
 }
@@ -418,7 +468,7 @@ bool ISOReadInto(void *Buffer, u32 Length, u32 Offset)
 	if (ISOFileOpen == 0)
 		return false;
 	ISOReadDirect(Buffer, Length, (u64)Offset + ISOShift64);
-	return true;
+	return iso_last_ok;	/* (Slippi Online: a read the card failed, after its tries, is no read) */
 }
 
 void ISOClose()
