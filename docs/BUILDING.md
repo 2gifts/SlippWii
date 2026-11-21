@@ -8,6 +8,18 @@ python tools/fetch_devkitpro.py      # a portable devkitPPC r47.1, devkitARM r66
 sh tools/build.sh                    # builds Nintendont: dist/sd/apps/SlippWii/boot.dol
 ```
 
+That builds with the game's codes as committed (`Nintendont/kernel/gecko/g_online_boot.bin`).
+**Rebuilding those codes** (`python tools/build_online_boot.py`: after a change to the rollback
+engine or anything else that runs inside Melee, and for every test build of the Wii harness) reads
+Slippi's own source, which is not in this repository. Clone it twice beside `tools/`:
+
+```sh
+git clone https://github.com/project-slippi/slippi-ssbm-asm slippi-ssbm-asm
+git -C slippi-ssbm-asm checkout fcf47f1          # the bootloader
+git clone https://github.com/project-slippi/slippi-ssbm-asm slippi-ssbm-asm-next
+git -C slippi-ssbm-asm-next checkout d0ce23a     # Slippi 3.7.0's codes: the offsets the engine uses
+```
+
 `make` can't handle spaces in paths, so if the path has one, `build.sh` maps the repository to drive
 `W:` (`subst`), and stops if `W:` already maps to another checkout. It builds with `-j1`: the upstream Makefile can compile `MeleeCodes.c` before the Gecko headers it
 includes have been generated.

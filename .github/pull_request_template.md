@@ -2,30 +2,36 @@
 
 <!-- One or two sentences: what someone on the Wii, or a PC player against a Wii, would notice. -->
 
-## Why
+## Why, and how it works
 
-<!-- The problem, and how you found it (a log, a measurement, an issue). If it's in
-docs/ALREADY_TRIED.md, what's different this time. -->
+<!-- The problem and the idea. If docs/FINDINGS.md has an entry on it, say what is different this
+time. -->
 
 ## Measurements against `main`
 
-<!-- As docs/TESTING.md describes. Same Wii, same nets, same seeds, both builds with --no-profiler.
-Delete the rows your change can't affect, and say why. -->
+<!-- docs/TESTING.md has the commands; tools/sweep/score.py prints this table. Same Wii, same nets,
+same seeds for both. Delete rows your change can't affect. No Wii? Leave the table out and say so
+below: the maintainer can run it. -->
 
-| | `main` | this change |
-|---|---|---|
-| Wii: slow frames (`game pacing`, polls over 20 ms), 30,5 / 45,5 | | |
-| PC player: rollbacks per minute, 30,5 / 45,5 | | |
-| PC player: average rollback depth, 45,5 | | |
-| PC player: halts at the rollback limit, unhealthy intervals | | |
-| Replays matching / games | | |
-| Input delay at 1 delay frame (latency probe), ms | | |
+| Net (one way, jitter) | | `main` | this change |
+|---|---|---|---|
+| 30,5 | Wii: slow frames (polls over 20 ms) / games | | |
+| 30,5 | PC: rollbacks per minute | | |
+| 45,5 | Wii: slow frames (polls over 20 ms) / games | | |
+| 45,5 | PC: rollbacks per minute | | |
+| 45,5 | PC: average rollback depth | | |
+| both | PC: halts per game, unhealthy intervals | | |
+| both | Games desynced | | |
+| 15,3 | Input delay check, 1 delay frame: reading -> retrace, median and 90% (ms) | | |
 
-Runs (folder names under `build/sweep/runs`, or attached logs):
+## What was tested, and what wasn't
+
+<!-- PC tests run; Wii runs done (folder names under build/sweep/runs, or attached logs); anything
+you couldn't run. If an AI agent did the work, say which parts you checked yourself. -->
 
 ## Checklist
 
-- [ ] Unit tests pass (`tests/run_tests.sh`, and `tools/rollback/test/run.py` if the engine changed)
-- [ ] Nothing changes offline play, when the controller is read, or the delay at 1 delay frame
+- [ ] The PC tests pass (`tests/run_tests.sh`; `tools/rollback/test/run.py` if the engine changed)
+- [ ] Offline play and the input delay at 1 delay frame are unchanged
 - [ ] One change, as simple as it can be
-- [ ] Docs updated if behaviour changed (`CHANGELOG.md` is updated by the maintainer at release)
+- [ ] Docs updated where behaviour changed; docs/FINDINGS.md if this tried something listed there

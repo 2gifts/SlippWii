@@ -1,147 +1,188 @@
 # Testing a change
 
-Every change is compared with `main`: the same Wii, the same simulated network, the same seeds, run
-one after the other. Absolute numbers vary between setups; the difference to `main` on the same
-setup is what counts.
+Every change is compared with `main`: the same Wii, the same simulated connection, the same seeds.
+Absolute numbers differ between setups; the difference to `main` on one setup is what counts. The
+maintainer's own changes go through the same runs.
+
+The Wii runs need hardware and an afternoon of setup. If that is out of reach, send your change
+with the PC tests and say what you couldn't run. The maintainer can run the rest on the reference
+Wii.
 
 ## What a change needs
 
 | The change touches | Needed |
 |---|---|
-| Anything | It builds; the unit tests pass; no desync |
-| Netcode, timing, the kernel's game loop, the rollback engine | The **Wii A/B** below |
-| Frame timing, the pad read, video, the delay | The **input delay check** below, as well |
-| Boot, exit, hangs, the drive, the SD card | One Wii run as a release has it (`--kernel test_control=0`) |
-| Teams or Party | Two or more lobbies with `lobby.py`: replays match, frames the Wii waited |
-| Loader menus, docs, tools only | Tests that cover it; a picture of the menu if it changed (`tools/menu_shot.py`) |
+| Anything | It builds; the PC tests pass; no desync |
+| Netcode, timing, the kernel's game loop, the rollback engine | The **A/B on a Wii** |
+| Frame timing, the pad read, video, the delay | The **input delay check** as well |
+| Boot, exit, hangs, the drive, the SD card | One run **as a release has it** |
+| Teams or Party | Two or more lobbies (below) |
+| The loader's menus, docs, tools | Whatever covers it; a picture of the menu if it changed (`tools/menu_shot.py`) |
 
-If you don't have the hardware for a Wii run, say so in the pull request. The maintainer can run it
-on the reference Wii, but it takes longer.
+## What counts as better
 
-## What "better" means
+**Must not get worse:**
+- The input delay at 1 delay frame: the same as `main`.
+- Desyncs: none.
+- Slow frames on the Wii (a frame shown twice, or late): no more than `main`.
 
-**Never worse:**
-- **Input delay at 1 delay frame:** the same as `main`. This was independently confirmed to equal
-  a tournament console, and it must stay that way.
-- **Desyncs:** none.
-- **Frames shown twice on the Wii** (slow frames): no more than `main`.
+**Better** is any of: fewer or shallower rollbacks for the PC player, fewer halts, fewer slow
+frames on the Wii, fewer frames waited. When a change helps one and costs another, show both: that
+is a judgment to make together.
 
-**Better:** fewer rollbacks for the PC player, shallower rollbacks, fewer halts, fewer slow frames,
-fewer frames waited. A change that helps one of these and costs another is a judgment call: show
-both.
+**Mind the noise.** On the reference setup, four runs of one build gave 1525 to 1749 rollbacks a
+minute at 30 ms one way. At 45 ms they gave 1808 to 1851, and runs had 8 to 22 slow frames each. A
+difference inside that spread needs more runs before it means anything.
 
-A difference smaller than the spread between two seeds of the same build is noise. At 45 ms one way
-the same build varies by about ±5% in rollbacks a minute and by a few slow frames.
-
-## Unit tests
+## On a PC
 
 ```sh
-cd Nintendont/kernel/slippi_online && sh tests/run_tests.sh      # the kernel's logic
-python tools/rollback/test/run.py 200 3                          # the rollback engine, simulated
-python tools/online_selftest.py pc --game --rollback 2           # client vs a fake Melee and peer
+cd Nintendont/kernel/slippi_online && sh tests/run_tests.sh      # the kernel's logic (a host C compiler)
+python tools/rollback/test/run.py 200 3                          # the rollback engine, simulated (pip install ziglang)
 ```
 
-## The Wii A/B
+Without gcc: `pip install ziglang` and `CC="python -m ziglang cc"`. More tests, and what each
+needs, are in [BUILDING.md](BUILDING.md).
 
-A real Wii against Slippi Dolphin on this PC, bots playing both sides, through a relay that adds the
-network's delay and jitter. Nothing reaches Slippi's servers: the harness runs a fake matchmaking
-server and uses dummy accounts.
+## Setting up the Wii harness
 
-**You need:**
-- A Wii with the Homebrew Channel, a wired LAN adapter, an SD card set up with SlippWii, and a
-  Melee NTSC 1.02 disc image.
-- Slippi Dolphin and the fake matchmaking tools (`SLIPPWII_TEST_TOOLS`); see
-  [BUILDING.md](BUILDING.md).
-- A worktree of `main` beside your branch, so both builds come from the same machine:
-  `git worktree add ../slippwii-main main`.
+A real Wii plays Slippi Dolphin on your PC, bots on both sides, through a relay that adds a
+connection's delay and jitter. Nothing reaches Slippi's servers: the harness runs its own
+matchmaking server with dummy accounts, on a copy of Slippi Dolphin that can't reach the real
+ones.
 
-**Run**, for each of the two trees in turn, with the Wii on the Homebrew Channel:
+**So far the harness has only run on the maintainer's PC.** This is what it is known to need.
+Expect to find something that isn't on the list, and please fix the list or the tool when you do.
+
+1. Windows with Git Bash and Python 3.14, the toolchain and a full build ([BUILDING.md](BUILDING.md)),
+   including the two checkouts of Slippi's code that the boot codes are built from.
+2. A Wii on the same LAN by cable, with the Homebrew Channel, and an SD card with SlippWii
+   installed and a game started from its menu once.
+3. Where things are:
+   ```sh
+   export SLIPPWII_WII_IP=192.168.1.50          # your Wii
+   export SLIPPWII_ISO="D:/games/Melee.iso"     # your NTSC 1.02 disc image, for Slippi Dolphin
+   ```
+4. The loader's settings, saved from the card (with the card in the PC, here as `E:`):
+   `python tools/wii_boot.py --save-cfg E:`
+5. A dummy account on the card, `slippwii/test-user.json`:
+   `python tools/online_selftest.py setup --sd E:` writes it. It also writes a `slippwii/config.ini`
+   for another test and keeps yours as a `.bak`: delete the new one or put yours back, or a normal
+   SlippWii on that card will look for your PC instead of Slippi.
+6. Slippi Dolphin 3.7.0 (Slippi's `FM-Slippi-3.7.0-Win.zip`) unpacked into
+   `build/next/dolphin-3.7.0`.
+7. The test matchmaking server:
+   ```sh
+   python tools/build_bearssl.py --host --cc "$CC"
+   sh Nintendont/kernel/slippi_online/tests/pc/build.sh
+   ```
+   (`CC="python -m ziglang cc -target x86_64-windows-gnu"` if you have no MinGW gcc.)
+8. Slippi's game files in a test folder on the card, over the network, once:
+   `python tools/sweep/push_next_files.py --wii-ip $SLIPPWII_WII_IP --iso "$SLIPPWII_ISO"`
+   (a leftover from following Slippi 3.7.0; it could be made unnecessary).
+9. Windows Firewall will ask about Python and the test server: allow them on private networks.
+
+## The A/B on a Wii
+
+With the Wii on the Homebrew Channel, on `main` and then on your branch:
 
 ```sh
-export SLIPPWII_RELAY_ARGS="--suggest B"     # the PC player's input suggestions, as Slippi 3.7.0 sends them
+export SLIPPWII_RELAY_ARGS="--suggest B"
 for seed in 1 2; do for net in 30,5 45,5; do
-  python tools/sweep/run_sweep.py --wii-ip WII_IP --rounds 4 --net $net --seed $seed \
+  python tools/sweep/run_sweep.py --rounds 4 --net $net --seed $seed \
       --rollback 0 --no-mirror --no-profiler --timeout-min 15
 done; done
 ```
 
-That's 8 runs of 4 games per tree, about 45 minutes each. `30,5` is 30 ms one way with 5 ms jitter,
-about 70 ms of ping as the Wii measures it; `45,5` about 100 ms. Alternate the trees run by run if you can, so a change in
-the room (the network, the PC's load) hits both. If the Diagnostic Log could matter to your change,
-repeat with `--diag-log`.
+That is 4 runs of 4 games, about 25 minutes, for each of the two. `30,5` is 30 ms one way with up
+to 5 ms of jitter, about 70 ms of ping as the Wii measures it; `45,5` is about 100 ms. The relay
+option plays the PC player's input suggestions to the Wii, as a PC with a GameCube adapter sends
+them since Slippi 3.7.0; the bots don't send any by themselves. If the two results are close, run
+`main` once more at the end: the room changes too (the network, the PC's load). If the Diagnostic
+Log could matter to your change, repeat with `--diag-log`.
 
-**Score:**
+Then:
 
 ```sh
-python tools/sweep/score.py --base MAIN_RUNS... --change YOUR_RUNS...
+python tools/sweep/score.py --base MAIN_RUN... --change YOUR_RUN...
 ```
 
-It prints each run and then the table for the pull request. The numbers come from:
+It prints each run (the folders under `build/sweep/runs`) and then the table for the pull request.
+Where the numbers come from:
 
 | Number | From |
 |---|---|
-| Wii slow frames | The kernel's `game pacing: N polls over 20 ms apart`, each game. A frame shown twice or a late frame |
-| Wii frames waited | `game over: ... waited N frames`: the Wii waiting for the opponent's inputs |
+| Wii: slow frames | The kernel's `game pacing: N polls over 20 ms apart`, each game: a frame shown twice, or one that came late |
+| Wii: frames waited | `game over: ... waited N frames`: the Wii waiting for its opponent's inputs |
 | Desyncs | The kernel's `game checksums: ... N differ`: the Wii's game against its opponent's, frame by frame |
-| PC rollbacks a minute, depth | Slippi Dolphin's own replays (`slp_rollbacks.py`) |
-| PC halts | Slippi Dolphin's log: halts at the rollback limit during play |
-| Unhealthy intervals | Slippi's own match quality rule, as the PC scores the game (`match_quality.py`) |
-
-Don't use the stall profiler's `SHOWN` counters for stutter: rollback rewinds the counter they read,
-and the profiler's own reports delay frames. That's why the runs use `--no-profiler`.
+| PC: rollbacks a minute, depth | Slippi Dolphin's own replays (`slp_rollbacks.py`) |
+| PC: halts | Slippi Dolphin's log: halts at the rollback limit in play |
+| PC: unhealthy intervals | Slippi's own match quality rule, as the PC scores the game (`match_quality.py`) |
 
 ## The input delay check
 
-The latency probe times each press inside the console, from the game's controller reading to the
-retrace that shows it:
+The latency probe times each press inside the console, from the game's read of the controller to
+the refresh that shows it:
 
 ```sh
-python tools/sweep/run_sweep.py --wii-ip WII_IP --latency --rollback 0 --net 15,3 --kernel delay=1 \
+python tools/sweep/run_sweep.py --latency --rollback 0 --net 15,3 --kernel delay=1 \
     --no-delay-buttons --no-mirror --rounds 4
 python tools/latency/analyze.py build/sweep/runs/RUN
 ```
 
-At 1 delay frame "reading -> retrace" is about 40-41 ms (three refreshes) on the reference Wii.
-Your change must give the same figure as `main` on your Wii, within 0.5 ms, with the same number of
-refreshes. Do the same at `--kernel delay=2` if your change touches the delay. Background:
-[INPUT_DELAY.md](INPUT_DELAY.md) and [tools/latency/README.md](../tools/latency/README.md).
+In its row "online game, delay 1", against the same run on `main`:
 
-## Release-style boot
+- **Reading -> retrace, the median: the same.** On the reference Wii it is 40.3 to 40.4 ms: two
+  refreshes of 16.68 ms and the read's lead of 7 ms.
+- **Its 90% figure: no higher.** A read more than 7.8 ms before the refresh plays the controller's
+  answer before the one a console plays, which is 8.3 ms more delay while this number moves by a
+  fraction of a millisecond. That was the lag that came and went before 1.8.0.
+- **"refreshes from the reading to the picture": the same split**, and **`controller polls sr=`
+  unchanged**: that is the console's own polling, which the part before the read depends on.
+- **0 frames shown twice, 0 jumps.**
 
-Test builds carry safety nets a player's build doesn't have: for example, they bring the Wii back
-to the Homebrew Channel after a hang. For anything touching boot, exit or hangs, run once with the
+Run it with `--kernel delay=2` as well if your change touches the delay. The background is in
+[INPUT_DELAY.md](INPUT_DELAY.md) and [tools/latency/README.md](../tools/latency/README.md). The
+probe starts at the game's read; what comes before it follows from the console's polling. The
+last word on input delay is a measurement from outside the console, as the independent tester's
+was.
+
+## As a release has it
+
+Test builds carry safety nets that a player's build doesn't: they bring the Wii back to the
+Homebrew Channel after a hang, for one. For anything about boot, exit or hangs, run once with the
 kernel as a release has it:
 
 ```sh
-python tools/sweep/run_sweep.py --wii-ip WII_IP --rounds 3 --net 30,5 --rollback 0 --no-mirror \
-    --no-profiler --kernel test_control=0
+python tools/sweep/run_sweep.py --rounds 3 --net 30,5 --rollback 0 --no-mirror --no-profiler \
+    --kernel test_control=0
 ```
 
-If it hangs, the Wii won't recover by itself: it needs a power cycle.
+If it hangs, the Wii won't come back by itself: it needs its power button. `--usb`, `--cheats` and
+`--diag-log` set those switches for the run.
 
 ## Teams and Party
 
 ```sh
-python tools/sweep/lobby.py --mode teams --wii-ip WII_IP --rounds 3 --net 30 --no-mirror
-python tools/sweep/lobby.py --mode teams --wii-ip WII_IP --rounds 3 --teams 0,0,1,1 --wii-seat 3
+python tools/sweep/lobby.py --mode teams --wii-ip $SLIPPWII_WII_IP --rounds 3 --net 30 --no-mirror
+python tools/sweep/lobby.py --mode teams --wii-ip $SLIPPWII_WII_IP --rounds 3 --teams 0,0,1,1 --wii-seat 3
 ```
 
-Three Slippi Dolphins and the Wii. The report compares every replay with Dolphin 2's. In the Wii's
-log, `game over: ... waited N frames` is how often the Wii waited for inputs; `exi: the game: ...
-delay N` is the delay it used. `--human` lets a person play the Wii.
+Three Slippi Dolphins and the Wii. The report compares every replay with Dolphin 2's. In the
+Wii's log, `game over: ... waited N frames` is how often the Wii waited for inputs, and `exi: the
+game: ... delay N` is the delay it played at. `--human` lets a person play the Wii.
 
 ## Pitfalls
 
-- **One harness run at a time.** A test build swaps `g_online_boot.bin` and `so_test_config.inc`
-  in the tree and puts them back when it ends. If a run is killed, stop everything with
-  `python tools/sweep/stop.py --wii-ip WII_IP`, then
+- **One harness run at a time**, and don't edit the tree while one runs. A test build swaps
+  `g_online_boot.bin` and `so_test_config.inc` in the tree and puts them back at its end. If a run
+  is killed: `python tools/sweep/stop.py --wii-ip $SLIPPWII_WII_IP`, then
   `git checkout Nintendont/kernel/gecko/g_online_boot.bin Nintendont/kernel/slippi_online/so_test_config.inc`.
-- **Don't edit the tree while a batch runs:** each run builds from the tree as it is at its start.
-- **Bots change their inputs far more often than people,** so rollback numbers are the hard case.
-  The harness also changes characters every game, which makes the first games after a change of
-  matchup harder than real play.
-- **A Wii that stops answering on the network mid-run** is usually a loose cable or adapter before
-  it's code.
-- **The test tools have the reference setup's habits.** They expect Git Bash on Windows, and a
-  capture card for `--capture` and `menu_shot.py`. Making them easier to run elsewhere is a welcome
-  contribution.
+- **`--no-profiler` for anything about smoothness.** The stall profiler's own reports delay frames,
+  and its `SHOWN` counters are fooled by rollback, which rewinds the counter they read.
+- **Bots change their inputs far more often than people.** Rollback numbers are the hard case.
+  The harness also changes characters every game, which is harder on the first seconds of each
+  game than a real set.
+- **A Wii that stops answering on the network mid-run** has usually lost a cable or its adapter.
+  Check that before the code.
+- **A capture card** is only needed for `--capture` and `tools/menu_shot.py`.

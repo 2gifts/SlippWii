@@ -1,7 +1,7 @@
 # Contributing to SlippWii
 
-Thanks for wanting to help. Please read this page before you start: it saves you work that might
-not be taken, for reasons that have nothing to do with how good it is.
+Thanks for wanting to help. This page says what the project is for, what stays fixed, and what a
+change needs, so that nobody is surprised later.
 
 ## What SlippWii is
 
@@ -12,81 +12,86 @@ not be taken, for reasons that have nothing to do with how good it is.
 >
 > — 2gifts, maintainer
 
-In practice that means two goals, and nothing else:
+In practice, two goals:
 
 1. **Online plays exactly like offline.** A SlippWii game feels like the same game on a tournament
-   console (Slippi Nintendont, polling drift fix on, CRT): the same input delay, and no frames shown
+   console (Slippi Nintendont, polling drift fix on, a CRT): the same input delay, no frame shown
    twice or skipped.
-2. **A PC player can't tell they are playing a Wii.** Against SlippWii they should get the same
+2. **A PC player can't tell they are playing a Wii.** Against SlippWii they get the same
    rollbacks, the same smoothness and the same connection as against another Slippi Dolphin.
+
+Goal 1 is met at 1 delay frame on a good connection. Goal 2 isn't yet.
+[docs/FINDINGS.md](docs/FINDINGS.md) says where things stand and which problems are open.
+
+## What stays fixed
+
+These describe what a player gets. A change that breaks one of them isn't taken, whatever else it
+improves.
+
+- **1 delay frame online is a tournament console's input delay.** It was measured inside the
+  console, and an independent tester confirmed it on a CRT
+  ([docs/INPUT_DELAY.md](docs/INPUT_DELAY.md)). A change may not make it slower, and it may not
+  make it faster either: the target is the console.
+- **Offline play is untouched**: Slippi Nintendont as it is, with the player's own settings. It is
+  the reference that online is measured against.
+- **One online behaviour for everyone.** No second netcode mode and no "low latency" option. A
+  better method replaces the standard one.
+- **Nothing changes the feel behind the player's back.** If one game would play differently from
+  the next, the player must be able to know why.
+- **Slippi's features, no more.** No new modes, menus or settings that Slippi on PC doesn't have.
+  No Ranked (Slippi's protected competitive mode). Wired connections only.
+
+## What is open
+
+Everything else. How the rollback engine works, how packets leave the console, how timing is
+kept, how any of it is measured: all of that can be rethought from the ground up.
+
+[docs/FINDINGS.md](docs/FINDINGS.md) lists what has been tried, with the numbers. It is there to
+give you a head start, not to say no. Where it says something looked like a limit, read that as
+the limit of what was tried. If you think Teams can have rollback, or a rollback can cost half of
+what it does, or packets can leave the Wii a millisecond sooner, you may well be right, and that
+would be exactly the kind of change this project wants.
 
 ## What we take
 
-- **Fixes**: crashes, hangs, desyncs, connection problems, anything that breaks a game.
-- **Measurable netcode improvements**: fewer or shallower rollbacks for the PC player, fewer
-  frames shown twice on the Wii, better connectivity. They need the measurements in
-  [docs/TESTING.md](docs/TESTING.md).
-- **Closer to Slippi on PC**: something Slippi Dolphin does that SlippWii doesn't yet, for example
-  a Gecko code Slippi ships for online play, or a Slippi behaviour that SlippWii does differently.
-- **Support**: clearer error messages, better problem reports, docs.
-
-## What we don't take
-
-These aren't judgments of the idea. They're outside what SlippWii is for.
-
-- New game modes, menus, settings or features that Slippi on PC doesn't have.
-- Changes to offline play. Offline stays Slippi Nintendont as it is: vanilla Melee plus the
-  player's own Slippi Nintendont settings.
-- A second netcode mode or a "low latency" option. There is one online behaviour, the same for
-  everyone. A faster method replaces the standard one; it doesn't sit beside it.
-- Anything that changes how the game feels without the player knowing or choosing it.
-- Ranked (it's Slippi's protected competitive mode) and Wi-Fi (far too slow; SlippWii is wired
-  only).
-
-## Settled decisions
-
-These were measured, and some were checked by players with their own equipment. Please don't
-reopen them without new measurements.
-
-- **1 delay frame online equals a tournament console's input delay.** This was measured inside the
-  console and confirmed independently by a player with a light-sensor adapter on a CRT
-  ([docs/INPUT_DELAY.md](docs/INPUT_DELAY.md)). Any change that moves it is rejected, whatever
-  else it improves.
-- **When the game reads the controller doesn't change.** Online timing is built around the
-  console's own controller polling.
-- **Ideas that have already been tried**, like "use Nintendont's PDF + 1/2 frame code", are in
-  [docs/ALREADY_TRIED.md](docs/ALREADY_TRIED.md), with what was found. Please check there first.
-
-## Before you start
-
-For anything bigger than a small fix, ask on the
-[SlippWii Discord](https://discord.gg/ytSjxmknHx) first, or open an issue. A two-line description
-of the idea and how you'd measure it is enough. It's much nicer to hear "that's out of scope" or
-"we tried that" before you've done the work.
+- **Fixes**: crashes, hangs, desyncs, connection problems.
+- **Measured netcode improvements**: fewer or shallower rollbacks for the PC player, fewer slow
+  frames on the Wii, better connectivity.
+- **Closer to Slippi on PC**: something Slippi Dolphin does that SlippWii doesn't yet, such as a
+  Gecko code Slippi ships for online play.
+- **Support**: clearer messages, better problem reports, docs, test tools that are easier to run.
+- **Findings**: something you tried that didn't work, written into
+  [docs/FINDINGS.md](docs/FINDINGS.md) with its numbers.
 
 ## What a pull request needs
 
-1. **What changes for the player**, in a sentence or two: what someone on the Wii or on the PC
-   would notice.
-2. **Measurements against `main`**, as [docs/TESTING.md](docs/TESTING.md) describes, in the
-   table the pull request template gives you. If you don't have the hardware for the Wii runs,
-   say so: the maintainer can run them on the reference Wii, but that takes longer.
-3. **One change per pull request**, as simple as it can be. A small change with clear numbers is
-   much easier to take than a large one.
+1. **What changes for the player**, in a sentence or two.
+2. **Measurements against `main`**, as [docs/TESTING.md](docs/TESTING.md) describes, in the table
+   the pull request template gives you. This is the same standard the maintainer's own changes
+   go through.
+3. **One change at a time**, as simple as it can be.
 
-Pull requests are squash-merged into `main`. Releases are tagged from `main` by the maintainer,
-who signs them; only signed releases reach players' Wiis through *Check for Updates*.
+The Wii runs need hardware and some setup. If you can't do them, send the change with what you
+could test and say what you couldn't: the maintainer can run the rest on the reference Wii.
 
-Sometimes a well-made change is still declined, because it doesn't fit the scope above or because
-it adds complexity for a gain too small to feel. That's about scope, not about your work.
+A quick word on the [SlippWii Discord](https://discord.gg/ytSjxmknHx) before a big piece of work
+is a good idea. You don't need permission to try something. It's only so you hear early if an
+idea touches one of the fixed points above.
+
+Pull requests are squash-merged into `main`. The maintainer tags and signs releases from `main`;
+only a signed release reaches players' consoles through *Check for Updates*.
+
+Sometimes a well-made change is still declined: it adds a feature outside the scope, or its gain
+is too small to feel for the complexity it brings. That is a judgment about the project's
+direction, never about you or your work, and you will get the reason.
 
 ## Using an AI agent
 
-That's welcome. Point it at [AGENTS.md](AGENTS.md) first: it has the rules, the layout and the
-commands. You're responsible for what you submit, so please run the tests and read the diff
-yourself before opening a pull request.
+Welcome, and probably the usual way to work here. Point the agent at [AGENTS.md](AGENTS.md)
+first. You are responsible for what you send, so read the diff and the measurements yourself
+before you open a pull request.
 
 ## Licence
 
-SlippWii is GPL-2.0, as Nintendont is; contributions are accepted under the same licence. Slippi's
-online code that SlippWii downloads and runs (slippi-ssbm-asm) is GPL-3.0.
+SlippWii is GPL-2.0, as Nintendont is; contributions come under the same licence. Slippi's online
+code that SlippWii downloads and runs (slippi-ssbm-asm) is GPL-3.0.

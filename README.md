@@ -229,10 +229,11 @@ Slippi play key are never written.
 
 ## Contributing
 
-SlippWii aims to be what an official Slippi port to the Wii would be: online play that feels
-exactly like offline, and a Wii a PC player can't tell from a PC, with no features beyond Slippi's
-own. Fixes and measured netcode improvements are very welcome; please read
-[CONTRIBUTING.md](CONTRIBUTING.md) first. AI agents: start at [AGENTS.md](AGENTS.md).
+Help is welcome. SlippWii aims to be what an official Slippi port to the Wii would be: online play
+that feels exactly like offline, and a Wii a PC player can't tell from a PC, with no features
+beyond Slippi's own. [CONTRIBUTING.md](CONTRIBUTING.md) says what stays fixed and what a change
+needs, and [docs/FINDINGS.md](docs/FINDINGS.md) says where things stand, which problems are open
+and what has been tried so far. AI agents: start at [AGENTS.md](AGENTS.md).
 
 ## How it works
 
